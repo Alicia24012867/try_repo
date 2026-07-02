@@ -1,0 +1,21 @@
+.venv/
+
+.DS_Store
+
+# Generated experiment artifacts.
+experiments/**/outputs/*
+!experiments/**/outputs/.gitkeep
+experiments/**/logs/*
+!experiments/**/logs/.gitkeep
+experiments/**/results/*
+!experiments/**/results/.gitkeep
+
+# Legacy top-level run directories, kept ignored if regenerated locally.
+/outputs/
+/logs/
+/results/
+
+*.o
+*.a
+
+third_party/
