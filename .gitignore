@@ -2,13 +2,16 @@
 
 .DS_Store
 
+# Local-only machine state, scratch copies, downloaded archives, and run dumps.
+.local/
+
 # Generated experiment artifacts.
-experiments/**/outputs/*
-!experiments/**/outputs/.gitkeep
-experiments/**/logs/*
-!experiments/**/logs/.gitkeep
-experiments/**/results/*
-!experiments/**/results/.gitkeep
+experiments/**/outputs*/*
+!experiments/**/outputs*/.gitkeep
+experiments/**/logs*/*
+!experiments/**/logs*/.gitkeep
+experiments/**/results*/*
+!experiments/**/results*/.gitkeep
 
 # Legacy top-level run directories, kept ignored if regenerated locally.
 /outputs/

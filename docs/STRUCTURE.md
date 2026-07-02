@@ -19,6 +19,8 @@ so this repository maps its main concepts into local experiment folders.
   to the paper's cycle 0 / pre-evolution evaluation stage.
 - `scripts/`: local and remote automation for running benchmarks and summarizing
   results.
+- `docs/`: project documentation and the local paper reference.
+- `.local/`: ignored local-only scratch, archives, binaries, and run dumps.
 
 ## Benchmark Suites
 
@@ -34,6 +36,35 @@ reproduction keeps a 10-design sample for each local suite:
 - `benchmarks/arithmetic/`
 
 See `benchmarks/SOURCES.md` for the exact source and sampling notes.
+
+## Agent Scaffold
+
+The agent scaffold is intentionally TODO-only for now:
+
+- `configs/agents/planner/`: planner role and iteration template.
+- `configs/agents/coding/`: FlowTune, logic minimization, and mapping agent
+  placeholders.
+- `configs/agents/shared/`: programming guidance, rulebase, evaluation
+  contract, and feedback schema.
+- `configs/agents/prompts/`: prompt templates.
+- `configs/agents/checklists/`: compile, CEC, and QoR gates.
+- `experiments/cycle_000/agents/`: per-cycle planning and feedback artifacts.
+
+## Documentation
+
+- `README.md`: short project entry point.
+- `docs/STRUCTURE.md`: detailed repository structure and paper mapping.
+- `docs/paper/2604.15082v1.pdf`: local copy of the reference paper.
+
+## Local-Only Area
+
+`.local/` is ignored by git. Use it for machine-specific state and clutter that
+should not shape the reproducible project layout:
+
+- archived accidental copies of the repository
+- downloaded temporary source trees
+- generated experiment logs and outputs moved out of the tracked skeleton
+- local binaries, symlinks, and scratch files
 
 ## Experiment Cycles
 
