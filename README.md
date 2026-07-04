@@ -22,19 +22,22 @@ near-term target is a three-day, small closed loop:
 - `cycle_001` is initialized as the first Flow Agent cycle skeleton.
 - The old simple agent template has been removed.
 - The active agent scaffold is `scripts/agents/self_evolved_abc/`.
-- The LLM API boundary is isolated in `model_client.py`; provider integration is
-  the next implementation step.
+- The LLM API boundary is isolated in `model_client.py`; it supports fixture
+  replies for offline tests and OpenAI-compatible chat-completions providers.
 
 ## Project Structure
 
 ```text
 try_repo/
+  README.md                   project entry point and quickstart
+  requirements.txt            Python dependencies for the agent scaffold
   benchmarks/                 sampled benchmark suites
   configs/                    prompts, rules, checklists, flows, evaluation config
   docs/                       structure notes and local paper copy
   experiments/                per-cycle logs, outputs, results, and agent artifacts
   scripts/                    cycle automation and LLM-agent scaffold
   third_party/                external source trees such as FlowTune
+  .env                        ignored local model-provider environment
   .local/                     ignored local scratch/archive/run dumps
 ```
 
@@ -125,6 +128,20 @@ LLM-assisted Flow Agent cycle skeleton.
 
 ## Useful Commands
 
+Install Python dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Load local environment variables:
+
+```bash
+set -a
+source .env
+set +a
+```
+
 Initialize a new cycle:
 
 ```bash
@@ -140,7 +157,7 @@ Summarize a cycle:
 python3 -B scripts/summarize_cycle.py experiments/cycle_000
 ```
 
-Run the paper-style agent scaffold after the model client is implemented:
+Run the paper-style agent scaffold:
 
 ```bash
 python3 -B -m scripts.agents.self_evolved_abc.cycle_driver \
@@ -148,13 +165,85 @@ python3 -B -m scripts.agents.self_evolved_abc.cycle_driver \
   --agent flow_agent
 ```
 
+## Model Client Configuration
+
+The agent runtime calls models only through
+`scripts/agents/self_evolved_abc/model_client.py`. Agents should not import
+provider SDKs directly.
+
+Install the Python dependencies before using a real provider:
+
+```bash
+python3 -m pip install -r requirements.txt
+```
+
+Local model settings live in `.env`, which is ignored by git because it may
+contain API keys. Use it for the active OpenAI or OpenAI-compatible provider,
+and keep the fixture provider commented as a no-network fallback. Load it with:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+For OpenAI:
+
+```bash
+EDA_AGENT_MODEL_PROVIDER=openai
+EDA_AGENT_MODEL_NAME=gpt-4o-mini
+OPENAI_API_KEY=<secret>
+```
+
+For any OpenAI-compatible endpoint, set a provider label plus base URL, API key,
+and model name:
+
+```bash
+EDA_AGENT_MODEL_PROVIDER=deepseek
+EDA_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
+EDA_AGENT_MODEL_API_KEY=<secret>
+EDA_AGENT_MODEL_NAME=deepseek-chat
+```
+
+The provider label is used as a configuration profile, not as a hard-coded
+vendor branch. For example, `EDA_AGENT_MODEL_PROVIDER=openrouter` also allows
+provider-specific aliases such as `OPENROUTER_BASE_URL`,
+`OPENROUTER_API_KEY`, and `OPENROUTER_MODEL_NAME`.
+
+Useful optional settings:
+
+```bash
+EDA_AGENT_MODEL_TEMPERATURE=0.2
+EDA_AGENT_MODEL_TIMEOUT_SECONDS=120
+EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=4096
+EDA_AGENT_MODEL_RESPONSE_FORMAT=json_object
+EDA_AGENT_MODEL_TOKEN_PARAMETER=max_tokens
+EDA_AGENT_MODEL_TRUST_ENV=false
+```
+
+Use `EDA_AGENT_MODEL_RESPONSE_FORMAT=json_schema` to request structured outputs
+from providers that support OpenAI JSON schema response formats. Use
+`EDA_AGENT_MODEL_TOKEN_PARAMETER=max_completion_tokens` for models or providers
+that require the newer token-limit parameter. Set
+`EDA_AGENT_MODEL_TRUST_ENV=false` to make the OpenAI SDK ignore proxy-related
+environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`;
+this is useful when httpx reports SSL EOF errors while using a broken local
+proxy.
+
+For offline scaffold tests, use the fixture provider:
+
+```bash
+EDA_AGENT_MODEL_PROVIDER=fixture
+EDA_AGENT_MODEL_FIXTURE_PATH=.local/agent_fixture.json
+```
+
 ## Local-Only Data
 
-Use `.local/` for machine-specific files, scratch copies, temporary downloads,
-large generated artifacts, and local run dumps. This directory is ignored.
+Use `.env` for local model-provider settings and secrets. Use `.local/` for
+machine-specific files, scratch copies, temporary downloads, large generated
+artifacts, and local run dumps. Both are ignored.
 
 `third_party/FlowTune/` is treated as external source. Do not edit it in the
 first flow-only cycle.
 
 See `docs/STRUCTURE.md` for a more detailed mapping to the paper workflow.
-

@@ -1,6 +1,7 @@
 .venv/
 .vscode/
 .DS_Store
+.env
 
 **/__pycache__/
 **/*.pyc
@@ -27,3 +28,5 @@ experiments/**/results*/*
 *.a
 
 third_party/
+
+to_do_list.md
