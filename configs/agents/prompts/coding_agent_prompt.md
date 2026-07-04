@@ -29,7 +29,7 @@ validation commands only.
 ```text
 cycle_id: {{CYCLE_ID}}
 candidate_id: {{CANDIDATE_ID}}
-agent_name: {{AGENT_NAME}}             # flow_tuning_agent | logic_minimization_agent | mapping_agent
+agent_name: {{AGENT_NAME}}             # flow_agent | logic_minimization_agent | mapping_agent
 paper_role: {{PAPER_ROLE}}             # Flow Agent | Logic Minimization Agent | Mapper Agent
 subsystem: {{SUBSYSTEM}}
 dry_run: {{DRY_RUN}}
@@ -57,7 +57,7 @@ NEEDS_PLANNER_APPROVAL: <path and reason>
 
 ## Paper-Aligned Agent Instructions
 
-### If You Are `flow_tuning_agent`
+### If You Are `flow_agent`
 
 Act on the paper's Flow Agent role:
 
@@ -238,68 +238,37 @@ status as `not_run_local`.
 
 ## Output Format
 
-Respond only with this structure:
+Respond only with one JSON object matching this schema:
 
-```markdown
-# Candidate Change for {{CANDIDATE_ID}}
-
-## Role and Scope
-
-agent: <agent_name>
-subsystem: <subsystem>
-allowed_scope_respected: <yes | no>
-
-## Code Profiling Summary
-
-entry_points:
-- <function/file>
-invariants:
-- <invariant>
-risk_hotspots:
-- <hotspot>
-
-## Hypothesis Tested
-
-<one sentence>
-
-## Implementation Summary
-
-<what changed and why>
-
-## Files Changed
-
-- <path>: <reason>
-
-## Compatibility Notes
-
-- command_interface: <unchanged | changed with approval>
-- build_system: <unchanged | changed with reason>
-- defaults: <unchanged | changed with reason>
-
-## Validation
-
-compile: <pass | fail | not_run_local | not_run> - <evidence or reason>
-smoke: <pass | fail | not_run_local | not_run> - <evidence or reason>
-cec: <pass | fail | not_run_local | not_run> - <evidence or reason>
-qor: <pass | fail | not_run_local | not_run> - <evidence or reason>
-
-## QoR Expectation
-
-primary_metric_expected_direction: <improve | neutral | unknown>
-secondary_metric_risks:
-- <risk>
-
-## Safety Analysis
-
-correctness_risk: <low | medium | high>
-runtime_risk: <low | medium | high>
-scope_risk: <low | medium | high>
-
-## Rollback Plan
-
-<specific files or changes to revert>
-
-## Next Feedback Needed
-
-- <log/table/check needed>
+```json
+{
+  "rationale": "why this candidate tests the planner hypothesis",
+  "candidate_kind": "abc_flow | source_patch_todo | mapping_heuristic_todo | diagnostic_only",
+  "candidate_steps": ["ordered command, patch, or diagnostic steps"],
+  "source_design": "optional source design or empty string",
+  "expected_effect": "expected impact on primary and secondary metrics",
+  "entry_points": ["files/functions inspected first"],
+  "invariants": ["correctness or compatibility invariants"],
+  "risk_hotspots": ["places most likely to fail"],
+  "files_to_write": ["candidate artifact paths, not previous-cycle evidence"],
+  "compatibility_notes": {
+    "command_interface": "unchanged | changed_with_approval",
+    "build_system": "unchanged | changed_with_reason",
+    "defaults": "unchanged | changed_with_reason"
+  },
+  "validation_plan": [
+    "compile or skipped-with-reason",
+    "smoke command",
+    "CEC command or caveat",
+    "QoR command"
+  ],
+  "risks": ["correctness, runtime, scope, and generalization risks"],
+  "rollback_plan": "specific rollback action",
+  "rule_updates": ["evidence-backed rule proposals"],
+  "decision": "PROPOSE_CANDIDATE | NEEDS_PLANNER_APPROVAL | DEFER"
+}
 ```
+
+For the first `flow_agent` cycle, prefer `candidate_kind: "abc_flow"` and keep
+`files_to_write` inside `configs/flows/` and the active cycle's agent
+artifacts.

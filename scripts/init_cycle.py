@@ -1,11 +1,11 @@
-#! /usr/bin/env python3
-""" Initialize one experiment cycle skeleton 
+#!/usr/bin/env python3
+"""Initialize one experiment cycle skeleton.
 
 Example:
     python3 -B scripts/init_cycle.py cycle_001 \
         --previous-cycle cycle_000 \
         --candidate-id candidate_001 \
-        --agent-name flow_diagnostic_agent \
+        --agent-name flow_agent \
         --benchmark benchmarks/epfl/epfl_adder.blif \
         --benchmark benchmarks/epfl/epfl_bar.blif \
         --benchmark benchmarks/epfl/epfl_sqrt.blif
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--previous-cycle", default="cycle_000")
     parser.add_argument("--candidate-id", default="candidate_001")
-    parser.add_argument("--agent-name", default="flow_diagnostic_agent")
+    parser.add_argument("--agent-name", default="flow_agent")
     parser.add_argument("--paper-role", default="Flow Agent")
     parser.add_argument("--subsystem", default="configs/flows")
     parser.add_argument("--target-metric", default="and_count")

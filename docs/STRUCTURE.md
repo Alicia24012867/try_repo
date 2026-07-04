@@ -9,16 +9,16 @@ so this repository maps its main concepts into local experiment folders.
 - `third_party/FlowTune/`: upstream ABC/FlowTune codebase used as the baseline
   integration substrate.
 - `benchmarks/`: benchmark suites used by the evaluation loop.
-- `configs/agents/`: notes or rules for the paper's agent roles, such as flow
-  tuning, logic minimization, and mapping.
+- `configs/agents/`: paper-facing prompts, contracts, checklists, and rules for
+  the agent roles.
 - `configs/flows/`: ABC command recipes for baseline, FlowTune, CEC, and later
   mapping or STA flows.
 - `configs/evaluation/`: metric definitions, run settings, and aggregation
   conventions.
 - `experiments/cycle_000/`: initial non-evolved baseline cycle, corresponding
   to the paper's cycle 0 / pre-evolution evaluation stage.
-- `scripts/`: local and remote automation for running benchmarks and summarizing
-  results.
+- `scripts/`: local automation for initializing cycles, summarizing results, and
+  running the paper-style LLM agent scaffold.
 - `docs/`: project documentation and the local paper reference.
 - `.local/`: ignored local-only scratch, archives, binaries, and run dumps.
 
@@ -39,7 +39,7 @@ See `benchmarks/SOURCES.md` for the exact source and sampling notes.
 
 ## Agent Scaffold
 
-The agent scaffold is intentionally TODO-only for now:
+The prompt/config side describes the paper roles and validation contracts:
 
 - `configs/agents/planner/`: planner role and iteration template.
 - `configs/agents/coding/`: FlowTune, logic minimization, and mapping agent
@@ -48,7 +48,30 @@ The agent scaffold is intentionally TODO-only for now:
   contract, and feedback schema.
 - `configs/agents/prompts/`: prompt templates.
 - `configs/agents/checklists/`: compile, CEC, and QoR gates.
-- `experiments/cycle_000/agents/`: per-cycle planning and feedback artifacts.
+
+The executable scaffold follows the paper's agent naming:
+
+- `scripts/agents/self_evolved_abc/planning_agent.py`: Planning Agent.
+- `scripts/agents/self_evolved_abc/coding_agents/flow_agent.py`: Flow Agent.
+- `scripts/agents/self_evolved_abc/coding_agents/logic_minimization_agent.py`:
+  Logic Minimization Agent.
+- `scripts/agents/self_evolved_abc/coding_agents/mapper_agent.py`: Mapper
+  Agent.
+- `scripts/agents/self_evolved_abc/shared/rulebase.py`: Self-Evolved Rulebase
+  scaffold.
+- `scripts/agents/self_evolved_abc/model_client.py`: LLM API boundary, with
+  provider integration intentionally isolated from agent role logic.
+- `scripts/agents/self_evolved_abc/cycle_driver.py`: one-agent execution
+  entry point for a cycle assignment.
+
+Per-cycle agent artifacts live under `experiments/<cycle>/agents/`.
+
+## Automation Scripts
+
+- `scripts/init_cycle.py`: creates a new `experiments/cycle_NNN/` skeleton and
+  optional assignment JSON.
+- `scripts/summarize_cycle.py`: parses existing ABC/FlowTune logs into
+  `summary.csv`, `skipped.csv`, and `run_notes.md`.
 
 ## Documentation
 
@@ -74,6 +97,5 @@ Each experiment cycle keeps generated artifacts together:
 - `outputs/`: generated AIG/BLIF/netlist files.
 - `results/`: parsed CSV/JSON summaries and final tables.
 
-For the 12-hour reproduction, use `experiments/cycle_000/` as the main run
-directory and start with EPFL plus one or two smaller suites before expanding to
-all sampled benchmarks.
+For the first small reproduction, `experiments/cycle_000/` is the parsed
+baseline and `experiments/cycle_001/` is the first LLM-agent cycle skeleton.

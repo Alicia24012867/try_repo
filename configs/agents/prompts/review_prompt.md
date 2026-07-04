@@ -205,51 +205,39 @@ Hold for more evaluation if:
 
 ## Output Format
 
-Respond only with this structure:
+Respond only with one JSON object matching this schema:
 
-```markdown
-# Review for {{CANDIDATE_ID}}
-
-## Decision
-
-decision: <accept | reject | repair | hold_for_more_evaluation | rollback>
-confidence: <low | medium | high>
-champion_update: <yes | no>
-
-## Gate Summary
-
-compile: <pass | fail | missing>
-smoke: <pass | fail | missing | not_applicable>
-cec: <pass | fail | missing>
-scope: <valid | invalid | unclear>
-coverage: <sufficient | insufficient | unclear>
-runtime: <within_budget | over_budget | missing>
-
-## QoR Summary
-
-primary_metric: <metric>
-primary_delta: <value or unknown>
-normalization_baseline: <baseline>
-secondary_metric_summary: <short summary>
-regression_count: <count>
-failed_or_skipped_count: <count>
-
-## Evidence-Based Rationale
-
-<short explanation grounded in compile, CEC, QoR, and scope evidence>
-
-## Required Follow-Up
-
-- <action>
-- <action>
-
-## Rollback or Promotion Instructions
-
-<exact next step for champion state>
-
-## Rulebase Update Proposal
-
-action: <none | add | relax | tighten | retire>
-rule: <rule text or none>
-evidence: <why>
+```json
+{
+  "decision": "accept | reject | repair | hold_for_more_evaluation | rollback | accept_process",
+  "confidence": "low | medium | high",
+  "champion_update": false,
+  "gate_summary": {
+    "compile": "pass | fail | missing | skipped",
+    "smoke": "pass | fail | missing | not_applicable | skipped",
+    "cec": "pass | fail | missing | skipped",
+    "scope": "valid | invalid | unclear",
+    "coverage": "sufficient | insufficient | unclear",
+    "runtime": "within_budget | over_budget | missing"
+  },
+  "qor_summary": {
+    "primary_metric": "string",
+    "primary_delta": "value or unknown",
+    "normalization_baseline": "string",
+    "secondary_metric_summary": "string",
+    "regression_count": 0,
+    "failed_or_skipped_count": 0
+  },
+  "evidence_based_rationale": "grounded in gates, QoR, and scope",
+  "required_follow_up": ["string"],
+  "rollback_or_promotion_instructions": "exact next step",
+  "rulebase_update": {
+    "action": "none | add | relax | tighten | retire",
+    "rule": "rule text or empty string",
+    "evidence": "why"
+  }
+}
 ```
+
+Use `accept_process` when the loop artifact is complete but correctness is
+still provisional because CEC has not been implemented.

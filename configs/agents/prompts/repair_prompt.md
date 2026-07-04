@@ -178,42 +178,32 @@ Recommend rollback if any condition holds:
 
 ## Output Format
 
-Respond only with this structure:
+Respond only with one JSON object matching this schema:
 
-```markdown
-# Repair for {{CANDIDATE_ID}}
-
-## Failure Classification
-
-type: <compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown>
-severity: <low | medium | high>
-
-## Diagnosis
-
-root_cause: <file/function/reason>
-hypothesis_still_valid: <yes | no | unclear>
-
-## Action
-
-decision: <minimal_repair | partial_revert | full_rollback | planner_review>
-reason: <why>
-
-## Files Changed
-
-- <path>: <repair reason>
-
-## Validation
-
-compile: <pass | fail | not_run_local | not_run> - <evidence or reason>
-smoke: <pass | fail | not_run_local | not_run> - <evidence or reason>
-cec: <pass | fail | not_run_local | not_run> - <evidence or reason>
-qor: <pass | fail | not_run_local | not_run> - <evidence or reason>
-
-## Residual Risk
-
-- <risk>
-
-## Recommendation
-
-<continue_validation | retry_once | rollback | planner_review>
+```json
+{
+  "failure_classification": {
+    "type": "compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown",
+    "severity": "low | medium | high"
+  },
+  "diagnosis": {
+    "root_cause": "file/function/reason",
+    "hypothesis_still_valid": "yes | no | unclear"
+  },
+  "action": {
+    "decision": "minimal_repair | partial_revert | full_rollback | planner_review",
+    "reason": "why"
+  },
+  "files_changed": [
+    {"path": "string", "repair_reason": "string"}
+  ],
+  "validation": {
+    "compile": "pass | fail | not_run_local | not_run",
+    "smoke": "pass | fail | not_run_local | not_run",
+    "cec": "pass | fail | not_run_local | not_run",
+    "qor": "pass | fail | not_run_local | not_run"
+  },
+  "residual_risks": ["string"],
+  "recommendation": "continue_validation | retry_once | rollback | planner_review"
+}
 ```

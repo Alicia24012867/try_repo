@@ -18,7 +18,8 @@ They are intentionally structured around the paper's vocabulary:
 - champion promotion, rollback, and self-evolving rulebase updates
 
 Replace `{{PLACEHOLDER}}` blocks with cycle-specific context before sending a
-prompt to an agent.
+prompt to an agent. These placeholders are intentional runtime variables, not
+unfinished configuration.
 
 ## Templates
 
@@ -34,10 +35,26 @@ prompt to an agent.
 
 1. Fill `planner_prompt.md` with the current champion, feedback, rulebase, and
    cycle budget.
-2. Copy the planner's "Coding-Agent Task" into `coding_agent_prompt.md`.
-3. If compile, smoke, CEC, or runtime fails, fill `repair_prompt.md`.
-4. If validation passes, fill `review_prompt.md`.
-5. Store outputs under `experiments/{{CYCLE_ID}}/agents/`.
+2. Convert the planner JSON into an assignment under
+   `experiments/{{CYCLE_ID}}/agents/assignments/`.
+3. Render `coding_agent_prompt.md` for the selected paper role.
+4. If compile, smoke, CEC, or runtime fails, render `repair_prompt.md`.
+5. If validation completes, render `review_prompt.md`.
+6. Store model-derived artifacts under `experiments/{{CYCLE_ID}}/agents/`.
+
+## Output Protocol
+
+The executable scaffold expects model responses as JSON objects. Markdown
+reports are generated after schema validation. Prompt templates therefore
+describe both the reasoning requirements and the exact JSON keys expected from
+the model.
+
+For the current scaffold:
+
+- Planning Agent JSON is consumed by `planning_agent.py`.
+- Coding Agent JSON is consumed by `coding_agents/base_coding_agent.py`.
+- Repair and review JSON are reserved for the next harness step.
+- Any non-JSON prose should be treated as a model-format error.
 
 ## Minimal Context Bundle
 
@@ -52,3 +69,12 @@ Each prompt works best when the following artifacts are available:
 - QoR summary table
 - runtime budget
 - previous accepted and rejected candidate summaries
+
+## First-Cycle Prompt Bundle
+
+For `cycle_001`, provide these evidence files to the Flow Agent:
+
+- `experiments/cycle_000/results/summary.csv`
+- `experiments/cycle_000/results/skipped.csv`
+- `experiments/cycle_000/results/run_notes.md`
+- selected scripts under `experiments/cycle_000/outputs/`

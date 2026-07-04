@@ -1,5 +1,5 @@
 {
-  "agent_name": "flow_diagnostic_agent",
+  "agent_name": "flow_agent",
   "paper_role": "Flow Agent",
   "cycle_id": "cycle_001",
   "candidate_id": "candidate_001",

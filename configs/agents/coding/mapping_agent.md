@@ -1,28 +1,54 @@
-# Mapping Agent
+# Mapper Agent
 
 ## Paper Role
 
-TODO evolve technology mapping heuristics, including cut enumeration, pruning,
-cost scoring, and depth-aware tie-breaking.
+The Mapper Agent proposes technology mapping changes, including cut
+enumeration, cut pruning, cut ranking, cost scoring, and area/depth/delay
+tie-breaking. It is reserved for later cycles because mapping quality requires
+additional libraries and correctness/performance gates.
 
 ## Allowed Scope
 
-- TODO `third_party/FlowTune/src/src/map/mapper/`
+Only after planner approval:
+
+- mapper-related modules under `third_party/FlowTune/src/map/`
+- current-cycle agent artifacts under `experiments/<cycle>/agents/`
+- current-cycle mapping logs, outputs, and result summaries
+
+Library paths must be read-only unless the planner creates a dedicated library
+experiment.
 
 ## Forbidden Scope
 
-- TODO do not change Liberty/GENLIB files.
-- TODO do not change benchmark inputs.
-- TODO do not accept mapped QoR without correctness checks.
+- Do not edit Liberty, GENLIB, benchmark, or architecture files.
+- Do not change mapper output formats without updating parsers.
+- Do not drop cuts without a correctness-preserving fallback.
+- Do not optimize for a single benchmark name.
+- Do not report mapped QoR without the selected library and baseline.
 
 ## Candidate Tasks
 
-- TODO locate cut enumeration and cut pruning functions.
-- TODO document mapper area and delay cost paths.
-- TODO propose depth-aware or area-aware tie-breakers.
-- TODO add mapper-level statistics for feedback.
+- Identify the cut enumeration or ranking path being studied.
+- Propose one tie-breaker, pruning threshold, or diagnostic statistic.
+- Explain whether the target metric is area, depth, delay, or runtime.
+- Record expected regressions and fallback behavior.
+- Provide exact mapping command, library path, and parser expectations.
 
-## Output Format
+## Model Output Contract
 
-TODO describe expected patch notes, changed files, risk notes, and validation
-commands.
+The model response must include:
+
+- `rationale`
+- `candidate_kind`: `mapping_heuristic_todo` or `diagnostic_only`
+- `candidate_steps`
+- `library_assumptions`
+- `expected_effect`
+- `risks`
+- `validation_plan`
+- `rule_updates`
+
+## Activation Policy
+
+Enable this agent after the project has a stable mapping benchmark subset and a
+tracked mapping evaluation contract.
+

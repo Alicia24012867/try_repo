@@ -82,10 +82,11 @@ experiments/{{CYCLE_ID}}/              # logs, outputs, results, agent artifacts
 Select one primary owner unless the evidence clearly requires coordinated work.
 
 ```text
-flow_tuning_agent:
+flow_agent:
   paper_role: Flow Agent
   default_scope:
-    - third_party/FlowTune/src/src/opt/flowtune/
+    - configs/flows/
+    - third_party/FlowTune/src/opt/flowtune/       # later source-edit cycles only
   allowed_change_types:
     - pass selection heuristics
     - sampling and search schedule
@@ -100,7 +101,7 @@ flow_tuning_agent:
 logic_minimization_agent:
   paper_role: Logic Minimization Agent / AIG Syn Agent
   default_scope:
-    - third_party/FlowTune/src/src/base/abci/
+    - third_party/FlowTune/src/
   allowed_change_types:
     - rewrite/refactor/resubstitution heuristics
     - orchestration command scaffolding
@@ -114,7 +115,7 @@ logic_minimization_agent:
 mapping_agent:
   paper_role: Mapper Agent
   default_scope:
-    - third_party/FlowTune/src/src/map/mapper/
+    - third_party/FlowTune/src/map/
   allowed_change_types:
     - cut enumeration/pruning heuristics
     - cost scoring refinements
@@ -277,81 +278,57 @@ Use these paper-aligned heuristics:
 
 ## Required Output
 
-Respond only with this Markdown structure:
+Respond only with one JSON object matching this schema:
 
-```markdown
-# Plan for {{CYCLE_ID}}
-
-## Decision
-
-selected_agent: <flow_tuning_agent | logic_minimization_agent | mapping_agent | none>
-task_type: <repair | optimization | instrumentation | evaluation_only | review_or_followup | rollback>
-risk_level: <low | medium | high>
-primary_metric: <metric>
-benchmark_scope: <suite/design count>
-
-## Evidence Summary
-
-compile: <pass | fail | missing> - <one sentence>
-cec: <pass | fail | missing> - <one sentence>
-qor: <improved | neutral | regressed | inconclusive> - <one sentence>
-runtime: <within_budget | over_budget | missing> - <one sentence>
-
-## Objective
-
-<one precise paragraph>
-
-## Hypothesis
-
-<one testable hypothesis linking subsystem behavior to expected metric change>
-
-## Assigned Subsystem
-
-owner: <agent>
-allowed_paths:
-- <path>
-forbidden_paths:
-- <path>
-
-## Coding-Agent Task
-
-<copy-ready task. Include exact files to inspect first, allowed edit types,
-target metric, required validation commands, and output expectations.>
-
-## Required Validation Evidence
-
-compile:
-- command: <command>
-- pass_condition: <condition>
-
-correctness:
-- command: <CEC or dsat command>
-- pass_condition: <condition>
-
-benchmarks:
-- suites: <list>
-- flows: <list>
-
-metrics:
-- primary: <metric>
-- secondary: <metrics>
-- regression_threshold: <threshold>
-- runtime_budget: <budget>
-
-## Acceptance Criteria
-
-- <criterion>
-- <criterion>
-- <criterion>
-
-## Rollback Criteria
-
-- <criterion>
-- <criterion>
-
-## Rulebase Update Proposal
-
-action: <none | add | relax | tighten | retire>
-rule: <rule text or none>
-evidence: <why>
+```json
+{
+  "cycle_objective": "one precise paragraph",
+  "selected_agent": "flow_agent",
+  "task_type": "optimization",
+  "candidate_id": "candidate_001",
+  "risk_level": "low",
+  "benchmark_scope": [
+    "benchmarks/epfl/epfl_adder.blif",
+    "benchmarks/epfl/epfl_bar.blif",
+    "benchmarks/epfl/epfl_sqrt.blif"
+  ],
+  "allowed_to_read": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md"
+  ],
+  "allowed_to_edit": [
+    "experiments/{{CYCLE_ID}}/agents",
+    "experiments/{{CYCLE_ID}}/logs",
+    "experiments/{{CYCLE_ID}}/outputs",
+    "experiments/{{CYCLE_ID}}/results",
+    "configs/flows"
+  ],
+  "evidence_summary": {
+    "compile": "pass | fail | missing",
+    "cec": "pass | fail | missing",
+    "qor": "improved | neutral | regressed | inconclusive",
+    "runtime": "within_budget | over_budget | missing"
+  },
+  "hypothesis": "one testable hypothesis",
+  "coding_agent_task": "copy-ready task for the selected agent",
+  "validation_evidence": {
+    "compile": {"command": "string", "pass_condition": "string"},
+    "correctness": {"command": "string", "pass_condition": "string"},
+    "benchmarks": {"suites": ["string"], "flows": ["string"]},
+    "metrics": {
+      "primary": "string",
+      "secondary": ["string"],
+      "regression_threshold": "string",
+      "runtime_budget": "string"
+    }
+  },
+  "acceptance_criteria": ["string"],
+  "rollback_criteria": ["string"],
+  "risk_controls": ["string"],
+  "rulebase_notes": ["string"]
+}
 ```
+
+Use `selected_agent: "flow_agent"` for the first small cycle unless the input
+evidence proves that a different paper role is required.
