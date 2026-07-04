@@ -1,0 +1,37 @@
+{
+  "agent_name": "flow_diagnostic_agent",
+  "paper_role": "Flow Agent",
+  "cycle_id": "cycle_001",
+  "candidate_id": "candidate_001",
+  "subsystem": "configs/flows",
+  "planner_hypothesis": "Use the previous cycle's QoR and skipped-case evidence to propose one conservative flow candidate for a small benchmark subset.",
+  "target_metric": "and_count",
+  "secondary_metrics": [
+    "depth",
+    "runtime",
+    "stability"
+  ],
+  "benchmark_scope": [
+    "benchmarks/epfl/epfl_adder.blif",
+    "benchmarks/epfl/epfl_bar.blif",
+    "benchmarks/epfl/epfl_sqrt.blif"
+  ],
+  "allowed_to_read": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md",
+    "experiments/cycle_000/outputs"
+  ],
+  "allowed_to_edit": [
+    "experiments/cycle_001/agents",
+    "experiments/cycle_001/logs",
+    "experiments/cycle_001/outputs",
+    "experiments/cycle_001/results",
+    "configs/flows"
+  ],
+  "recent_evidence": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md"
+  ]
+}
