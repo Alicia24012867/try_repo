@@ -503,15 +503,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--run-validation", action="store_true")
     parser.add_argument("--agent-name")
     parser.add_argument("--paper-role")
-    parser.add_argument("--cycle-id", default="cycle_000")
-    parser.add_argument("--candidate-id", default="candidate_template")
-    parser.add_argument("--subsystem", default="TODO")
-    parser.add_argument("--planner-hypothesis", default="TODO")
-    parser.add_argument("--target-metric", default="TODO")
-    parser.add_argument("--allowed-to-read", action="append", default=())
-    parser.add_argument("--allowed-to-edit", action="append", default=())
-    parser.add_argument("--recent-evidence", action="append", default=())
-    parser.add_argument("--benchmark", action="append", default=())
+    parser.add_argument("--cycle-id")
+    parser.add_argument("--candidate-id")
+    parser.add_argument("--subsystem")
+    parser.add_argument("--planner-hypothesis")
+    parser.add_argument("--target-metric")
+    parser.add_argument("--allowed-to-read", action="append")
+    parser.add_argument("--allowed-to-edit", action="append")
+    parser.add_argument("--recent-evidence", action="append")
+    parser.add_argument("--benchmark", action="append")
     return parser.parse_args(argv)
 
 
@@ -528,14 +528,17 @@ def load_assignment(args: argparse.Namespace) -> Assignment:
         "subsystem": args.subsystem,
         "planner_hypothesis": args.planner_hypothesis,
         "target_metric": args.target_metric,
-        "allowed_to_read": tuple(args.allowed_to_read),
-        "allowed_to_edit": tuple(args.allowed_to_edit),
-        "recent_evidence": tuple(args.recent_evidence),
-        "benchmark_scope": tuple(args.benchmark),
+        "allowed_to_read": _as_tuple(args.allowed_to_read),
+        "allowed_to_edit": _as_tuple(args.allowed_to_edit),
+        "recent_evidence": _as_tuple(args.recent_evidence),
+        "benchmark_scope": _as_tuple(args.benchmark),
     }
     for key, value in cli_values.items():
-        if value not in (None, (), "TODO"):
+        if value not in (None, ()):
             data[key] = value
+
+    data.setdefault("cycle_id", "cycle_000")
+    data.setdefault("candidate_id", "candidate_template")
 
     missing = [
         key
@@ -611,4 +614,3 @@ def _quote_arg(value: str) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

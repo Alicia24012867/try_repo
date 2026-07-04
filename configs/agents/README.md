@@ -15,7 +15,8 @@ does not implement autonomous code editing yet.
 - `shared/`: TODO shared programming guidance, rulebase, and feedback schemas.
 - `prompts/`: TODO prompt templates for planning, coding, repair, and review.
 - `checklists/`: TODO human-readable gates for compile, CEC, and QoR checks.
-- `templates/`: copyable reference templates for adding new agents cleanly.
+- `templates/`: prompt/spec companions for executable Python agents under
+  `scripts/agents/`.
 
 ## Cycle Flow
 

@@ -2,6 +2,11 @@
 
 .DS_Store
 
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
+
 # Local-only machine state, scratch copies, downloaded archives, and run dumps.
 .local/
 
