@@ -42,19 +42,51 @@ class CodingAgent(PaperAgent):
                 "rationale",
                 "candidate_kind",
                 "candidate_steps",
+                "source_design",
                 "expected_effect",
-                "risks",
+                "entry_points",
+                "invariants",
+                "risk_hotspots",
+                "files_to_write",
+                "compatibility_notes",
                 "validation_plan",
+                "risks",
+                "rollback_plan",
                 "rule_updates",
+                "decision",
             ],
             "properties": {
                 "rationale": {"type": "string"},
-                "candidate_kind": {"type": "string"},
+                "candidate_kind": {
+                    "type": "string",
+                    "enum": [
+                        "abc_flow",
+                        "source_patch_todo",
+                        "mapping_heuristic_todo",
+                        "diagnostic_only",
+                    ],
+                },
                 "candidate_steps": {"type": "array", "items": {"type": "string"}},
+                "source_design": {"type": "string"},
                 "expected_effect": {"type": "string"},
+                "entry_points": {"type": "array", "items": {"type": "string"}},
+                "invariants": {"type": "array", "items": {"type": "string"}},
+                "risk_hotspots": {"type": "array", "items": {"type": "string"}},
+                "files_to_write": {"type": "array", "items": {"type": "string"}},
+                "compatibility_notes": {"type": "object"},
                 "risks": {"type": "array", "items": {"type": "string"}},
                 "validation_plan": {"type": "array", "items": {"type": "string"}},
+                "rollback_plan": {"type": "string"},
                 "rule_updates": {"type": "array", "items": {"type": "string"}},
+                "decision": {
+                    "type": "string",
+                    "enum": [
+                        "PROPOSE_CANDIDATE",
+                        "NEEDS_PLANNER_APPROVAL",
+                        "DEFER",
+                        "NEEDS_HUMAN_REVIEW",
+                    ],
+                },
             },
         }
 
@@ -96,4 +128,3 @@ class CodingAgent(PaperAgent):
             ),
             decision="TODO_CODING_AGENT_DECISION",
         )
-

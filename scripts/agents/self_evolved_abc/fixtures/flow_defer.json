@@ -1,0 +1,28 @@
+{
+  "rationale": "Defer because the available evidence is sufficient for prompt smoke testing but not enough to justify a materialized optimization candidate without CEC and runner-owned QoR logs.",
+  "candidate_kind": "diagnostic_only",
+  "candidate_steps": [],
+  "source_design": "",
+  "expected_effect": "No optimization candidate is proposed.",
+  "entry_points": [],
+  "invariants": [
+    "Do not claim QoR before correctness evidence exists"
+  ],
+  "risk_hotspots": [
+    "CEC automation is missing"
+  ],
+  "files_to_write": [],
+  "compatibility_notes": {
+    "command_interface": "unchanged",
+    "build_system": "unchanged"
+  },
+  "validation_plan": [
+    "Wire CEC and runner-owned candidate evaluation before proposing a flow"
+  ],
+  "risks": [
+    "No candidate can be evaluated in this response"
+  ],
+  "rollback_plan": "No candidate state was created.",
+  "rule_updates": [],
+  "decision": "DEFER"
+}
