@@ -20,6 +20,7 @@ experiments/**/logs*/*
 !experiments/**/logs*/.gitkeep
 experiments/**/results*/*
 !experiments/**/results*/.gitkeep
+!experiments/**/results*/README.md
 
 # Legacy top-level run directories, kept ignored if regenerated locally.
 /outputs/
