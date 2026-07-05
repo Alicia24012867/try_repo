@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -40,6 +41,35 @@ FLOW_DECISIONS: tuple[str, ...] = (
     "NEEDS_HUMAN_REVIEW",
 )
 
+FLOW_RESPONSE_JSON_SCHEMA: Mapping[str, Any] = {
+    "type": "object",
+    "required": list(FLOW_REQUIRED_FIELDS),
+    "additionalProperties": False,
+    "properties": {
+        "rationale": {"type": "string"},
+        "candidate_kind": {
+            "type": "string",
+            "enum": list(FLOW_CANDIDATE_KINDS),
+        },
+        "candidate_steps": {"type": "array", "items": {"type": "string"}},
+        "source_design": {"type": "string"},
+        "expected_effect": {"type": "string"},
+        "entry_points": {"type": "array", "items": {"type": "string"}},
+        "invariants": {"type": "array", "items": {"type": "string"}},
+        "risk_hotspots": {"type": "array", "items": {"type": "string"}},
+        "files_to_write": {"type": "array", "items": {"type": "string"}},
+        "compatibility_notes": {"type": "object"},
+        "validation_plan": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "rollback_plan": {"type": "string"},
+        "rule_updates": {"type": "array", "items": {"type": "string"}},
+        "decision": {
+            "type": "string",
+            "enum": list(FLOW_DECISIONS),
+        },
+    },
+}
+
 FORBIDDEN_ABC_STEP_SUBSTRINGS: tuple[str, ...] = (
     "&&",
     "||",
@@ -70,6 +100,12 @@ FORBIDDEN_FLOW_IO_COMMAND_PREFIXES: tuple[str, ...] = (
     "write_aiger",
     "write_blif",
 )
+
+
+def flow_response_json_schema() -> Mapping[str, Any]:
+    """Return the Flow Agent response schema used for model JSON mode."""
+
+    return deepcopy(FLOW_RESPONSE_JSON_SCHEMA)
 
 
 def validate_flow_agent_response(
