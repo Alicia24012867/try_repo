@@ -1,33 +1,26 @@
-# Plan -- candidate_001
+# Flow Agent Plan -- candidate_001
 
-- Agent: flow_agent
-- Paper role: Flow Agent
-- Cycle: cycle_001
-- Candidate: candidate_001
-- Generated at: 2026-07-04T17:21:07Z
-- Subsystem: configs/flows
-- Target metric: and_count
+## Rationale
 
-> Legacy bootstrap artifact. Regenerate with
-> `scripts.agents.self_evolved_abc.cycle_driver` after the LLM API boundary is
-> implemented.
+Use a conservative flow distilled from stable cycle_000 FlowTune evidence on EPFL designs. The candidate keeps benchmark IO outside the flow and only schedules existing ABC optimization commands.
 
-## Orientation
-- Agent role: Flow Agent.
-- Subsystem boundary: configs/flows.
-- Planner hypothesis: Use the previous cycle's QoR and skipped-case evidence to propose one conservative flow candidate for a small benchmark subset..
-- Target metric: and_count.
-- Allowed read paths:
-- - experiments/cycle_000/results/summary.csv (exists)
-- - experiments/cycle_000/results/skipped.csv (exists)
-- - experiments/cycle_000/results/run_notes.md (exists)
-- - experiments/cycle_000/outputs (exists)
-- Recent evidence:
-- - experiments/cycle_000/results/summary.csv (exists)
-- - experiments/cycle_000/results/skipped.csv (exists)
-- - experiments/cycle_000/results/run_notes.md (exists)
+## Source Design
 
-## Candidate Plan
-- TODO(agent): Identify the smallest code location that can test the hypothesis.
-- TODO(agent): State the expected before/after behavior.
-- TODO(agent): State the compile, CEC, and QoR evidence needed for acceptance.
+cycle_000 epfl_adder and epfl_bar FlowTune scripts
+
+## Entry Points
+
+- configs/flows/cycle_001_candidate_001.abc
+- experiments/cycle_001/agents/candidate_changes/candidate_001.md
+
+## Invariants
+
+- Use only existing ABC commands
+- Do not read or write benchmark artifacts inside the flow
+- Treat QoR as provisional until CEC is wired
+
+## Risk Hotspots
+
+- depth may regress on epfl_sqrt-like designs
+- no independent CEC gate is available yet
+- FlowTune evidence comes from a small EPFL subset

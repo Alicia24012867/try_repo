@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Mapping
 
 from scripts.agents.self_evolved_abc.model_client import ModelReply
@@ -76,6 +77,9 @@ def render_validated_flow_artifacts(
     candidate_id: str,
     response: FlowAgentResponse,
     evidence: Mapping[str, str],
+    materialization_status: str = "not_run",
+    flow_path: Path | None = None,
+    written_files: tuple[Path, ...] = (),
 ) -> AgentArtifacts:
     """Create markdown artifacts from a validated Flow Agent response."""
 
@@ -84,6 +88,8 @@ def render_validated_flow_artifacts(
         indent=2,
         sort_keys=True,
     )
+    flow_path_text = str(flow_path) if flow_path is not None else "not written"
+    flow_file_written = "yes" if written_files else "no"
 
     return AgentArtifacts(
         plan_markdown=(
@@ -103,11 +109,17 @@ def render_validated_flow_artifacts(
             f"# {paper_role} Candidate -- {candidate_id}\n\n"
             f"- Decision: {response.decision}\n"
             f"- Candidate kind: {response.candidate_kind}\n"
-            "- Local status: validated_not_materialized\n"
-            "- `.abc` flow file: not written yet\n\n"
+            "- Local status: validated\n"
+            f"- Candidate materialization: {materialization_status}\n"
+            f"- `.abc` flow file: {flow_path_text}\n"
+            f"- Flow file written: {flow_file_written}\n\n"
+            "## Materialization Notes\n\n"
+            f"{_materialization_notes(materialization_status)}\n"
             "## Candidate Steps\n\n"
             f"{markdown_bullets(response.candidate_steps)}\n"
-            "## Files To Write Later\n\n"
+            "## Written Files\n\n"
+            f"{markdown_bullets(written_files)}\n"
+            "## Model Requested Files\n\n"
             f"{markdown_bullets(response.files_to_write)}\n"
             "## Expected Effect\n\n"
             f"{response.expected_effect}\n\n"
@@ -122,7 +134,9 @@ def render_validated_flow_artifacts(
             f"# {paper_role} Feedback -- {candidate_id}\n\n"
             "## Local Status\n\n"
             "- validation_status: passed\n"
-            "- materialization_status: not_run\n"
+            f"- materialization_status: {materialization_status}\n"
+            f"- candidate_flow_path: {flow_path_text}\n"
+            f"- flow_file_written: {flow_file_written}\n"
             "- correctness_status: provisional_until_CEC\n\n"
             "## Validation Plan\n\n"
             f"{markdown_bullets(response.validation_plan)}\n"
@@ -139,3 +153,22 @@ def render_validated_flow_artifacts(
         ),
         decision=response.decision,
     )
+
+
+def _materialization_notes(status: str) -> str:
+    notes = {
+        "written": (
+            "- Wrote a runner-owned ABC flow script under `configs/flows/`.\n"
+            "- Benchmark `read` and result `write` commands remain outside the script.\n"
+            "- Re-running the same candidate overwrites the deterministic flow path.\n"
+        ),
+        "skipped_by_decision": (
+            "- The validated response did not authorize a candidate file.\n"
+            "- No `.abc` flow script was written.\n"
+        ),
+        "skipped_by_candidate_kind": (
+            "- The validated response is not an `abc_flow` candidate.\n"
+            "- No `.abc` flow script was written.\n"
+        ),
+    }
+    return notes.get(status, "- No materialization action was taken.\n")

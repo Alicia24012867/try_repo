@@ -8,7 +8,9 @@ from typing import Any, Mapping
 from scripts.agents.self_evolved_abc.coding_agents.base_coding_agent import CodingAgent
 from scripts.agents.self_evolved_abc.flow_artifacts import (
     render_flow_validation_failure_artifacts,
-    render_validated_flow_artifacts,
+)
+from scripts.agents.self_evolved_abc.flow_materialization import (
+    materialize_validated_flow_response,
 )
 from scripts.agents.self_evolved_abc.model_client import ModelInvocation, ModelReply
 from scripts.agents.self_evolved_abc.prompt_rendering import (
@@ -68,12 +70,12 @@ class FlowAgent(CodingAgent):
                 issues=validation.issues,
                 evidence=evidence,
             )
-        return render_validated_flow_artifacts(
-            paper_role=self.paper_role,
-            candidate_id=self.context.candidate_id,
+        result = materialize_validated_flow_response(
             response=validation.response,
+            context=self.context,
             evidence=evidence,
         )
+        return result.artifacts
 
     def candidate_flow_path(self) -> Path:
         return (
