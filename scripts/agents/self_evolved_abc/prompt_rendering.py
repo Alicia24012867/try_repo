@@ -14,7 +14,7 @@ def load_template(repo_root: Path, relative_path: str) -> str:
     _ensure_inside_repo(repo_root, path)
     return path.read_text(encoding="utf-8")
 
-def rendering_templates(template: str, values: Mapping[str, object]) -> str:
+def render_template(template: str, values: Mapping[str, object]) -> str:
     string_values = {key: _stringify(value) for key, value in values.items()}
     
     def replace(match: re.Match[str]) -> str:
@@ -75,7 +75,7 @@ def summarize_flow_scripts(
 ) -> str:
     chunks: list[str] = []
     
-    for path in paths:
+    for path in paths[: max_files]:
         if not path.exists():
             chunks.append(f"{path}: missing")
             continue
