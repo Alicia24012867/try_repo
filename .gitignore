@@ -1,6 +1,8 @@
 .venv/
 .vscode/
 .DS_Store
+
+# environment variables (api_key included)
 .env
 
 **/__pycache__/
@@ -29,4 +31,5 @@ experiments/**/results*/*
 
 third_party/
 
+# local planning document
 to_do_list.md

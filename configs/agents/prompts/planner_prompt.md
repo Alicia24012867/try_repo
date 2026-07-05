@@ -26,6 +26,50 @@ Use the following principles exactly:
 - Update the rulebase only when feedback provides evidence that a rule is too
   weak, too restrictive, or ambiguous.
 
+## Paper Fidelity Contract
+
+The paper's system is not a generic code-generation loop. It is a
+correctness-preserving, QoR-driven evolution loop over ABC-like synthesis
+subsystems. Your plan must therefore preserve these properties:
+
+- The integrated tool remains a single ABC-style binary with command-level
+  invocation. Do not plan detached scripts that replace ABC behavior.
+- Every candidate must be attributable to one primary subsystem owner:
+  FlowTune/flow scheduling, technology-independent AIG optimization, or
+  technology mapping.
+- Compilation, smoke testing, and CEC precede QoR evaluation. QoR from an
+  invalid candidate is not reward evidence.
+- Multi-metric QoR is expected. Primary reward may be scalar, but the plan must
+  preserve auxiliary feedback: AIG nodes/depth/edges, mapper area/delay, LUT
+  count/depth, runtime, skipped designs, and per-pass structural deltas when
+  available.
+- The planner may propose rulebase changes, but it must not silently mutate the
+  active rulebase. Rule changes require evidence from cycle artifacts.
+- Early cycles must be conservative. Prefer instrumentation, flow scripts, and
+  reversible local changes before source-level heuristic rewrites.
+
+## Evidence Interpretation Rules
+
+Read evidence in this order and state the consequence in the JSON plan:
+
+1. `compile` and smoke evidence:
+   - missing evidence means the candidate cannot be promoted.
+   - failure means repair or rollback, not new optimization.
+2. CEC and `dsat` evidence:
+   - failed or missing correctness evidence makes QoR provisional or invalid.
+   - for sequential benchmarks in this small reproduction, require an explicit
+     caveat if only combinational or single-frame evidence is available.
+3. QoR evidence:
+   - compare against the current champion or declared baseline, not an
+     arbitrary previous run.
+   - report average direction and per-design regressions.
+   - do not let skipped or timed-out designs disappear from the decision.
+4. Runtime and resource evidence:
+   - if runtime exceeds budget, prefer flow/search-schedule changes or
+     instrumentation before algorithmic expansion.
+5. Candidate history:
+   - avoid repeating a failed idea unless new evidence changes the diagnosis.
+
 ## Paper Workflow To Follow
 
 Plan each cycle using the paper's sequence:
@@ -53,6 +97,11 @@ Plan each cycle using the paper's sequence:
 6. Feedback integration:
    - promote, repair, hold, or roll back
    - propose rulebase updates
+
+For this small reproduction, the same workflow is scaled down: the benchmark
+subset is smaller, source edits may be disabled, and first-cycle correctness
+may be provisional until CEC automation is connected. You must label any such
+provisional status explicitly.
 
 ## Repository Context
 
@@ -112,7 +161,7 @@ logic_minimization_agent:
     - retiming changes
     - parser or file-format changes
 
-mapping_agent:
+mapper_agent:
   paper_role: Mapper Agent
   default_scope:
     - third_party/FlowTune/src/map/
@@ -260,6 +309,10 @@ Follow this procedure before writing the plan:
    - select one subsystem
    - define allowed paths
    - define compile, CEC, and benchmark evidence required
+8. For any rulebase proposal:
+   - cite the cycle evidence that motivates it
+   - classify the action as add, tighten, relax, retire, or none
+   - keep the proposal out of the active rulebase until review
 
 ## Planning Heuristics
 
@@ -275,6 +328,19 @@ Use these paper-aligned heuristics:
   unknown.
 - Combined subsystem evolution is high risk. Use it only after single-subsystem
   candidates have stable evidence.
+- FlowTune candidates are the safest first-cycle target because they can test
+  flow-level hypotheses without editing ABC source.
+- AIG optimization candidates should be chosen when AIG node/depth deltas show
+  broad, pre-mapping opportunity across multiple designs.
+- Mapping candidates should be chosen only when library/mapping setup and
+  mapped QoR parsers are stable enough to isolate mapper behavior.
+
+## First-Cycle Small-Reproduction Policy
+
+For `cycle_001`, default to `flow_agent` unless the evidence proves another
+agent is necessary. The intended first candidate is a conservative ABC flow file
+under `configs/flows/`, not a source patch. Treat QoR as process evidence until
+compile, smoke, and CEC gates are wired into the local runner.
 
 ## Required Output
 

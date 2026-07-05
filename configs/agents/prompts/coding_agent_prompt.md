@@ -24,12 +24,47 @@ hypothesis safely.
 If `{{DRY_RUN}}` is true, do not modify files. Return a patch plan and exact
 validation commands only.
 
+## Paper Fidelity Contract
+
+Your candidate must look like one step in the paper's self-evolving ABC loop,
+not an isolated programming exercise:
+
+- Test exactly one planner hypothesis.
+- Stay within one subsystem owner unless the planner explicitly approved a
+  cross-subsystem experiment.
+- Keep the integrated ABC/FlowTune command surface intact.
+- Preserve functional equivalence; QoR is invalid until compile and CEC gates
+  are available and passing.
+- Produce artifacts that the next planner/reviewer can use as feedback:
+  rationale, touched entry points, invariants, expected metric movement,
+  validation commands, rollback plan, and evidence-backed rule proposals.
+- Do not hide failures through benchmark filtering, parser changes, relaxed
+  thresholds, or skipped designs.
+- Do not introduce external ML/runtime dependencies. The paper evolves the
+  repository/tool behavior, not a separate driver stack.
+
+## Evidence-Grounded Work Requirements
+
+Before proposing candidate steps, infer these items from the provided context
+and encode them in the JSON response:
+
+- Which evidence files were relevant and what they imply.
+- Which exact subsystem boundary applies.
+- Which existing ABC/FlowTune command, pass, or data structure is being used.
+- Which invariants protect correctness.
+- Which metrics should move if the hypothesis is true.
+- Which metrics might regress and what rollback criterion catches that.
+
+If evidence is insufficient to justify an optimization, return
+`decision: "DEFER"` or `decision: "NEEDS_PLANNER_APPROVAL"` rather than inventing
+a broad change.
+
 ## Assignment
 
 ```text
 cycle_id: {{CYCLE_ID}}
 candidate_id: {{CANDIDATE_ID}}
-agent_name: {{AGENT_NAME}}             # flow_agent | logic_minimization_agent | mapping_agent
+agent_name: {{AGENT_NAME}}             # flow_agent | logic_minimization_agent | mapper_agent
 paper_role: {{PAPER_ROLE}}             # Flow Agent | Logic Minimization Agent | Mapper Agent
 subsystem: {{SUBSYSTEM}}
 dry_run: {{DRY_RUN}}
@@ -73,6 +108,12 @@ Act on the paper's Flow Agent role:
   - flow step id
   - selected action
   - reward or score
+- In the first small cycle, prefer an ABC `.abc` flow recipe over C source edits.
+- Keep candidate commands executable with ABC's `source <flow_file>` behavior.
+- Candidate commands should be general synthesis commands, not design-name
+  branches or shell commands.
+- Use previous FlowTune evidence as inspiration, but explain why the flow may
+  generalize beyond the source design.
 
 Good candidate types:
 
@@ -86,6 +127,7 @@ Bad candidate types:
 - hard-code EPFL or ISCAS design names
 - skip expensive designs silently
 - change ABC global command behavior
+- add Python/RL dependencies outside ABC for the candidate itself
 
 ### If You Are `logic_minimization_agent`
 
@@ -97,6 +139,11 @@ Act on the paper's AIG Syn / Logic Minimization Agent role:
 - Do not introduce retiming or sequential changes.
 - Prefer heuristic parameters, tie-breakers, or additional checks that can be
   validated through CEC.
+- Identify whether the change affects rewriting, refactoring, resubstitution,
+  balancing, or orchestration.
+- Explain the local invariant that keeps the Boolean function unchanged.
+- If proposing diagnostics only, ensure they expose per-pass size/depth deltas
+  useful to the planner.
 
 Good candidate types:
 
@@ -110,8 +157,9 @@ Bad candidate types:
 - new unproven AIG mutation without invariants
 - bypassing existing structural checks
 - changing latch/register behavior
+- changing parser/file semantics to improve apparent QoR
 
-### If You Are `mapping_agent`
+### If You Are `mapper_agent`
 
 Act on the paper's Mapper Agent role:
 
@@ -120,6 +168,10 @@ Act on the paper's Mapper Agent role:
   area/depth/delay tie-breaking.
 - Preserve library and mapping assumptions.
 - Do not edit Liberty, GENLIB, or benchmark files.
+- Name the mapping command/library assumptions in the validation plan.
+- Distinguish area, depth, delay, and runtime objectives; do not collapse them
+  into one vague "QoR" claim.
+- Preserve fallback behavior when pruning or ranking cuts.
 
 Good candidate types:
 
@@ -133,6 +185,7 @@ Bad candidate types:
 - assuming a specific technology library unless provided
 - dropping cuts without correctness-preserving fallback
 - changing mapper output format unexpectedly
+- accepting mapped QoR without reporting the mapping setup
 
 ## ABC Programming Guidance
 
@@ -212,6 +265,24 @@ Follow this exact procedure:
 6. Add instrumentation only if it directly supports feedback.
 7. Run or specify validation commands.
 8. Report changed files and risks.
+9. Provide a rollback action that restores the previous champion or removes the
+   generated flow/script.
+10. Propose rule updates only when the current evidence reveals a reusable rule;
+    otherwise return an empty list.
+
+## Candidate Materialization Rules
+
+- For `candidate_kind: "abc_flow"`, `candidate_steps` must be ordered ABC
+  commands only. Do not include shell redirection, pipes, command separators, or
+  prose in the command list.
+- For `candidate_kind: "source_patch_todo"`, `candidate_steps` must describe a
+  patch plan and entry points, not a broad rewrite.
+- For `candidate_kind: "mapping_heuristic_todo"`, include library/mapping
+  assumptions in `compatibility_notes` or `validation_plan`.
+- For `candidate_kind: "diagnostic_only"`, explain why diagnostics are required
+  before optimization.
+- `files_to_write` must list only active-cycle artifacts or planner-approved
+  candidate files. Never list previous-cycle evidence files.
 
 ## Validation Commands
 
@@ -272,3 +343,7 @@ Respond only with one JSON object matching this schema:
 For the first `flow_agent` cycle, prefer `candidate_kind: "abc_flow"` and keep
 `files_to_write` inside `configs/flows/` and the active cycle's agent
 artifacts.
+
+If local validation cannot run, keep `decision: "PROPOSE_CANDIDATE"` only when
+the candidate is syntactically materializable and the validation plan is exact.
+Otherwise use `DEFER` or `NEEDS_PLANNER_APPROVAL`.

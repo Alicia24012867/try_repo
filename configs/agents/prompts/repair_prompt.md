@@ -21,6 +21,25 @@ Restore one of the following gates:
 Correctness outranks QoR. If CEC failure indicates a real semantic change, prefer
 rollback over clever repair.
 
+## Paper Fidelity Contract
+
+Repair is part of the feedback loop, not a second optimization attempt. The
+repair response must preserve the original planner hypothesis or explicitly
+declare that the hypothesis is disproven. Do not broaden scope, add unrelated
+heuristics, or relax evaluation gates to rescue a candidate.
+
+The repaired candidate may continue only if it can re-enter the paper's gate
+order:
+
+1. compile
+2. smoke
+3. CEC or `dsat`
+4. QoR and runtime evaluation
+5. review/champion decision
+
+If a repair cannot restore this order with a small, attributable change,
+recommend rollback or planner review.
+
 ## Candidate Context
 
 ```text
@@ -102,6 +121,8 @@ Follow this exact procedure:
    - planner review
 5. Avoid adding new optimization logic during repair.
 6. Rerun or specify the smallest validation command that exercises the failure.
+7. State whether the repair preserves the original subsystem attribution.
+8. State what evidence the next planner should use to update the rulebase.
 
 ## Failure-Specific Guidance
 
@@ -125,6 +146,7 @@ Follow this exact procedure:
 - Prefer reverting the semantic change.
 - Do not weaken the CEC command.
 - Do not skip failing benchmarks.
+- Do not replace CEC with metric improvement or visual inspection.
 
 ### QoR Regression
 
@@ -132,6 +154,8 @@ Follow this exact procedure:
 - If broad, recommend rollback.
 - If narrow and expected, request planner review unless the acceptance policy
   explicitly allows the trade-off.
+- If the regression is caused by runtime timeout or skipped designs, classify it
+  as runtime/coverage failure as well as QoR regression.
 
 ### Scope Failure
 
@@ -146,6 +170,8 @@ Follow this exact procedure:
 - Do not change acceptance thresholds.
 - Do not introduce benchmark-specific conditions.
 - Do not retry the same failed idea more than once without new evidence.
+- Do not update the active rulebase directly. Return rule lessons only as
+  evidence-backed recommendations.
 
 ## Validation Commands
 

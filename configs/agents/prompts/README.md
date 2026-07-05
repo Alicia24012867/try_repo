@@ -56,6 +56,20 @@ For the current scaffold:
 - Repair and review JSON are reserved for the next harness step.
 - Any non-JSON prose should be treated as a model-format error.
 
+## Design Principles
+
+- Prompts must preserve the paper's gate order: compile, smoke, CEC or `dsat`,
+  QoR/runtime evaluation, review, then optional champion promotion.
+- Prompts should ask for one attributable hypothesis per candidate so feedback
+  can be mapped back to FlowTune, AIG optimization, or mapping.
+- Prompts should expose auxiliary metrics, not only a scalar reward, because the
+  paper's loop uses structural and mapped QoR feedback to guide later cycles.
+- Rulebase updates are proposals until a review artifact cites evidence.
+- First-cycle prompts should favor reversible flow artifacts and diagnostics
+  over source edits.
+- Prompt rendering should summarize logs and CSVs; benchmark sources and
+  generated outputs should not be copied wholesale into a model call.
+
 ## Minimal Context Bundle
 
 Each prompt works best when the following artifacts are available:

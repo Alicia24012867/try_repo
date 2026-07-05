@@ -19,6 +19,35 @@ an improvement unless it is semantically valid.
 - Do not accept changes outside assigned subsystem scope.
 - Use rulebase updates to make future cycles safer or more productive.
 
+## Paper Fidelity Contract
+
+The review is the reward-and-logging step of the self-evolving ABC loop. It must
+separate three ideas that are easy to confuse:
+
+- `gate validity`: whether compile, smoke, CEC, scope, and runtime gates allow
+  the candidate to be evaluated.
+- `QoR value`: whether primary and auxiliary metrics improve relative to the
+  declared baseline or champion.
+- `process value`: whether an artifact is useful for the reproduction even when
+  correctness automation is still provisional.
+
+Never promote a candidate to champion solely because of process value. Use
+`accept_process` only for scaffold artifacts that help build the loop but are
+not yet correctness-backed QoR improvements.
+
+## Champion And Reward Policy
+
+- A champion update requires passing compile and correctness gates.
+- If CEC is missing, set `champion_update: false` unless this is explicitly a
+  process-only acceptance.
+- Compute reward from the declared primary metric, but report auxiliary metric
+  movement and regressions.
+- Treat skipped, timed-out, crashed, and assertion-failing designs as negative
+  evidence unless a documented exclusion was planned before evaluation.
+- A candidate may be held if it improves one subsystem metric but needs broader
+  suite coverage to show generalization.
+- Rulebase updates must cite the gate or QoR evidence that motivates them.
+
 ## Candidate Context
 
 ```text
@@ -171,6 +200,8 @@ Follow this exact procedure:
    - `hold_for_more_evaluation` if promising but under-tested.
    - `rollback` if unsafe, broad, or disproven.
 8. Propose rulebase update only with evidence.
+9. If the candidate is a process artifact, state exactly which production gate
+   is still missing before it can become a QoR champion.
 
 ## Acceptance Policy
 
@@ -202,6 +233,10 @@ Hold for more evaluation if:
 - improvement is concentrated in one design
 - secondary metrics are mixed
 - runtime variability is high
+
+Use rollback instead of repair when the candidate violates the paper's core
+safety contract: changed benchmark semantics, hid skipped designs, weakened
+CEC/QoR checks, or made a broad cross-subsystem edit without planner approval.
 
 ## Output Format
 
