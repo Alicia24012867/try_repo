@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Mapping
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
-from scripts.agents.self_evolved_abc.flow_artifacts import (
+from scripts.agents.self_evolved_abc.flow.artifacts import (
     render_validated_flow_artifacts,
 )
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts, FlowAgentResponse

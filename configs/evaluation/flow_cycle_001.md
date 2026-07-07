@@ -26,13 +26,13 @@ benchmark,flow_label,abc_exit_code,aig_nodes,aig_depth,runtime_seconds,skipped_r
 Baseline:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.vanilla_strash.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.vanilla_strash.aig; ps'
 ```
 
 Candidate:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.candidate_flow.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.candidate_flow.aig; ps'
 ```
 
 CEC note:
@@ -49,13 +49,13 @@ CEC note:
 Baseline:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.vanilla_strash.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.vanilla_strash.aig; ps'
 ```
 
 Candidate:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.candidate_flow.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.candidate_flow.aig; ps'
 ```
 
 CEC note:
@@ -72,13 +72,13 @@ CEC note:
 Baseline:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.vanilla_strash.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.vanilla_strash.aig; ps'
 ```
 
 Candidate:
 
 ```bash
-abc -c "source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.candidate_flow.aig; ps"
+abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.candidate_flow.aig; ps'
 ```
 
 CEC note:

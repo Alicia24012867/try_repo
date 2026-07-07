@@ -6,10 +6,10 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from scripts.agents.self_evolved_abc.coding_agents.base_coding_agent import CodingAgent
-from scripts.agents.self_evolved_abc.flow_artifacts import (
+from scripts.agents.self_evolved_abc.flow.artifacts import (
     render_flow_validation_failure_artifacts,
 )
-from scripts.agents.self_evolved_abc.flow_materialization import (
+from scripts.agents.self_evolved_abc.flow.materialization import (
     materialize_validated_flow_response,
 )
 from scripts.agents.self_evolved_abc.model_client import ModelInvocation, ModelReply
@@ -21,7 +21,7 @@ from scripts.agents.self_evolved_abc.prompt_rendering import (
     summarize_csv,
     summarize_flow_scripts,
 )
-from scripts.agents.self_evolved_abc.response_validation import (
+from scripts.agents.self_evolved_abc.flow.validation import (
     flow_response_json_schema,
     validate_flow_agent_response,
 )

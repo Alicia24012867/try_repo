@@ -1,4 +1,4 @@
-"""Validation helpers for model-generated agent responses."""
+"""Validation helpers for model-generated Flow Agent responses."""
 
 from __future__ import annotations
 

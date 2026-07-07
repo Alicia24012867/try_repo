@@ -17,14 +17,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Mapping
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-PS_RE = re.compile(
-    r"(?P<network>\S+)\s*:\s*"
-    r"i/o\s*=\s*(?P<inputs>\d+)\s*/\s*(?P<outputs>\d+)\s+"
-    r"lat\s*=\s*(?P<lat>\d+)\s+"
-    r"and\s*=\s*(?P<ands>\d+)\s+"
-    r"lev\s*=\s*(?P<lev>\d+)"
+from scripts.agents.self_evolved_abc.flow.metrics import (
+    parse_last_ps_metrics_file,
+    strip_ansi,
 )
 NORMAL_STAGE_RE = re.compile(
     r"^=+\s+"
@@ -59,15 +58,6 @@ SUMMARY_FIELDS = (
     "notes",
 )
 SKIPPED_FIELDS = ("suite", "design", "status", "reason", "source")
-
-
-@dataclass(frozen=True)
-class PsMetrics:
-    ands: int
-    lev: int
-    inputs: int
-    outputs: int
-    lat: int
 
 
 @dataclass(frozen=True)
@@ -189,8 +179,10 @@ def summarize_design(
     skipped_reason: str | None,
     timing: BatchTiming,
 ) -> dict[str, object]:
-    vanilla_metrics = parse_last_ps_metrics(logs_dir / f"{design}.vanilla.log")
-    flowtune_metrics = parse_last_ps_metrics(logs_dir / f"{design}.flowtune.log")
+    vanilla_metrics = parse_last_ps_metrics_file(logs_dir / f"{design}.vanilla.log")
+    flowtune_metrics = parse_last_ps_metrics_file(
+        logs_dir / f"{design}.flowtune.log"
+    )
 
     has_vanilla_aig = (outputs_dir / f"{design}.vanilla.aig").exists()
     has_flowtune_aig = (outputs_dir / f"{design}.flowtune.aig").exists()
@@ -242,23 +234,6 @@ def summarize_design(
         "has_flowtune_script": has_flowtune_script,
         "notes": "; ".join(issues),
     }
-
-
-def parse_last_ps_metrics(path: Path) -> PsMetrics | None:
-    if not path.exists():
-        return None
-    text = strip_ansi(path.read_text(encoding="utf-8", errors="replace"))
-    matches = list(PS_RE.finditer(text))
-    if not matches:
-        return None
-    match = matches[-1]
-    return PsMetrics(
-        ands=int(match.group("ands")),
-        lev=int(match.group("lev")),
-        inputs=int(match.group("inputs")),
-        outputs=int(match.group("outputs")),
-        lat=int(match.group("lat")),
-    )
 
 
 def parse_skipped_designs(path: Path) -> dict[str, str]:
@@ -395,10 +370,6 @@ def write_csv(path: Path, fields: Iterable[str], rows: list[dict[str, object]]) 
         writer.writerows(rows)
 
 
-def strip_ansi(value: str) -> str:
-    return ANSI_RE.sub("", value)
-
-
 def infer_suite(design: str) -> str:
     return design.split("_", 1)[0] if "_" in design else "unknown"
 
@@ -432,4 +403,3 @@ def maybe_float(value: float | None) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
