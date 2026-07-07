@@ -276,7 +276,10 @@ Follow this exact procedure:
   commands only. Do not include shell redirection, pipes, command separators, or
   prose in the command list.
 - For `candidate_kind: "source_patch_todo"`, `candidate_steps` must describe a
-  patch plan and entry points, not a broad rewrite.
+  patch plan and entry points, not a broad rewrite. It is proposal-only until
+  source patch materialization, compile gates, and review gates are wired.
+  Include scoped target files, invariants, validation commands, and a rollback
+  plan. Do not include shell command lines in `candidate_steps`.
 - For `candidate_kind: "mapping_heuristic_todo"`, include library/mapping
   assumptions in `compatibility_notes` or `validation_plan`.
 - For `candidate_kind: "diagnostic_only"`, explain why diagnostics are required
@@ -342,7 +345,9 @@ Respond only with one JSON object matching this schema:
 
 For the first `flow_agent` cycle, prefer `candidate_kind: "abc_flow"` and keep
 `files_to_write` inside `configs/flows/` and the active cycle's agent
-artifacts.
+artifacts. When the planner explicitly asks for Flow Agent source-edit
+capability, use `candidate_kind: "source_patch_todo"` and keep
+`files_to_write` inside the assignment's approved source-patch scope.
 
 If local validation cannot run, keep `decision: "PROPOSE_CANDIDATE"` only when
 the candidate is syntactically materializable and the validation plan is exact.

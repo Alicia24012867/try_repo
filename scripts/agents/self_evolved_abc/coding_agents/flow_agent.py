@@ -134,8 +134,10 @@ class FlowAgent(CodingAgent):
             "RUNTIME_BUDGET": "small EPFL subset; keep flow length conservative",
             "BENCHMARK_SCOPE": assignment.get("benchmark_scope", ()),
             "FLOW_SCOPE": (
-                "ABC commands only. Do not include shell commands, benchmark-name "
-                "branches, redirection, pipes, or previous-cycle output writes."
+                "For abc_flow: ABC commands only. Do not include shell commands, "
+                "benchmark-name branches, redirection, pipes, or previous-cycle "
+                "output writes. For source_patch_todo: proposal-only patch plan "
+                "inside assignment allowed_to_edit; do not apply source edits."
             ),
             "COMPILE_COMMAND": "SKIPPED: flow-only candidate changes no C source.",
             "SMOKE_COMMAND": self._smoke_command(),

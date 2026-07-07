@@ -1,0 +1,560 @@
+diff --git a/scripts/agents/self_evolved_abc/flow/source_patch_runner.py b/scripts/agents/self_evolved_abc/flow/source_patch_runner.py
+new file mode 100644
+index 0000000..7d511af
+--- /dev/null
++++ b/scripts/agents/self_evolved_abc/flow/source_patch_runner.py
+@@ -0,0 +1,554 @@
++"""Source patch implementation setup and patch recording.
++
++S4a records the baseline and candidate implementation identities. S4b records a
++reviewed source patch already present in the working tree as a patch diff. This
++module does not run build commands or benchmark comparisons.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import subprocess
++import sys
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Sequence
++
++from scripts.agents.self_evolved_abc.cycle_context import CycleContext
++from scripts.agents.self_evolved_abc.flow.source_patch import (
++    source_patch_plan_relative_path,
++)
++
++
++DEFAULT_ABC_BIN = Path("third_party") / "FlowTune" / "FlowTune-OpenFPGA" / "abc"
++PATCH_DIFF_NAME = "patch.diff"
++SOURCE_PATCH_TARGET_SECTION = "Proposed Target Files"
++SOURCE_PATCH_ALLOWED_ROOTS = (
++    "scripts/agents/self_evolved_abc/flow",
++    "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
++    "configs/agents/prompts",
++)
++
++
++@dataclass(frozen=True)
++class ImplementationBuildInfo:
++    """Manifest for one implementation side of a future comparison."""
++
++    implementation_label: str
++    cycle_id: str
++    candidate_id: str
++    repo_root: str
++    git_commit: str
++    git_dirty: bool
++    git_status_short: tuple[str, ...]
++    patch_plan: str
++    patch_plan_exists: bool
++    patch_plan_sha256: str | None
++    patch_applied: bool
++    patch_diff_path: str | None
++    build_command: str
++    binary_path: str
++    binary_exists: bool
++    binary_sha256: str | None
++    build_exit_code: int | None
++    status: str
++    notes: tuple[str, ...]
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description="Create S4 baseline/candidate implementation manifests."
++    )
++    parser.add_argument("--repo-root", type=Path, default=Path.cwd())
++    parser.add_argument(
++        "--assignment",
++        type=Path,
++        required=True,
++        help="Cycle assignment JSON.",
++    )
++    parser.add_argument(
++        "--patch-plan",
++        type=Path,
++        default=None,
++        help="Source patch plan artifact. Defaults to experiments/<cycle>/agents/source_patch_todos/<candidate>.md.",
++    )
++    parser.add_argument(
++        "--output-root",
++        type=Path,
++        default=None,
++        help="Implementation comparison root. Defaults to experiments/<cycle>/impl_compare.",
++    )
++    parser.add_argument(
++        "--baseline-abc-bin",
++        type=Path,
++        default=DEFAULT_ABC_BIN,
++        help="Baseline ABC binary path for later implementation comparison.",
++    )
++    parser.add_argument(
++        "--candidate-abc-bin",
++        type=Path,
++        default=DEFAULT_ABC_BIN,
++        help="Candidate ABC binary path for later implementation comparison.",
++    )
++    parser.add_argument(
++        "--record-applied-patch",
++        action="store_true",
++        help=(
++            "S4b mode: record the reviewed source patch currently present in "
++            "the working tree as candidate_modified/patch.diff. Does not apply "
++            "a patch."
++        ),
++    )
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(sys.argv[1:] if argv is None else argv)
++    repo_root = args.repo_root.resolve()
++    context = CycleContext.from_assignment_file(repo_root, args.assignment)
++    patch_plan = _repo_relative_path(
++        context,
++        args.patch_plan or source_patch_plan_relative_path(context),
++    )
++    output_root = _repo_path(
++        context,
++        args.output_root
++        or Path("experiments") / context.cycle_id / "impl_compare",
++    )
++
++    baseline_dir = output_root / "baseline_unmodified"
++    candidate_dir = output_root / "candidate_modified"
++    comparison_dir = output_root / "comparison"
++    for path in (baseline_dir, candidate_dir, comparison_dir):
++        path.mkdir(parents=True, exist_ok=True)
++
++    git_commit = _git_output(repo_root, ("rev-parse", "HEAD")) or "unknown"
++    git_status_lines = tuple(_git_status(repo_root))
++    git_dirty = bool(git_status_lines)
++    patch_diff_path: Path | None = None
++    candidate_patch_applied = False
++    candidate_status = "patch_not_applied"
++    candidate_notes = (
++        "Candidate source patch has not been applied yet.",
++        "Do not run QoR comparison until S4b/S5 produce a real candidate binary.",
++    )
++
++    if args.record_applied_patch:
++        target_paths = extract_source_patch_targets(context.repo_root / patch_plan)
++        validate_source_patch_targets(context, target_paths)
++        patch_diff_path = candidate_dir / PATCH_DIFF_NAME
++        write_patch_diff(
++            repo_root=context.repo_root,
++            target_paths=target_paths,
++            output_path=patch_diff_path,
++        )
++        candidate_patch_applied = True
++        candidate_status = "patch_applied_build_not_run"
++        candidate_notes = (
++            "Reviewed source patch is recorded in candidate_modified/patch.diff.",
++            "Build has not been run; do not enter S5 until S4c passes.",
++        )
++
++    baseline = build_manifest(
++        context=context,
++        label="baseline_unmodified",
++        patch_plan=patch_plan,
++        binary_path=args.baseline_abc_bin,
++        git_commit=git_commit,
++        git_dirty=git_dirty,
++        git_status_short=git_status_lines,
++        patch_applied=False,
++        patch_diff_path=None,
++        status="manifest_only",
++        notes=(
++            "Baseline is the unmodified implementation identity at git_commit.",
++            "No build was run by S4.",
++        ),
++    )
++    candidate = build_manifest(
++        context=context,
++        label="candidate_modified",
++        patch_plan=patch_plan,
++        binary_path=args.candidate_abc_bin,
++        git_commit=git_commit,
++        git_dirty=git_dirty,
++        git_status_short=git_status_lines,
++        patch_applied=candidate_patch_applied,
++        patch_diff_path=(
++            patch_diff_path.relative_to(context.repo_root)
++            if patch_diff_path is not None
++            else None
++        ),
++        status=candidate_status,
++        notes=candidate_notes,
++    )
++
++    baseline_info = write_build_info(baseline_dir, baseline)
++    candidate_info = write_build_info(candidate_dir, candidate)
++    baseline_log = write_build_log(baseline_dir, baseline)
++    candidate_log = write_build_log(candidate_dir, candidate)
++    readme = write_comparison_readme(
++        context=context,
++        output_root=output_root,
++        baseline=baseline,
++        candidate=candidate,
++    )
++
++    print(f"baseline_build_info: {baseline_info}")
++    print(f"candidate_build_info: {candidate_info}")
++    print(f"baseline_build_log: {baseline_log}")
++    print(f"candidate_build_log: {candidate_log}")
++    print(f"comparison_readme: {readme}")
++    print(f"status: {candidate_status if args.record_applied_patch else 'manifest_only'}")
++    return 0
++
++
++def build_manifest(
++    *,
++    context: CycleContext,
++    label: str,
++    patch_plan: Path,
++    binary_path: Path,
++    git_commit: str,
++    git_dirty: bool,
++    git_status_short: tuple[str, ...],
++    patch_applied: bool,
++    patch_diff_path: Path | None,
++    status: str,
++    notes: tuple[str, ...],
++) -> ImplementationBuildInfo:
++    """Build one manifest without mutating the implementation."""
++
++    absolute_patch_plan = context.repo_root / patch_plan
++    binary_relative = _display_path(context, binary_path)
++    binary_absolute = _absolute_maybe_repo_path(context, binary_path)
++    return ImplementationBuildInfo(
++        implementation_label=label,
++        cycle_id=context.cycle_id,
++        candidate_id=context.candidate_id,
++        repo_root=str(context.repo_root),
++        git_commit=git_commit,
++        git_dirty=git_dirty,
++        git_status_short=git_status_short,
++        patch_plan=str(patch_plan),
++        patch_plan_exists=absolute_patch_plan.exists(),
++        patch_plan_sha256=sha256_file(absolute_patch_plan),
++        patch_applied=patch_applied,
++        patch_diff_path=str(patch_diff_path) if patch_diff_path is not None else None,
++        build_command="not_run",
++        binary_path=binary_relative,
++        binary_exists=binary_absolute.exists(),
++        binary_sha256=sha256_file(binary_absolute),
++        build_exit_code=None,
++        status=status,
++        notes=notes,
++    )
++
++
++def write_build_info(directory: Path, info: ImplementationBuildInfo) -> Path:
++    """Write build_info.json for one implementation side."""
++
++    path = directory / "build_info.json"
++    path.write_text(
++        json.dumps(asdict(info), indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    return path
++
++
++def write_build_log(directory: Path, info: ImplementationBuildInfo) -> Path:
++    """Write a human-readable S4 build log placeholder."""
++
++    path = directory / "build.log"
++    lines = [
++        f"implementation_label: {info.implementation_label}",
++        f"status: {info.status}",
++        f"build_command: {info.build_command}",
++        f"build_exit_code: {info.build_exit_code}",
++        f"binary_path: {info.binary_path}",
++        f"binary_exists: {str(info.binary_exists).lower()}",
++        f"patch_plan: {info.patch_plan}",
++        f"patch_applied: {str(info.patch_applied).lower()}",
++        f"patch_diff_path: {info.patch_diff_path or 'none'}",
++        "",
++        "notes:",
++        *(f"- {note}" for note in info.notes),
++        "",
++    ]
++    path.write_text("\n".join(lines), encoding="utf-8")
++    return path
++
++
++def write_comparison_readme(
++    *,
++    context: CycleContext,
++    output_root: Path,
++    baseline: ImplementationBuildInfo,
++    candidate: ImplementationBuildInfo,
++) -> Path:
++    """Write the S4 comparison handoff README."""
++
++    path = output_root / "comparison" / "README.md"
++    stage = "S4b patch recorded" if candidate.patch_applied else "S4a manifest only"
++    next_gate = (
++        "- S4c must record candidate build success before S5 benchmark comparison."
++        if candidate.patch_applied
++        else "- S4b must apply a reviewed source patch and produce a real candidate implementation."
++    )
++    path.write_text(
++        "\n".join(
++            (
++                f"# Implementation Compare Setup -- {context.cycle_id} {context.candidate_id}",
++                "",
++                "## Status",
++                "",
++                f"- Stage: {stage}",
++                f"- Source patch applied: {str(candidate.patch_applied).lower()}",
++                "- Build run: no",
++                "- Benchmark/QoR run: no",
++                "- Promotion allowed: no",
++                "",
++                "## Baseline Implementation",
++                "",
++                f"- Label: `{baseline.implementation_label}`",
++                f"- Binary: `{baseline.binary_path}`",
++                f"- Binary exists: `{str(baseline.binary_exists).lower()}`",
++                f"- Build info: `../baseline_unmodified/build_info.json`",
++                "",
++                "## Candidate Implementation",
++                "",
++                f"- Label: `{candidate.implementation_label}`",
++                f"- Binary: `{candidate.binary_path}`",
++                f"- Binary exists: `{str(candidate.binary_exists).lower()}`",
++                f"- Patch applied: `{str(candidate.patch_applied).lower()}`",
++                f"- Patch diff: `{candidate.patch_diff_path or 'none'}`",
++                f"- Build info: `../candidate_modified/build_info.json`",
++                "",
++                "## Patch Plan",
++                "",
++                f"- Path: `{candidate.patch_plan}`",
++                f"- Exists: `{str(candidate.patch_plan_exists).lower()}`",
++                f"- SHA256: `{candidate.patch_plan_sha256 or 'missing'}`",
++                "",
++                "## Next Gate",
++                "",
++                next_gate,
++                "- S5 must compare baseline and candidate with the same harness and CEC-first QoR policy.",
++                "",
++            )
++        ),
++        encoding="utf-8",
++    )
++    return path
++
++
++def extract_source_patch_targets(patch_plan: Path) -> tuple[str, ...]:
++    """Extract proposed source targets from the S3 patch plan markdown."""
++
++    if not patch_plan.exists():
++        raise FileNotFoundError(f"source patch plan is missing: {patch_plan}")
++
++    lines = patch_plan.read_text(encoding="utf-8", errors="replace").splitlines()
++    in_section = False
++    targets: list[str] = []
++    for line in lines:
++        stripped = line.strip()
++        if stripped.startswith("## "):
++            heading = stripped.removeprefix("## ").strip()
++            in_section = heading == SOURCE_PATCH_TARGET_SECTION
++            continue
++        if not in_section or not stripped.startswith("- "):
++            continue
++        target = stripped.removeprefix("- ").strip()
++        if target and target != "None.":
++            targets.append(target)
++
++    if not targets:
++        raise ValueError(
++            f"source patch plan does not list any {SOURCE_PATCH_TARGET_SECTION!r}"
++        )
++    return tuple(targets)
++
++
++def validate_source_patch_targets(
++    context: CycleContext,
++    target_paths: tuple[str, ...],
++) -> None:
++    """Validate S4b target files stay in the first source-patch scope."""
++
++    allowed_roots = tuple(
++        context.resolve_repo_path(root) for root in SOURCE_PATCH_ALLOWED_ROOTS
++    )
++    assignment_roots = tuple(
++        context.resolve_repo_path(str(root))
++        for root in context.assignment.get("allowed_to_edit", ())
++        if str(root).strip()
++    )
++
++    for target in target_paths:
++        path = Path(target)
++        if path.is_absolute():
++            raise ValueError(f"absolute source patch target is not allowed: {target}")
++
++        resolved = context.resolve_repo_path(target)
++        if not any(_path_is_under_or_equal(resolved, root) for root in allowed_roots):
++            raise ValueError(f"source patch target is outside S4b scope: {target}")
++        if assignment_roots and not any(
++            _path_is_under_or_equal(resolved, root) for root in assignment_roots
++        ):
++            raise ValueError(
++                f"source patch target is outside assignment allowed_to_edit: {target}"
++            )
++        if not resolved.exists():
++            raise FileNotFoundError(
++                f"source patch target does not exist in working tree: {target}"
++            )
++
++
++def write_patch_diff(
++    *,
++    repo_root: Path,
++    target_paths: tuple[str, ...],
++    output_path: Path,
++) -> Path:
++    """Write a reviewable diff for tracked and untracked target files."""
++
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    chunks: list[str] = []
++    for target in target_paths:
++        target_path = repo_root / target
++        if _is_tracked(repo_root, target):
++            diff_text = _git_output(
++                repo_root,
++                ("diff", "--binary", "HEAD", "--", target),
++                allow_diff_exit=True,
++            )
++        else:
++            diff_text = _diff_untracked_file(repo_root, target_path)
++
++        if not diff_text:
++            raise ValueError(f"source patch target has no diff from baseline: {target}")
++        chunks.append(diff_text.rstrip())
++
++    output_path.write_text("\n\n".join(chunks) + "\n", encoding="utf-8")
++    return output_path
++
++
++def sha256_file(path: Path) -> str | None:
++    """Return a file SHA256 digest, or None when the file is absent."""
++
++    if not path.exists() or not path.is_file():
++        return None
++    digest = hashlib.sha256()
++    with path.open("rb") as stream:
++        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _repo_path(context: CycleContext, path: Path) -> Path:
++    if path.is_absolute():
++        try:
++            path.resolve().relative_to(context.repo_root)
++        except ValueError as exc:
++            raise ValueError(f"path escapes repository: {path}") from exc
++        return path.resolve()
++    return context.resolve_repo_path(str(path))
++
++
++def _repo_relative_path(context: CycleContext, path: Path) -> Path:
++    return _repo_path(context, path).relative_to(context.repo_root)
++
++
++def _display_path(context: CycleContext, path: Path) -> str:
++    if path.is_absolute():
++        try:
++            return str(path.resolve().relative_to(context.repo_root))
++        except ValueError:
++            return str(path)
++    return str(path)
++
++
++def _absolute_maybe_repo_path(context: CycleContext, path: Path) -> Path:
++    if path.is_absolute():
++        return path.resolve()
++    return context.resolve_repo_path(str(path))
++
++
++def _path_is_under_or_equal(path: Path, allowed_root: Path) -> bool:
++    if path == allowed_root:
++        return True
++    try:
++        path.relative_to(allowed_root)
++    except ValueError:
++        return False
++    return True
++
++
++def _git_output(
++    repo_root: Path,
++    args: tuple[str, ...],
++    *,
++    allow_diff_exit: bool = False,
++) -> str | None:
++    try:
++        completed = subprocess.run(
++            ("git", *args),
++            cwd=repo_root,
++            text=True,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            check=False,
++        )
++    except OSError:
++        return None
++    if completed.returncode != 0 and not (
++        allow_diff_exit and completed.returncode == 1
++    ):
++        return None
++    return completed.stdout.strip()
++
++
++def _git_status(repo_root: Path) -> tuple[str, ...]:
++    output = _git_output(repo_root, ("status", "--short"))
++    if not output:
++        return ()
++    return tuple(line for line in output.splitlines() if line.strip())
++
++
++def _is_tracked(repo_root: Path, target: str) -> bool:
++    try:
++        completed = subprocess.run(
++            ("git", "ls-files", "--error-unmatch", target),
++            cwd=repo_root,
++            text=True,
++            stdout=subprocess.DEVNULL,
++            stderr=subprocess.DEVNULL,
++            check=False,
++        )
++    except OSError:
++        return False
++    return completed.returncode == 0
++
++
++def _diff_untracked_file(repo_root: Path, path: Path) -> str:
++    try:
++        completed = subprocess.run(
++            ("git", "diff", "--no-index", "--", "/dev/null", str(path)),
++            cwd=repo_root,
++            text=True,
++            stdout=subprocess.PIPE,
++            stderr=subprocess.DEVNULL,
++            check=False,
++        )
++    except OSError as exc:
++        raise RuntimeError(f"failed to diff untracked file: {path}") from exc
++    if completed.returncode not in (0, 1):
++        raise RuntimeError(f"failed to diff untracked file: {path}")
++    return completed.stdout.strip()
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

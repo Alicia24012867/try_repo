@@ -1,0 +1,13 @@
+implementation_label: baseline_unmodified
+status: manifest_only
+build_command: not_run
+build_exit_code: None
+binary_path: third_party/FlowTune/FlowTune-OpenFPGA/abc
+binary_exists: true
+patch_plan: experiments/cycle_001/agents/source_patch_todos/candidate_001.md
+patch_applied: false
+patch_diff_path: none
+
+notes:
+- Baseline is the unmodified implementation identity at git_commit.
+- No build was run by S4.

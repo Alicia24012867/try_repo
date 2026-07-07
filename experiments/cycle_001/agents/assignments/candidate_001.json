@@ -27,7 +27,10 @@
     "experiments/cycle_001/logs",
     "experiments/cycle_001/outputs",
     "experiments/cycle_001/results",
-    "configs/flows"
+    "configs/flows",
+    "scripts/agents/self_evolved_abc/flow",
+    "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+    "configs/agents/prompts"
   ],
   "recent_evidence": [
     "experiments/cycle_000/results/summary.csv",

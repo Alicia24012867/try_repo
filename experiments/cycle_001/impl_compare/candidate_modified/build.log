@@ -1,0 +1,13 @@
+implementation_label: candidate_modified
+status: patch_applied_build_not_run
+build_command: not_run
+build_exit_code: None
+binary_path: third_party/FlowTune/FlowTune-OpenFPGA/abc
+binary_exists: true
+patch_plan: experiments/cycle_001/agents/source_patch_todos/candidate_001.md
+patch_applied: true
+patch_diff_path: experiments/cycle_001/impl_compare/candidate_modified/patch.diff
+
+notes:
+- Reviewed source patch is recorded in candidate_modified/patch.diff.
+- Build has not been run; do not enter S5 until S4c passes.

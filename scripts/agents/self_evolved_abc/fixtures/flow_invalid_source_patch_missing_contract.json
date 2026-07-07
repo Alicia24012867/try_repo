@@ -1,0 +1,27 @@
+{
+  "rationale": "This source patch proposal is invalid because it omits review metadata required before any source-level work.",
+  "candidate_kind": "source_patch_todo",
+  "candidate_steps": [
+    "Add a Flow Agent source patch"
+  ],
+  "source_design": "",
+  "expected_effect": "No safe effect because required review metadata is missing.",
+  "entry_points": [],
+  "invariants": [],
+  "risk_hotspots": [
+    "missing review contract"
+  ],
+  "files_to_write": [],
+  "compatibility_notes": {
+    "command_interface": "unchanged"
+  },
+  "validation_plan": [
+    "not_run because review contract validation should reject this response"
+  ],
+  "risks": [
+    "unsafe source patch proposal"
+  ],
+  "rollback_plan": "No source patch should be accepted.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

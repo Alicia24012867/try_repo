@@ -1,0 +1,34 @@
+{
+  "rationale": "This source patch proposal is invalid because it requests paths outside the Flow Agent source-patch scope.",
+  "candidate_kind": "source_patch_todo",
+  "candidate_steps": [
+    "Add proposal-only source patch contract handling"
+  ],
+  "source_design": "scripts/agents/self_evolved_abc/flow/validation.py",
+  "expected_effect": "No safe effect because requested paths are outside scope.",
+  "entry_points": [
+    "scripts/agents/self_evolved_abc/flow/validation.py"
+  ],
+  "invariants": [
+    "Do not edit third_party or previous-cycle results"
+  ],
+  "risk_hotspots": [
+    "scope violation"
+  ],
+  "files_to_write": [
+    "third_party/FlowTune/src/opt/flowtune/unsafe.c",
+    "experiments/cycle_000/results/summary.csv"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged"
+  },
+  "validation_plan": [
+    "not_run because scope validation should reject this response"
+  ],
+  "risks": [
+    "unsafe source patch proposal"
+  ],
+  "rollback_plan": "No source patch should be accepted.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

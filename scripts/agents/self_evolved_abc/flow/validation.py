@@ -32,7 +32,15 @@ FLOW_REQUIRED_FIELDS: tuple[str, ...] = (
     "decision",
 )
 
-FLOW_CANDIDATE_KINDS: tuple[str, ...] = ("abc_flow", "diagnostic_only")
+FLOW_CANDIDATE_ABC_FLOW = "abc_flow"
+FLOW_CANDIDATE_SOURCE_PATCH_TODO = "source_patch_todo"
+FLOW_CANDIDATE_DIAGNOSTIC_ONLY = "diagnostic_only"
+
+FLOW_CANDIDATE_KINDS: tuple[str, ...] = (
+    FLOW_CANDIDATE_ABC_FLOW,
+    FLOW_CANDIDATE_SOURCE_PATCH_TODO,
+    FLOW_CANDIDATE_DIAGNOSTIC_ONLY,
+)
 
 FLOW_DECISIONS: tuple[str, ...] = (
     "PROPOSE_CANDIDATE",
@@ -101,6 +109,19 @@ FORBIDDEN_FLOW_IO_COMMAND_PREFIXES: tuple[str, ...] = (
     "write_blif",
 )
 
+FORBIDDEN_SOURCE_PATCH_STEP_SUBSTRINGS: tuple[str, ...] = (
+    "&&",
+    "||",
+    "|",
+    ">",
+    "<",
+    "`",
+    "$(",
+    ";",
+)
+
+FORBIDDEN_SOURCE_PATCH_STEP_COMMANDS: tuple[str, ...] = FORBIDDEN_ABC_STEP_COMMANDS
+
 
 def flow_response_json_schema() -> Mapping[str, Any]:
     """Return the Flow Agent response schema used for model JSON mode."""
@@ -164,7 +185,11 @@ def validate_flow_agent_response(
         normalized_steps = candidate_steps
 
     if not all_issues:
-        _, issues = validate_files_to_write(files_to_write or (), context)
+        _, issues = validate_files_to_write(
+            files_to_write or (),
+            context,
+            candidate_kind=candidate_kind or "",
+        )
         all_issues.extend(issues)
 
     if not all_issues:
@@ -173,8 +198,12 @@ def validate_flow_agent_response(
                 decision=decision or "",
                 candidate_kind=candidate_kind or "",
                 candidate_steps=normalized_steps or (),
+                files_to_write=files_to_write or (),
+                entry_points=entry_points or (),
+                invariants=invariants or (),
                 rationale=rationale or "",
                 validation_plan=validation_plan or (),
+                rollback_plan=rollback_plan or "",
             )
         )
 
@@ -315,6 +344,7 @@ def validate_path_in_allowed_scope(
     repo_root: Path,
     allowed_roots: tuple[str, ...],
     field: str = "files_to_write",
+    scope_label: str = "allowed Flow Agent write scope",
 ) -> tuple[Path | None, tuple[ValidationIssue, ...]]:
     """Check that a model-proposed path stays inside allowed repo scope."""
 
@@ -339,16 +369,13 @@ def validate_path_in_allowed_scope(
 
     allowed_paths = tuple((resolved_root / root).resolve() for root in allowed_roots)
     for allowed_path in allowed_paths:
-        try:
-            resolved_path.relative_to(allowed_path)
+        if _path_is_under_or_equal(resolved_path, allowed_path):
             return resolved_path, ()
-        except ValueError:
-            continue
 
     return None, (
         ValidationIssue(
             field,
-            f"path is outside allowed Flow Agent write scope: {path_text}",
+            f"path is outside {scope_label}: {path_text}",
         ),
     )
 
@@ -356,13 +383,13 @@ def validate_path_in_allowed_scope(
 def validate_files_to_write(
     files_to_write: tuple[str, ...],
     context: CycleContext,
+    *,
+    candidate_kind: str,
 ) -> tuple[tuple[Path, ...] | None, tuple[ValidationIssue, ...]]:
     """Validate every requested output path."""
 
-    allowed_roots = (
-        "configs/flows",
-        f"experiments/{context.cycle_id}/agents",
-    )
+    candidate_allowed_roots = _candidate_kind_allowed_roots(context, candidate_kind)
+    assignment_allowed_roots = _assignment_allowed_roots(context)
     issues: list[ValidationIssue] = []
     resolved_paths: list[Path] = []
 
@@ -370,16 +397,68 @@ def validate_files_to_write(
         resolved_path, path_issues = validate_path_in_allowed_scope(
             relative_path,
             repo_root=context.repo_root,
-            allowed_roots=allowed_roots,
+            allowed_roots=candidate_allowed_roots,
             field=f"files_to_write[{index}]",
+            scope_label=f"Flow Agent {candidate_kind} write scope",
         )
         issues.extend(path_issues)
-        if resolved_path is not None:
-            resolved_paths.append(resolved_path)
+        if resolved_path is None:
+            continue
+
+        if assignment_allowed_roots:
+            _, assignment_issues = validate_path_in_allowed_scope(
+                relative_path,
+                repo_root=context.repo_root,
+                allowed_roots=assignment_allowed_roots,
+                field=f"files_to_write[{index}]",
+                scope_label="assignment allowed_to_edit",
+            )
+            issues.extend(assignment_issues)
+            if assignment_issues:
+                continue
+
+        resolved_paths.append(resolved_path)
 
     if issues:
         return None, tuple(issues)
     return tuple(resolved_paths), ()
+
+
+def _candidate_kind_allowed_roots(
+    context: CycleContext,
+    candidate_kind: str,
+) -> tuple[str, ...]:
+    active_agent_dir = f"experiments/{context.cycle_id}/agents"
+    if candidate_kind == FLOW_CANDIDATE_ABC_FLOW:
+        return ("configs/flows", active_agent_dir)
+    if candidate_kind == FLOW_CANDIDATE_SOURCE_PATCH_TODO:
+        return (
+            "scripts/agents/self_evolved_abc/flow",
+            "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+            "configs/agents/prompts",
+            active_agent_dir,
+        )
+    if candidate_kind == FLOW_CANDIDATE_DIAGNOSTIC_ONLY:
+        return (active_agent_dir,)
+    return ()
+
+
+def _assignment_allowed_roots(context: CycleContext) -> tuple[str, ...]:
+    return tuple(
+        str(item).strip()
+        for item in context.assignment.get("allowed_to_edit", ())
+        if str(item).strip()
+    )
+
+
+def _path_is_under_or_equal(path: Path, allowed_root: Path) -> bool:
+    if path == allowed_root:
+        return True
+    try:
+        path.relative_to(allowed_root)
+    except ValueError:
+        return False
+    return True
 
 
 def normalize_abc_command(command: str) -> str:
@@ -459,9 +538,36 @@ def validate_candidate_steps(
     candidate_kind: str,
     benchmark_scope: tuple[str, ...],
 ) -> tuple[tuple[str, ...] | None, tuple[ValidationIssue, ...]]:
-    """Validate all flow commands."""
+    """Validate candidate steps according to candidate kind."""
 
-    if candidate_kind == "abc_flow" and not candidate_steps:
+    if candidate_kind == FLOW_CANDIDATE_ABC_FLOW:
+        return validate_abc_flow_steps(
+            candidate_steps,
+            benchmark_scope=benchmark_scope,
+        )
+    if candidate_kind == FLOW_CANDIDATE_SOURCE_PATCH_TODO:
+        return validate_source_patch_steps(
+            candidate_steps,
+            benchmark_scope=benchmark_scope,
+        )
+    if candidate_kind == FLOW_CANDIDATE_DIAGNOSTIC_ONLY:
+        return tuple(step.strip() for step in candidate_steps if step.strip()), ()
+    return None, (
+        ValidationIssue(
+            "candidate_kind",
+            f"unsupported Flow candidate kind: {candidate_kind}",
+        ),
+    )
+
+
+def validate_abc_flow_steps(
+    candidate_steps: tuple[str, ...],
+    *,
+    benchmark_scope: tuple[str, ...],
+) -> tuple[tuple[str, ...] | None, tuple[ValidationIssue, ...]]:
+    """Validate all ABC flow commands."""
+
+    if not candidate_steps:
         return None, (
             ValidationIssue(
                 "candidate_steps",
@@ -492,23 +598,103 @@ def validate_candidate_steps(
     return tuple(normalized_steps), ()
 
 
+def validate_source_patch_steps(
+    candidate_steps: tuple[str, ...],
+    *,
+    benchmark_scope: tuple[str, ...],
+) -> tuple[tuple[str, ...] | None, tuple[ValidationIssue, ...]]:
+    """Validate source patch proposal steps without treating them as ABC commands."""
+
+    if not candidate_steps:
+        return None, (
+            ValidationIssue(
+                "candidate_steps",
+                "candidate_kind=source_patch_todo requires a patch plan",
+            ),
+        )
+
+    issues: list[ValidationIssue] = []
+    normalized_steps: list[str] = []
+    hard_coded_names = _benchmark_hard_code_tokens(benchmark_scope)
+    for index, step in enumerate(candidate_steps):
+        normalized = step.strip()
+        if not normalized:
+            issues.append(
+                ValidationIssue(
+                    field=f"candidate_steps[{index}]",
+                    message="patch plan step must not be empty",
+                )
+            )
+            continue
+
+        lower_step = normalized.lower()
+        for forbidden in FORBIDDEN_SOURCE_PATCH_STEP_SUBSTRINGS:
+            if forbidden in normalized:
+                issues.append(
+                    ValidationIssue(
+                        field=f"candidate_steps[{index}]",
+                        message=(
+                            "source_patch_todo step contains forbidden shell "
+                            f"syntax {forbidden!r}: {normalized}"
+                        ),
+                    )
+                )
+
+        first_word = lower_step.split(maxsplit=1)[0]
+        if first_word in FORBIDDEN_SOURCE_PATCH_STEP_COMMANDS:
+            issues.append(
+                ValidationIssue(
+                    field=f"candidate_steps[{index}]",
+                    message=(
+                        "source_patch_todo must describe a patch plan, not a "
+                        f"shell command: {normalized}"
+                    ),
+                )
+            )
+
+        for token in hard_coded_names:
+            if token in lower_step:
+                issues.append(
+                    ValidationIssue(
+                        field=f"candidate_steps[{index}]",
+                        message=(
+                            "source_patch_todo must not specialize the patch "
+                            f"to benchmark/design token {token!r}: {normalized}"
+                        ),
+                    )
+                )
+
+        normalized_steps.append(normalized)
+
+    if issues:
+        return None, tuple(issues)
+    return tuple(normalized_steps), ()
+
+
 def validate_decision_semantics(
     *,
     decision: str,
     candidate_kind: str,
     candidate_steps: tuple[str, ...],
+    files_to_write: tuple[str, ...],
+    entry_points: tuple[str, ...],
+    invariants: tuple[str, ...],
     rationale: str,
     validation_plan: tuple[str, ...],
+    rollback_plan: str,
 ) -> tuple[ValidationIssue, ...]:
     """Validate consistency between decision and candidate payload."""
 
     issues: list[ValidationIssue] = []
     if decision == "PROPOSE_CANDIDATE":
-        if candidate_kind != "abc_flow":
+        if candidate_kind not in (
+            FLOW_CANDIDATE_ABC_FLOW,
+            FLOW_CANDIDATE_SOURCE_PATCH_TODO,
+        ):
             issues.append(
                 ValidationIssue(
                     "candidate_kind",
-                    "PROPOSE_CANDIDATE requires candidate_kind=abc_flow",
+                    "PROPOSE_CANDIDATE requires abc_flow or source_patch_todo",
                 )
             )
         if not candidate_steps:
@@ -523,6 +709,16 @@ def validate_decision_semantics(
                 ValidationIssue(
                     "validation_plan",
                     "PROPOSE_CANDIDATE requires a validation plan",
+                )
+            )
+        if candidate_kind == FLOW_CANDIDATE_SOURCE_PATCH_TODO:
+            issues.extend(
+                validate_source_patch_todo_semantics(
+                    files_to_write=files_to_write,
+                    entry_points=entry_points,
+                    invariants=invariants,
+                    validation_plan=validation_plan,
+                    rollback_plan=rollback_plan,
                 )
             )
     elif decision == "DEFER":
@@ -545,6 +741,55 @@ def validate_decision_semantics(
             ValidationIssue(
                 "rationale",
                 "NEEDS_HUMAN_REVIEW must explain why review is needed",
+            )
+        )
+    return tuple(issues)
+
+
+def validate_source_patch_todo_semantics(
+    *,
+    files_to_write: tuple[str, ...],
+    entry_points: tuple[str, ...],
+    invariants: tuple[str, ...],
+    validation_plan: tuple[str, ...],
+    rollback_plan: str,
+) -> tuple[ValidationIssue, ...]:
+    """Validate required review metadata for source patch proposals."""
+
+    issues: list[ValidationIssue] = []
+    if not files_to_write:
+        issues.append(
+            ValidationIssue(
+                "files_to_write",
+                "source_patch_todo requires at least one proposed target or artifact path",
+            )
+        )
+    if not entry_points:
+        issues.append(
+            ValidationIssue(
+                "entry_points",
+                "source_patch_todo requires non-empty entry_points",
+            )
+        )
+    if not invariants:
+        issues.append(
+            ValidationIssue(
+                "invariants",
+                "source_patch_todo requires correctness or compatibility invariants",
+            )
+        )
+    if not validation_plan:
+        issues.append(
+            ValidationIssue(
+                "validation_plan",
+                "source_patch_todo requires validation commands or exact gates",
+            )
+        )
+    if not rollback_plan.strip():
+        issues.append(
+            ValidationIssue(
+                "rollback_plan",
+                "source_patch_todo requires a rollback plan",
             )
         )
     return tuple(issues)
