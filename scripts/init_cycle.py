@@ -22,6 +22,12 @@ from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
     normalize_flow_assignment_scope,
 )
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    DEFAULT_EVAL_FLOW_COMMANDS,
+    FLOW_SOURCE_TOUCHPOINTS,
+    FLOWTUNE_ABCI_SCOPE,
+    FLOWTUNE_SOURCE_SCOPE_PRIMARY,
+)
 
 CYCLE_RE = re.compile(r"^cycle_\d{3,}$")
 
@@ -74,7 +80,8 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "benchmarks/epfl/epfl_sqrt.blif",
     ]
     source_patch_roots = list(args.source_patch_allowed_roots) or [
-        "third_party/FlowTune/src/src/opt",
+        FLOWTUNE_SOURCE_SCOPE_PRIMARY,
+        FLOWTUNE_ABCI_SCOPE,
     ]
 
     assignment = {
@@ -96,7 +103,6 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
             f"{previous}/results/run_notes.md",
             f"{previous}/outputs",
         ],
-        "allowed_to_edit": allowed_to_edit,
         "recent_evidence": [
             f"{previous}/results/summary.csv",
             f"{previous}/results/skipped.csv",
@@ -104,6 +110,8 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         ],
         "source_patch_mode": args.source_patch_mode,
         "source_patch_allowed_roots": source_patch_roots,
+        "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
+        "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
     }
     return normalize_flow_assignment_scope(assignment)
     

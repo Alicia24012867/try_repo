@@ -112,5 +112,7 @@ Each experiment cycle keeps generated artifacts together:
 For the first small reproduction, `experiments/cycle_000/` is the parsed
 baseline and `experiments/cycle_001/` is the first LLM-agent source-patch cycle
 skeleton. The `cycle_001` assignment is in `source_patch_diff` mode and targets
-`third_party/FlowTune/src/src/opt` while keeping generated artifacts inside the
-active cycle directory.
+`third_party/FlowTune/src/src/opt` plus `third_party/FlowTune/src/src/base/abci`
+while keeping generated artifacts inside the active cycle directory. The default
+evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and
+`refactor` to improve the chance that source patches are exercised.

@@ -1190,6 +1190,7 @@ def build_fixture_validation_context(
         "configs/flows",
         "third_party/FlowTune/src/src/opt",
         "third_party/FlowTune/src/src/opt/nwk",
+        "third_party/FlowTune/src/src/base/abci",
     ):
         if entry not in permissive_allowed:
             permissive_allowed.append(entry)

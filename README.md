@@ -19,8 +19,8 @@ the next iteration — all without human intervention.
   - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
     cycle — no manual trigger needed.
 - Assignment scope is normalized through `flow/assignment.py`, so
-  `source_patch_diff` cycles consistently allow `third_party/FlowTune/src/src/opt`
-  and active-cycle artifact directories.
+  `source_patch_diff` cycles consistently allow FlowTune `opt/`, the relevant
+  `base/abci/` command wrappers, and active-cycle artifact directories.
 - `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
   starts the full autonomous loop.
 - Validation failures are retried with diagnostic feedback, and review
@@ -161,9 +161,11 @@ experiments/cycle_NNN/
 automatically by `next_cycle.py` at the end of each iteration.
 
 `cycle_001` starts in `source_patch_diff` mode. Its assignment targets
-`third_party/FlowTune/src/src/opt` and uses a small EPFL benchmark scope
-(`epfl_adder`, `epfl_bar`, `epfl_sqrt`) for the first source-level feedback
-loop.
+`third_party/FlowTune/src/src/opt` plus `third_party/FlowTune/src/src/base/abci`
+and uses a small EPFL benchmark scope (`epfl_adder`, `epfl_bar`, `epfl_sqrt`)
+for the first source-level feedback loop. The default evaluation flow includes
+`fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor` so source patches have
+a better chance to be exercised before CEC-backed QoR review.
 
 ## Pipeline Stages
 

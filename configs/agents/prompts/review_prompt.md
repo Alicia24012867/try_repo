@@ -88,6 +88,11 @@ on the dominant failure:
 - `ACCEPT_FOR_NEXT_CYCLE`: build, smoke, full CEC, and correctness-backed QoR
   passed with acceptable regressions.
 
+When every correctness-backed row has zero AND and zero depth delta, keep the
+decision at `REPAIR_QOR` and call this out as a reachability/strategy signal.
+The next cycle should try a different target file, behavior, or flow strategy;
+do not force an immediate subsystem switch solely from one zero-delta cycle.
+
 ## Candidate Context
 
 ```text

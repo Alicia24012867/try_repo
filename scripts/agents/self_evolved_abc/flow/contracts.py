@@ -49,13 +49,51 @@ FLOW_INFRA_ALLOWED_ROOTS = (
     "configs/agents/prompts",
 )
 FLOWTUNE_SOURCE_SCOPE_PRIMARY = "third_party/FlowTune/src/src/opt"
+FLOWTUNE_ABCI_SCOPE = "third_party/FlowTune/src/src/base/abci"
 FLOW_SOURCE_PATCH_DIFF_ALLOWED_ROOTS = (
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
-    "third_party/FlowTune/src/src/base/abci",
+    FLOWTUNE_ABCI_SCOPE,
     "third_party/FlowTune/src/src/map/mapper",
     *FLOW_INFRA_ALLOWED_ROOTS,
 )
 FLOW_SOURCE_PATCH_TODO_ALLOWED_ROOTS = FLOW_INFRA_ALLOWED_ROOTS
+
+LEGACY_EVAL_FLOW_COMMANDS = (
+    "strash",
+    "rewrite -z",
+    "resub -K 8",
+    "dc2",
+    "refactor -z",
+    "strash",
+    "print_stats",
+)
+
+DEFAULT_EVAL_FLOW_COMMANDS = (
+    "fx",
+    "strash",
+    "rewrite -z",
+    "resub -K 8",
+    "dc2",
+    "csweep",
+    "refactor -z",
+    "strash",
+    "print_stats",
+)
+
+FLOW_SOURCE_TOUCHPOINTS = {
+    "fx": [
+        "third_party/FlowTune/src/src/opt/fxu",
+        "third_party/FlowTune/src/src/base/abci/abcFxu.c",
+    ],
+    "rewrite/refactor/resub/dc2": [
+        "third_party/FlowTune/src/src/opt",
+        "third_party/FlowTune/src/src/base/abci",
+    ],
+    "csweep": [
+        "third_party/FlowTune/src/src/opt/csw",
+        "third_party/FlowTune/src/src/base/abci/abcSweep.c",
+    ],
+}
 
 PYTHON_SMOKE_FILES = (
     "scripts/agents/self_evolved_abc/flow/assignment.py",

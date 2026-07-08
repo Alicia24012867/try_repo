@@ -310,8 +310,9 @@ Follow this procedure before writing the plan:
    - define allowed paths
    - define compile, CEC, and benchmark evidence required
    - for Flow Agent source-code evolution, explicitly set
-     `source_patch_mode: source_patch_diff` and
-     `source_patch_allowed_roots: ["third_party/FlowTune/src/src/opt"]`
+     `source_patch_mode: source_patch_diff` and include likely exercised
+     roots such as `third_party/FlowTune/src/src/opt` and
+     `third_party/FlowTune/src/src/base/abci`
 8. For any rulebase proposal:
    - cite the cycle evidence that motivates it
    - classify the action as add, tighten, relax, retire, or none
@@ -326,13 +327,17 @@ source-level feedback loop:
   evolution. Use `abc_flow` only for legacy flow-recipe experiments, and use
   `source_patch_todo` only when the planner intentionally wants proposal-only
   design notes.
-- Set `subsystem` and `source_patch_allowed_roots` to
-  `third_party/FlowTune/src/src/opt` unless evidence justifies a narrower
-  FlowTune source subdirectory.
+- Set `subsystem` to `third_party/FlowTune/src/src/opt` and include
+  `third_party/FlowTune/src/src/opt` plus `third_party/FlowTune/src/src/base/abci`
+  in `source_patch_allowed_roots` unless evidence justifies a narrower scope.
 - Include the source-patch root in `allowed_to_edit` together with active-cycle
   artifact directories. Do not give write access to benchmarks, previous-cycle
   evidence, generated outputs outside the active cycle, or unrelated ABC
   subsystems.
+- Treat the evaluation flow as a reachability guide. The default flow includes
+  `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor`, so patches under
+  `opt/fxu`, `opt/csw`, and the corresponding `base/abci` command wrappers have
+  a realistic chance to be exercised.
 - The `coding_agent_task` must name the feedback being acted on: validation
   failure, patch-apply failure, smoke/compile failure, CEC mismatch, runtime
   issue, or QoR regression/opportunity.
@@ -379,7 +384,9 @@ Use these paper-aligned heuristics:
 
 For `cycle_001`, default to `flow_agent` unless the evidence proves another
 agent is necessary. The intended candidate is a conservative `source_patch_diff`
-targeting `third_party/FlowTune/src/src/opt`. Treat QoR as reviewable only after
+targeting `third_party/FlowTune/src/src/opt` or a command wrapper under
+`third_party/FlowTune/src/src/base/abci` that is exercised by the evaluation
+flow. Treat QoR as reviewable only after
 the remote compile, smoke, CEC, and QoR gates produce correctness-backed rows.
 The first source patch should be small enough to explain in one sentence and
 should target a real FlowTune file exposed in the coding prompt's source-file
@@ -398,7 +405,19 @@ Respond only with one JSON object matching this schema:
   "risk_level": "low",
   "source_patch_mode": "source_patch_diff",
   "source_patch_allowed_roots": [
-    "third_party/FlowTune/src/src/opt"
+    "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci"
+  ],
+  "evaluation_flow_commands": [
+    "fx",
+    "strash",
+    "rewrite -z",
+    "resub -K 8",
+    "dc2",
+    "csweep",
+    "refactor -z",
+    "strash",
+    "print_stats"
   ],
   "benchmark_scope": [
     "benchmarks/epfl/epfl_adder.blif",
@@ -417,7 +436,8 @@ Respond only with one JSON object matching this schema:
     "experiments/{{CYCLE_ID}}/results",
     "experiments/{{CYCLE_ID}}/impl_compare",
     "configs/flows",
-    "third_party/FlowTune/src/src/opt"
+    "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci"
   ],
   "evidence_summary": {
     "compile": "pass | fail | missing",

@@ -6,10 +6,13 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from scripts.agents.self_evolved_abc.flow.contracts import (
+    DEFAULT_EVAL_FLOW_COMMANDS,
     FLOW_CANDIDATE_ABC_FLOW,
     FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
     FLOW_CANDIDATE_SOURCE_PATCH_TODO,
     FLOW_INFRA_ALLOWED_ROOTS,
+    FLOW_SOURCE_TOUCHPOINTS,
+    FLOWTUNE_ABCI_SCOPE,
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
 )
 
@@ -57,7 +60,7 @@ def default_source_patch_allowed_roots(
     if roots:
         return roots
     if mode == FLOW_CANDIDATE_SOURCE_PATCH_DIFF:
-        return (FLOWTUNE_SOURCE_SCOPE_PRIMARY,)
+        return (FLOWTUNE_SOURCE_SCOPE_PRIMARY, FLOWTUNE_ABCI_SCOPE)
     return ()
 
 
@@ -115,6 +118,8 @@ def normalize_flow_assignment_scope(
     payload["subsystem"] = subsystem
     if source_roots:
         payload["source_patch_allowed_roots"] = list(source_roots)
+    payload.setdefault("evaluation_flow_commands", list(DEFAULT_EVAL_FLOW_COMMANDS))
+    payload.setdefault("flow_source_touchpoints", dict(FLOW_SOURCE_TOUCHPOINTS))
 
     if cycle_id:
         payload["allowed_to_edit"] = list(

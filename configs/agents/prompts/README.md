@@ -77,7 +77,11 @@ For the current scaffold:
 The active Flow Agent reproduction path is source-code feedback iteration:
 
 - Planner output should set `source_patch_mode: source_patch_diff` and
-  `source_patch_allowed_roots: ["third_party/FlowTune/src/src/opt"]`.
+  include `source_patch_allowed_roots` for `third_party/FlowTune/src/src/opt`
+  and `third_party/FlowTune/src/src/base/abci`.
+- The default evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`,
+  `csweep`, and `refactor`; use this as a reachability hint when choosing
+  source targets.
 - Coding output must use `candidate_kind: "source_patch_diff"` and include a
   repository-relative unified diff under `source_patch.diff`.
 - Every diff target must also appear in `files_to_write`.

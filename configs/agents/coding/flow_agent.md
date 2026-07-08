@@ -23,6 +23,7 @@ Active-cycle artifact scope:
 Current source-patch scope:
 
 - `third_party/FlowTune/src/src/opt/`
+- `third_party/FlowTune/src/src/base/abci/`
 - build metadata touched only when a new source file is unavoidable
 
 The assignment layer normalizes these paths through
@@ -55,8 +56,11 @@ The assignment layer normalizes these paths through
 
 Before returning a candidate in `source_patch_diff` mode, verify every item:
 
-- The target file exists under `third_party/FlowTune/src/src/opt/` and appears
+- The target file exists under the assignment's source-patch roots and appears
   in the source context given to the model.
+- The target is plausibly exercised by the evaluation flow. The default flow
+  runs `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor`, so `opt/fxu`,
+  `opt/csw`, and relevant `base/abci` command wrappers are good early targets.
 - The patch changes one narrow behavior: a flow scheduling choice, sampling
   condition, stopping condition, conservative tie-break, or feedback log hook.
 - The patch uses existing ABC/FlowTune style for naming, allocation, cleanup,
@@ -89,8 +93,11 @@ noise:
   local helper usage.
 - CEC failure: invalidate QoR, identify the semantic risk, and prefer rollback
   or a much narrower semantic repair.
-- QoR regression: keep CEC-passing behavior, then reduce or redirect the
-  heuristic. Do not add benchmark-name branches to rescue the average.
+- QoR regression or zero delta: keep CEC-passing behavior, then reduce or
+  redirect the heuristic. Do not add benchmark-name branches to rescue the
+  average. Treat logging-only or `fVerbose`-only patches as diagnostic signals;
+  for QoR repair, prefer a behavior-changing target that the evaluation flow can
+  plausibly exercise.
 - Missing remote evidence: keep the candidate provisional and request the exact
   remote gate, rather than claiming acceptance.
 

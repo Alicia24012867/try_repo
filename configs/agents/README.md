@@ -58,7 +58,10 @@ the source-level feedback loop:
 - Agent: Flow Agent.
 - Benchmark subset: `epfl_adder`, `epfl_bar`, and `epfl_sqrt`.
 - Candidate type: `source_patch_diff`.
-- Source patch scope: `third_party/FlowTune/src/src/opt`.
+- Source patch scope: `third_party/FlowTune/src/src/opt` plus command wrappers
+  under `third_party/FlowTune/src/src/base/abci`.
+- Default evaluation flow: `fx; strash; rewrite -z; resub -K 8; dc2; csweep;
+  refactor -z; strash; print_stats`.
 - Required evidence: `cycle_000` summary, skipped table, run notes, and
   selected FlowTune scripts.
 - Correctness policy: QoR is not trusted unless the remote S5/F7 comparison

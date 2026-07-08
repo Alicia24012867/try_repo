@@ -30,6 +30,7 @@
     "experiments/cycle_001/impl_compare",
     "configs/flows",
     "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci",
     "scripts/agents/self_evolved_abc/flow",
     "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
     "configs/agents/prompts"
@@ -41,6 +42,32 @@
   ],
   "source_patch_mode": "source_patch_diff",
   "source_patch_allowed_roots": [
-    "third_party/FlowTune/src/src/opt"
-  ]
+    "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci"
+  ],
+  "evaluation_flow_commands": [
+    "fx",
+    "strash",
+    "rewrite -z",
+    "resub -K 8",
+    "dc2",
+    "csweep",
+    "refactor -z",
+    "strash",
+    "print_stats"
+  ],
+  "flow_source_touchpoints": {
+    "fx": [
+      "third_party/FlowTune/src/src/opt/fxu",
+      "third_party/FlowTune/src/src/base/abci/abcFxu.c"
+    ],
+    "rewrite/refactor/resub/dc2": [
+      "third_party/FlowTune/src/src/opt",
+      "third_party/FlowTune/src/src/base/abci"
+    ],
+    "csweep": [
+      "third_party/FlowTune/src/src/opt/csw",
+      "third_party/FlowTune/src/src/base/abci/abcSweep.c"
+    ]
+  }
 }

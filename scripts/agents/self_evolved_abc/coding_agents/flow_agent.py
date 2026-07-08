@@ -9,6 +9,10 @@ from scripts.agents.self_evolved_abc.coding_agents.base_coding_agent import Codi
 from scripts.agents.self_evolved_abc.flow.artifacts import (
     render_flow_validation_failure_artifacts,
 )
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    DEFAULT_EVAL_FLOW_COMMANDS,
+    FLOW_SOURCE_TOUCHPOINTS,
+)
 from scripts.agents.self_evolved_abc.flow.materialization import (
     materialize_validated_flow_response,
 )
@@ -144,6 +148,14 @@ class FlowAgent(CodingAgent):
             ),
             "RUNTIME_BUDGET": "small EPFL subset; keep flow length conservative",
             "BENCHMARK_SCOPE": assignment.get("benchmark_scope", ()),
+            "EVALUATION_FLOW_COMMANDS": assignment.get(
+                "evaluation_flow_commands",
+                list(DEFAULT_EVAL_FLOW_COMMANDS),
+            ),
+            "FLOW_SOURCE_TOUCHPOINTS": assignment.get(
+                "flow_source_touchpoints",
+                dict(FLOW_SOURCE_TOUCHPOINTS),
+            ),
             "FLOW_SCOPE": (
                 "For abc_flow: ABC commands only. Do not include shell commands, "
                 "benchmark-name branches, redirection, pipes, or previous-cycle "

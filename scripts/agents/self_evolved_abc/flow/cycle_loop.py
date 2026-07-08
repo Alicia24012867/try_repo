@@ -18,6 +18,10 @@ from typing import Sequence
 from scripts.agents.self_evolved_abc.flow.assignment import (
     normalize_flow_assignment_scope,
 )
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    DEFAULT_EVAL_FLOW_COMMANDS,
+    LEGACY_EVAL_FLOW_COMMANDS,
+)
 
 
 # Review decisions that should keep the loop running.
@@ -180,6 +184,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         current_assignment = next_assignment
 
+    else:
+        print(f"cycle_loop: stopping — reached --max-cycles {args.max_cycles}")
+        if current_assignment.is_file():
+            print(
+                "cycle_loop: pending assignment = "
+                f"{current_assignment.relative_to(repo_root)}"
+            )
+
     print(f"\ncycle_loop: finished.  champion = {champion_cycle or 'none'}")
     return 0
 
@@ -237,6 +249,15 @@ def _ensure_flow_recipe(repo_root: Path, cycle_id: str) -> None:
     flow_dir = repo_root / "configs" / "flows"
     flow_path = flow_dir / f"{cycle_id}_candidate_001.abc"
     if flow_path.is_file():
+        if _flow_text_matches_commands(
+            flow_path.read_text(encoding="utf-8", errors="replace"),
+            LEGACY_EVAL_FLOW_COMMANDS,
+        ):
+            flow_path.write_text(
+                _render_flow_recipe(DEFAULT_EVAL_FLOW_COMMANDS),
+                encoding="utf-8",
+            )
+            print(f"cycle_loop: refreshed legacy flow recipe {flow_path.name}")
         return
     # Find any existing flow recipe to reuse as template
     template = None
@@ -245,9 +266,41 @@ def _ensure_flow_recipe(repo_root: Path, cycle_id: str) -> None:
         break
     if template is not None:
         shutil.copy2(template, flow_path)
-        print(f"cycle_loop: copied flow recipe {template.name} → {flow_path.name}")
+        if _flow_text_matches_commands(
+            flow_path.read_text(encoding="utf-8", errors="replace"),
+            LEGACY_EVAL_FLOW_COMMANDS,
+        ):
+            flow_path.write_text(
+                _render_flow_recipe(DEFAULT_EVAL_FLOW_COMMANDS),
+                encoding="utf-8",
+            )
+            print(
+                f"cycle_loop: copied and refreshed flow recipe "
+                f"{template.name} → {flow_path.name}"
+            )
+        else:
+            print(f"cycle_loop: copied flow recipe {template.name} → {flow_path.name}")
     else:
-        print("cycle_loop: warning — no flow recipe template found")
+        flow_dir.mkdir(parents=True, exist_ok=True)
+        flow_path.write_text(
+            _render_flow_recipe(DEFAULT_EVAL_FLOW_COMMANDS),
+            encoding="utf-8",
+        )
+        print(f"cycle_loop: wrote default flow recipe {flow_path.name}")
+
+
+def _render_flow_recipe(commands: Sequence[str]) -> str:
+    return "".join(f"{command.strip().rstrip(';')};\n" for command in commands)
+
+
+def _flow_text_matches_commands(text: str, commands: Sequence[str]) -> bool:
+    normalized_lines = tuple(
+        line.strip().rstrip(";")
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    expected = tuple(command.strip().rstrip(";") for command in commands)
+    return normalized_lines == expected
 
 
 def _find_resume_point(repo_root: Path) -> Path:

@@ -324,6 +324,30 @@ benchmark_scope: {{BENCHMARK_SCOPE}}
 flow_scope: {{FLOW_SCOPE}}
 ```
 
+## Evaluation Flow Reachability
+
+The S5/F7 implementation comparison runs the candidate ABC binary with this
+shared evaluation flow after reading each benchmark:
+
+```text
+{{EVALUATION_FLOW_COMMANDS}}
+```
+
+These commands are intended to give source patches a chance to be exercised.
+Use this soft mapping when choosing target files; it is guidance, not a rigid
+proof obligation:
+
+```text
+{{FLOW_SOURCE_TOUCHPOINTS}}
+```
+
+If the previous QoR feedback shows CEC passed but every correctness-backed row
+has zero AND/depth delta, treat that as a reachability or strategy signal. In
+the next patch, prefer a target file, command behavior, threshold, tie-break, or
+flow strategy that is more likely to be touched by the evaluation flow. Do not
+immediately force a subsystem switch solely because one small patch had zero
+effect.
+
 ## Required Work Procedure
 
 Follow this exact procedure:
@@ -399,7 +423,11 @@ hypothesis and repair only the failing gate:
   risk; do not weaken, skip, or replace CEC.
 - `REPAIR_QOR`: CEC passed but the metric did not improve. Prefer a smaller
   adjustment, a narrower condition, or rollback. Do not create benchmark-name
-  branches to rescue the average.
+  branches to rescue the average. The patch must change a FlowTune decision,
+  threshold, tie-break, schedule, or stopping behavior that can plausibly move
+  AND/depth/runtime. Logging-only or `fVerbose`-only instrumentation is useful
+  only as diagnosis; after a zero-delta QoR result, prefer a behavior-changing
+  patch that has a realistic chance to affect the evaluated flow.
 - `ACCEPT_FOR_NEXT_CYCLE`: treat the accepted candidate as positive evidence for
   the next planner hypothesis. Do not rewrite the accepted patch unless the new
   assignment explicitly asks for follow-up evolution.

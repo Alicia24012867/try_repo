@@ -77,6 +77,7 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         for row in backed_rows
         if row.get("and_improve_pct") not in ("", None)
     )
+    all_structural_deltas_zero = _all_structural_deltas_zero(backed_rows)
 
     promotion = False
     if build_status not in CANDIDATE_BUILD_READY_STATUSES:
@@ -100,8 +101,19 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         promotion = True
     else:
         decision = "REPAIR_QOR"
-        reason = "Correctness passed but QoR did not improve on the target metric"
-        next_action = "Feed QoR deltas back to the Flow Agent and request a smaller repair."
+        if all_structural_deltas_zero:
+            reason = (
+                "Correctness passed but every correctness-backed row had zero "
+                "AND/depth delta; the patch may not have affected code reached "
+                "by the evaluation flow or may have been behavior-neutral."
+            )
+            next_action = (
+                "Feed zero-delta QoR back to the Flow Agent as a reachability "
+                "signal and request a different target file or strategy."
+            )
+        else:
+            reason = "Correctness passed but QoR did not improve on the target metric"
+            next_action = "Feed QoR deltas back to the Flow Agent and request a smaller repair."
 
     return ReviewDecision(
         cycle_id=context.cycle_id,
@@ -332,6 +344,17 @@ def average(values: Sequence[float | None]) -> float | None:
     if not parsed:
         return None
     return sum(parsed) / len(parsed)
+
+
+def _all_structural_deltas_zero(rows: Sequence[dict[str, str]]) -> bool:
+    if not rows:
+        return False
+    for row in rows:
+        and_delta = parse_float(row.get("and_delta_candidate_minus_baseline"))
+        depth_delta = parse_float(row.get("depth_delta_candidate_minus_baseline"))
+        if and_delta not in (0, 0.0) or depth_delta not in (0, 0.0):
+            return False
+    return True
 
 
 def format_float(value: float | None) -> str:
