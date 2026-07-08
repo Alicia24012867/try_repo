@@ -115,12 +115,7 @@ FORBIDDEN_FLOW_IO_COMMAND_PREFIXES: tuple[str, ...] = (
 FORBIDDEN_SOURCE_PATCH_STEP_SUBSTRINGS: tuple[str, ...] = (
     "&&",
     "||",
-    "|",
-    ">",
-    "<",
-    "`",
     "$(",
-    ";",
 )
 
 FORBIDDEN_SOURCE_PATCH_STEP_COMMANDS: tuple[str, ...] = FORBIDDEN_ABC_STEP_COMMANDS

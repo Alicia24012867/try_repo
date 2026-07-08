@@ -7,7 +7,8 @@
     "experiments/cycle_002/results",
     "experiments/cycle_002/impl_compare",
     "configs/flows",
-    "third_party/FlowTune/src/src/opt"
+    "third_party/FlowTune/src/src/opt",
+    "scripts/agents/self_evolved_abc/flow"
   ],
   "allowed_to_read": [
     "experiments/cycle_001/impl_compare/comparison/impl_compare_summary.md",

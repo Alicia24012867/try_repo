@@ -68,6 +68,7 @@ agent_name: {{AGENT_NAME}}             # flow_agent | logic_minimization_agent |
 paper_role: {{PAPER_ROLE}}             # Flow Agent | Logic Minimization Agent | Mapper Agent
 subsystem: {{SUBSYSTEM}}
 dry_run: {{DRY_RUN}}
+source_patch_mode: {{SOURCE_PATCH_MODE}}
 ```
 
 ## Planner Task
@@ -101,6 +102,15 @@ Act on the paper's Flow Agent role:
   criteria, or feedback logging.
 - Keep FlowTune as an ABC command.
 - Do not alter core rewrite, resubstitution, refactor, or mapper internals.
+- FlowTune C source files live under ``third_party/FlowTune/src/src/opt/`` in
+  these **actual** subdirectories (not guesses — verify against the repo):
+  ``nwk/`` (nwkFlow.c nwkCheck.c nwkMerge.c nwkStrash.c nwkUtil.c),
+  ``fxu/`` (fxu.c fxuCreate.c fxuList.c fxuMatrix.c fxuPair.c fxuReduce.c fxuSelect.c fxuSingle.c fxuUpdate.c),
+  ``fsim/`` (fsimCore.c fsimFront.c fsimMan.c fsimSim.c fsimSwitch.c fsimTsim.c),
+  ``ret/`` (retArea.c retCore.c retDelay.c retFlow.c retIncre.c retLvalue.c).
+  When producing a ``source_patch_diff``, target only files that exist in these
+  directories. A path like ``flowtune/flowtune.c`` does **not** exist — use the
+  real files above.
 - Favor changes that expose structural deltas per pass:
   - AIG nodes
   - AIG depth
@@ -213,6 +223,12 @@ If guidance is missing, infer from nearby ABC style:
 {{RULEBASE}}
 ```
 
+## Source Files Available for Patching
+
+```text
+{{SOURCE_FILES}}
+```
+
 ## Evidence To Read First
 
 Before editing, read and summarize the relevant evidence.
@@ -288,12 +304,21 @@ Follow this exact procedure:
   must be applicable in an isolated workspace. Prefer FlowTune source files
   under the approved source scope for paper-core evolution; use Python
   infrastructure files only for harness repairs.
+  **CRITICAL**: Every source file path appearing in the unified diff headers
+  (``--- a/…`` / ``+++ b/…`` / ``diff --git a/… b/…``) MUST also be listed in
+  ``files_to_write``. Otherwise validation rejects the candidate with
+  "source_patch_diff target is missing from files_to_write". Artifact-only
+  paths such as ``experiments/<cycle>/agents/…`` may appear alongside source
+  targets, but source targets are mandatory.
 - For `candidate_kind: "mapping_heuristic_todo"`, include library/mapping
   assumptions in `compatibility_notes` or `validation_plan`.
 - For `candidate_kind: "diagnostic_only"`, explain why diagnostics are required
   before optimization.
 - `files_to_write` must list only active-cycle artifacts or planner-approved
   candidate files. Never list previous-cycle evidence files.
+  For ``source_patch_diff``, ``files_to_write`` MUST additionally include every
+  source-file path referenced in the unified diff so the patch scope is
+  explicitly declared and validated.
 
 ## Validation Commands
 
@@ -357,15 +382,24 @@ Respond only with one JSON object matching this schema:
 }
 ```
 
-For the first `flow_agent` cycle, prefer `candidate_kind: "abc_flow"` and keep
-`files_to_write` inside `configs/flows/` and the active cycle's agent
-artifacts. When the planner explicitly asks for Flow Agent source-edit
-capability, use `candidate_kind: "source_patch_diff"` if you can produce a
-minimal unified diff. Use `source_patch_todo` only when more profiling or human
-approval is needed before writing a machine-applicable patch. Keep
-`files_to_write` inside the assignment's approved source-patch scope. Omit
-`source_patch` entirely for non-`source_patch_diff` candidates.
+**HARD REQUIREMENT — MODE SELECTION**: The assignment's ``source_patch_mode``
+dictates ``candidate_kind``. This is not a suggestion; using the wrong
+``candidate_kind`` will cause validation to fail.
 
-If local validation cannot run, keep `decision: "PROPOSE_CANDIDATE"` only when
+- ``source_patch_mode: source_patch_diff`` → MUST use ``candidate_kind:
+  "source_patch_diff"``. Produce a unified diff under ``source_patch.diff`` that
+  targets a file shown in ``## Source Files Available for Patching``. Match the
+  actual function names, line context, and indentation from the source code shown
+  above exactly — do NOT invent function or variable names. List every patched
+  source file in ``files_to_write``. ``validation_plan`` MUST contain at least
+  one entry (compile/smoke/CEC/QoR gate). Do NOT choose ``diagnostic_only`` or
+  ``source_patch_todo`` when ``source_patch_diff`` is required.
+- ``source_patch_mode: abc_flow`` → MUST use ``candidate_kind: "abc_flow"``.
+  Keep ``files_to_write`` inside ``configs/flows/`` and the active cycle's agent
+  artifacts.
+- ``source_patch_mode: source_patch_todo`` → MUST use ``candidate_kind:
+  "source_patch_todo"`` for proposal-only patch plans.
+
+If local validation cannot run, keep ``decision: "PROPOSE_CANDIDATE"`` only when
 the candidate is syntactically materializable and the validation plan is exact.
-Otherwise use `DEFER` or `NEEDS_PLANNER_APPROVAL`.
+Otherwise use ``DEFER`` or ``NEEDS_PLANNER_APPROVAL``.

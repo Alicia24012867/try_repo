@@ -757,18 +757,23 @@ def apply_candidate_patch_to_workspace(
     reset_patch_workspace(context, workspace_root, target_paths)
 
     workspace_relative = workspace_root.relative_to(context.repo_root)
+    patch_rel = str(patch_path.relative_to(context.repo_root))
     check_command = (
         "git",
         "apply",
         "--check",
+        "--recount",
+        "--ignore-space-change",
         f"--directory={workspace_relative}",
-        str(patch_path.relative_to(context.repo_root)),
+        patch_rel,
     )
     apply_command = (
         "git",
         "apply",
+        "--recount",
+        "--ignore-space-change",
         f"--directory={workspace_relative}",
-        str(patch_path.relative_to(context.repo_root)),
+        patch_rel,
     )
     log_lines.extend(
         (

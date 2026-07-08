@@ -101,8 +101,9 @@ class FlowAgent(CodingAgent):
             "CANDIDATE_ID": self.context.candidate_id,
             "AGENT_NAME": self.context.agent_name,
             "PAPER_ROLE": self.context.paper_role,
-            "SUBSYSTEM": "FlowTune / ABC flow scheduling",
+            "SUBSYSTEM": str(assignment.get("subsystem", "FlowTune / ABC flow scheduling")),
             "DRY_RUN": str(assignment.get("dry_run", False)).lower(),
+            "SOURCE_PATCH_MODE": str(assignment.get("source_patch_mode", "abc_flow")),
             "PLANNER_TASK": assignment.get("planner_hypothesis", ""),
             "ALLOWED_FILES": assignment.get("allowed_to_edit", ()),
             "PROGRAMMING_GUIDANCE": load_template(
@@ -110,10 +111,8 @@ class FlowAgent(CodingAgent):
             ),
             "RULEBASE": load_template(repo_root, "configs/agents/shared/rulebase.md"),
             "COMPILE_OR_RUNTIME_LOGS": self._runtime_context(evidence),
-            "CEC_LOGS": (
-                "CEC is not wired into cycle_000/cycle_001 yet. Treat all QoR "
-                "as provisional process evidence until equivalence checks pass."
-            ),
+            "SOURCE_FILES": self._source_file_context(),
+            "CEC_LOGS": self._cec_context(previous_cycle),
             "QOR_DELTAS": "\n\n".join(
                 (
                     summarize_csv(summary_path, max_rows=20, max_chars=10000),
@@ -167,6 +166,42 @@ class FlowAgent(CodingAgent):
             ),
         }
 
+    def _cec_context(self, previous_cycle: str) -> str:
+        """Read actual CEC summary from the previous cycle's impl_compare."""
+        cec_path = (
+            self.context.repo_root
+            / "experiments"
+            / previous_cycle
+            / "impl_compare"
+            / "comparison"
+            / "cec_summary.csv"
+        )
+        review_path = (
+            self.context.repo_root
+            / "experiments"
+            / previous_cycle
+            / "impl_compare"
+            / "comparison"
+            / "review_decision.json"
+        )
+        parts: list[str] = []
+        if cec_path.exists():
+            parts.append(summarize_csv(cec_path, max_rows=20, max_chars=6000))
+        else:
+            parts.append(
+                f"CEC summary not yet available for {previous_cycle}. "
+                "Treat all QoR as provisional until equivalence checks pass."
+            )
+        if review_path.exists():
+            parts.append(
+                compact_text_block(
+                    "review_decision",
+                    review_path.read_text(encoding="utf-8", errors="replace"),
+                    max_chars=3000,
+                )
+            )
+        return "\n\n".join(parts)
+
     def _previous_flow_context(self, previous_cycle: str) -> str:
         outputs = self.context.repo_root / "experiments" / previous_cycle / "outputs"
         preferred = ("epfl_adder", "epfl_bar", "epfl_sqrt")
@@ -180,6 +215,71 @@ class FlowAgent(CodingAgent):
             *(f"- {path}" for path in evidence),
         ]
         return compact_text_block("compile_or_runtime_context", "\n".join(lines), 4000)
+
+    def _source_file_context(self) -> str:
+        """Read source files from the assignment's source_patch_allowed_roots."""
+        allowed_roots = self.context.assignment.get("source_patch_allowed_roots", ())
+        if not allowed_roots:
+            return "No source_patch_allowed_roots in assignment."
+
+        repo_root = self.context.repo_root
+        chunks: list[str] = [
+            "## Source Files Available for Patching",
+            "",
+            "### File Index (all source files under allowed scope)",
+            "",
+        ]
+        all_files: list[tuple[str, int]] = []
+        for root in allowed_roots:
+            root_path = repo_root / root
+            if not root_path.is_dir():
+                continue
+            for src_file in sorted(root_path.rglob("*.c")):
+                rel = str(src_file.relative_to(repo_root))
+                size = src_file.stat().st_size
+                all_files.append((rel, size))
+            for src_file in sorted(root_path.rglob("*.h")):
+                rel = str(src_file.relative_to(repo_root))
+                size = src_file.stat().st_size
+                all_files.append((rel, size))
+
+        for rel, size in all_files:
+            chunks.append(f"- {rel}  ({size} bytes)")
+
+        # Full content for key files most relevant to Flow Agent
+        key_patterns = (
+            "nwkFlow", "retFlow", "fsimCore", "cswCore",
+            "fxu", "nwkCheck", "nwkMerge",
+        )
+        key_files = [
+            (rel, size) for rel, size in all_files
+            if any(pattern in rel for pattern in key_patterns)
+        ]
+        if key_files:
+            chunks.append("")
+            chunks.append("### Key File Contents (full source)")
+            chunks.append("")
+            for rel, size in key_files:
+                path = repo_root / rel
+                try:
+                    content = path.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    chunks.append(f"#### {rel}\n[could not read]\n")
+                    continue
+                if len(content) > 12000:
+                    half = 12000 // 2
+                    content = (
+                        content[:half].rstrip()
+                        + f"\n\n... [{len(content) - 12000} chars omitted] ...\n\n"
+                        + content[-half:].lstrip()
+                    )
+                chunks.append(f"#### {rel} ({size} bytes)")
+                chunks.append("```c")
+                chunks.append(content)
+                chunks.append("```")
+                chunks.append("")
+
+        return "\n".join(chunks)
 
     def _read_optional_block(self, label: str, path: Path, max_chars: int) -> str:
         if not path.exists():

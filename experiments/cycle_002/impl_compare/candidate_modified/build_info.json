@@ -1,0 +1,43 @@
+{
+  "binary_exists": true,
+  "binary_path": "experiments/cycle_002/impl_compare/candidate_modified/workspace/third_party/FlowTune/src/abc",
+  "binary_sha256": "3f638c7334a7bee4ae1f039f9f12dbb050599be83f7b07bcac5967c20d51fad1",
+  "build_command": "python_smoke_gate && flowtune_candidate_make",
+  "build_exit_code": 0,
+  "candidate_id": "candidate_001",
+  "cycle_id": "cycle_002",
+  "git_commit": "f6e296a4baf6fd73f66492f3bcbf6907d1d7d479",
+  "git_dirty": true,
+  "git_status_short": [
+    "M configs/agents/prompts/coding_agent_prompt.md",
+    " M experiments/cycle_002/agents/assignments/candidate_001.json",
+    " M scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+    " M scripts/agents/self_evolved_abc/fixtures/flow_valid_abc_flow.json",
+    " M scripts/agents/self_evolved_abc/fixtures/flow_valid_source_patch_diff.json",
+    " M scripts/agents/self_evolved_abc/fixtures/flow_valid_source_patch_todo.json",
+    " M scripts/agents/self_evolved_abc/flow/source_patch_runner.py",
+    " M scripts/agents/self_evolved_abc/flow/validation.py",
+    "?? configs/flows/cycle_002_candidate_001.abc",
+    "?? experiments/cycle_002/agents/candidate_changes/",
+    "?? experiments/cycle_002/agents/feedback/",
+    "?? experiments/cycle_002/agents/plans/",
+    "?? experiments/cycle_002/agents/rule_updates/",
+    "?? experiments/cycle_002/agents/source_patches/",
+    "?? experiments/cycle_002/impl_compare/",
+    "?? experiments/cycle_003/"
+  ],
+  "implementation_label": "candidate_modified",
+  "notes": [
+    "Validated source patch is recorded in candidate_modified/patch.diff.",
+    "Patch was applied only inside candidate_modified/workspace.",
+    "Candidate ABC binary was built from the isolated workspace.",
+    "S5/F7 should compare baseline ABC against the candidate workspace ABC."
+  ],
+  "patch_applied": true,
+  "patch_diff_path": "experiments/cycle_002/impl_compare/candidate_modified/patch.diff",
+  "patch_plan": "experiments/cycle_002/agents/source_patch_todos/candidate_001.md",
+  "patch_plan_exists": false,
+  "patch_plan_sha256": null,
+  "repo_root": "/home/huangyb/try_repo",
+  "status": "candidate_binary_build_passed"
+}

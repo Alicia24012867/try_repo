@@ -20,8 +20,7 @@
     "Patch may fail to apply if source context drifts"
   ],
   "files_to_write": [
-    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c",
-    "experiments/cycle_001/agents/source_patches/candidate_001.diff"
+    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"
   ],
   "compatibility_notes": {
     "command_interface": "unchanged",

@@ -23,8 +23,7 @@
     "Weakening abc_flow validation while adding source-patch support"
   ],
   "files_to_write": [
-    "scripts/agents/self_evolved_abc/flow/source_patch_runner.py",
-    "experiments/cycle_001/agents/source_patch_todos/candidate_001.md"
+    "scripts/agents/self_evolved_abc/flow/source_patch_runner.py"
   ],
   "compatibility_notes": {
     "command_interface": "unchanged",
