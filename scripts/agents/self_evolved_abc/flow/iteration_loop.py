@@ -142,6 +142,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo_root = args.repo_root.resolve()
     assignment = args.assignment
+    review_decision_path = _review_decision_path(repo_root, assignment)
     commands: list[tuple[tuple[str, ...], bool]] = []
     if not args.skip_agent:
         _run_agent_with_retry(
@@ -241,10 +242,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         completed = subprocess.run(command, cwd=repo_root, check=False)
         if completed.returncode != 0:
             final_return_code = completed.returncode
+        if _is_review_command(command) and not review_decision_path.is_file():
+            print(
+                "stopped: review did not write "
+                f"{review_decision_path.relative_to(repo_root)}"
+            )
+            return completed.returncode or 1
         if completed.returncode != 0 and not continue_on_failure:
             print(f"stopped: return_code={completed.returncode}")
             return completed.returncode
     return final_return_code
+
+
+def _cycle_id_from_assignment(assignment: Path) -> str:
+    return assignment.parent.parent.parent.name
+
+
+def _review_decision_path(repo_root: Path, assignment: Path) -> Path:
+    return (
+        repo_root
+        / "experiments"
+        / _cycle_id_from_assignment(assignment)
+        / "impl_compare"
+        / "comparison"
+        / "review_decision.json"
+    )
+
+
+def _is_review_command(command: Sequence[str]) -> bool:
+    return "scripts.agents.self_evolved_abc.flow.review" in command
 
 
 if __name__ == "__main__":

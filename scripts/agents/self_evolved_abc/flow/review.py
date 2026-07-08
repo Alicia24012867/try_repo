@@ -78,24 +78,21 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         if row.get("and_improve_pct") not in ("", None)
     )
 
+    promotion = False
     if build_status not in CANDIDATE_BUILD_READY_STATUSES:
         decision, reason, next_action = _classify_build_failure(build_status)
-        promotion = False
     elif not cec_rows:
         decision = "REPAIR_EVALUATION"
         reason = "CEC summary is missing or empty"
         next_action = "Run S5/F7 implementation comparison before judging QoR."
-        promotion = False
     elif cec_pass != len(cec_rows):
         decision = "REJECT_CEC"
         reason = f"CEC passed {cec_pass}/{len(cec_rows)} rows"
         next_action = "Reject or repair the candidate before any QoR discussion."
-        promotion = False
     elif not backed_rows:
         decision = "REPAIR_EVALUATION"
         reason = "No correctness-backed QoR rows are available"
         next_action = "Re-run S5/F7 and ensure qor_delta rows are CEC-backed."
-        promotion = False
     elif avg_and is not None and avg_and > 0:
         decision = "ACCEPT_FOR_NEXT_CYCLE"
         reason = f"All CEC rows passed and average AND improvement is {avg_and:.6f}%"
