@@ -22,6 +22,12 @@ experiments/**/results*/*
 !experiments/**/results*/.gitkeep
 !experiments/**/results*/README.md
 
+# S4 isolated candidate workspace (full FlowTune source tree copy).
+experiments/**/impl_compare/candidate_modified/workspace/
+# S4 build logs are small enough to track, but build artifacts are not.
+experiments/**/impl_compare/*/build.log
+experiments/**/impl_compare/comparison/logs/
+
 # Legacy top-level run directories, kept ignored if regenerated locally.
 /outputs/
 /logs/

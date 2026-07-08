@@ -1,4 +1,0 @@
-benchmark,implementation_label,abc_exit_code,aig_nodes,aig_depth,runtime_seconds,aig_path,log_path,skipped_reason
-benchmarks/epfl/epfl_adder.blif,baseline_unmodified,0,895,255,0.181645,experiments/cycle_002/impl_compare/baseline_unmodified/outputs/epfl_adder.aig,experiments/cycle_002/impl_compare/baseline_unmodified/logs/epfl_adder.qor.log,
-benchmarks/epfl/epfl_bar.blif,baseline_unmodified,0,2952,12,0.344655,experiments/cycle_002/impl_compare/baseline_unmodified/outputs/epfl_bar.aig,experiments/cycle_002/impl_compare/baseline_unmodified/logs/epfl_bar.qor.log,
-benchmarks/epfl/epfl_sqrt.blif,baseline_unmodified,0,18411,6106,2.499273,experiments/cycle_002/impl_compare/baseline_unmodified/outputs/epfl_sqrt.aig,experiments/cycle_002/impl_compare/baseline_unmodified/logs/epfl_sqrt.qor.log,

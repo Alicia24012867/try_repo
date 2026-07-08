@@ -1,4 +1,0 @@
-benchmark,baseline_aig,candidate_aig,cec_exit_code,cec_status,runtime_seconds,log_path,skipped_reason
-benchmarks/epfl/epfl_adder.blif,experiments/cycle_001/impl_compare/baseline_unmodified/outputs/epfl_adder.aig,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_adder.aig,0,cec_pass,0.054718,experiments/cycle_001/impl_compare/comparison/logs/epfl_adder.cec.log,
-benchmarks/epfl/epfl_bar.blif,experiments/cycle_001/impl_compare/baseline_unmodified/outputs/epfl_bar.aig,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_bar.aig,0,cec_pass,0.031097,experiments/cycle_001/impl_compare/comparison/logs/epfl_bar.cec.log,
-benchmarks/epfl/epfl_sqrt.blif,experiments/cycle_001/impl_compare/baseline_unmodified/outputs/epfl_sqrt.aig,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_sqrt.aig,0,cec_pass,0.124335,experiments/cycle_001/impl_compare/comparison/logs/epfl_sqrt.cec.log,

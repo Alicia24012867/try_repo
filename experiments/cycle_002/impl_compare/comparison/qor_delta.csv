@@ -1,4 +1,0 @@
-benchmark,cec_status,correctness_backed,baseline_aig_nodes,candidate_aig_nodes,and_delta_candidate_minus_baseline,and_improve_pct,baseline_aig_depth,candidate_aig_depth,depth_delta_candidate_minus_baseline,baseline_runtime_seconds,candidate_runtime_seconds,runtime_delta_seconds,skipped_reason
-benchmarks/epfl/epfl_adder.blif,cec_pass,True,895,895,0,0.000000,255,255,0,0.181645,0.189953,0.008308,
-benchmarks/epfl/epfl_bar.blif,cec_pass,True,2952,2952,0,0.000000,12,12,0,0.344655,0.252014,-0.092641,
-benchmarks/epfl/epfl_sqrt.blif,cec_pass,True,18411,18411,0,0.000000,6106,6106,0,2.499273,2.387330,-0.111943,
