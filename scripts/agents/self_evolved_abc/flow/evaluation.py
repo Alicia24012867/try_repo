@@ -10,15 +10,18 @@ from pathlib import Path
 from typing import Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    ABC_RC_PATH,
+    CORRECTNESS_PROVISIONAL,
+    FLOW_RECIPE_BASELINE_LABEL as BASELINE_LABEL,
+    FLOW_RECIPE_CANDIDATE_LABEL as CANDIDATE_LABEL,
+)
 from scripts.agents.self_evolved_abc.flow.materialization import (
     candidate_flow_relative_path,
 )
+from scripts.agents.self_evolved_abc.flow.paths import repo_relative_existing_path
 
 
-ABC_RC_PATH = Path("third_party") / "FlowTune" / "abc.rc"
-BASELINE_LABEL = "vanilla_strash"
-CANDIDATE_LABEL = "candidate_flow"
-CORRECTNESS_PROVISIONAL = "provisional_no_cec"
 EXPECTED_METRICS = (
     "abc_exit_code",
     "aig_nodes",
@@ -81,10 +84,10 @@ def build_flow_evaluation_cases(
 ) -> tuple[FlowEvaluationCase, ...]:
     """Build one evaluation case per benchmark in assignment scope."""
 
-    candidate_flow_relative = _repo_relative_existing_path(context, candidate_flow)
+    candidate_flow_relative = repo_relative_existing_path(context, candidate_flow)
     cases: list[FlowEvaluationCase] = []
     for benchmark_text in context.benchmark_scope:
-        benchmark_relative = _repo_relative_existing_path(context, Path(benchmark_text))
+        benchmark_relative = repo_relative_existing_path(context, Path(benchmark_text))
         cases.append(
             FlowEvaluationCase(
                 benchmark=benchmark_relative,
@@ -376,13 +379,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"case_count: {len(cases)}")
     print("result_csv_header: " + ",".join(result_csv_header()))
     return 0
-
-
-def _repo_relative_existing_path(context: CycleContext, path: Path) -> Path:
-    resolved = context.resolve_repo_path(str(path))
-    if not resolved.exists():
-        raise FileNotFoundError(f"required evaluation input is missing: {path}")
-    return resolved.relative_to(context.repo_root)
 
 
 def _log_path(case: FlowEvaluationCase, flow_label: str) -> Path:

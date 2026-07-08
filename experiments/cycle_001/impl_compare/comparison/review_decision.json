@@ -1,0 +1,14 @@
+{
+  "average_and_improve_pct": null,
+  "build_status": "build_smoke_passed",
+  "candidate_id": "candidate_001",
+  "cec_pass_count": 0,
+  "cec_total_count": 3,
+  "champion_update": false,
+  "correctness_backed_rows": 0,
+  "cycle_id": "cycle_001",
+  "decision": "REJECT_CEC",
+  "next_action": "Reject or repair the candidate before any QoR discussion.",
+  "promotion_allowed": false,
+  "reason": "CEC passed 0/3 rows"
+}

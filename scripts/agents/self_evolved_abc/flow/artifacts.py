@@ -80,6 +80,7 @@ def render_validated_flow_artifacts(
     materialization_status: str = "not_run",
     flow_path: Path | None = None,
     source_patch_plan_path: Path | None = None,
+    source_patch_diff_path: Path | None = None,
     written_files: tuple[Path, ...] = (),
 ) -> AgentArtifacts:
     """Create markdown artifacts from a validated Flow Agent response."""
@@ -93,6 +94,11 @@ def render_validated_flow_artifacts(
     source_patch_plan_text = (
         str(source_patch_plan_path)
         if source_patch_plan_path is not None
+        else "not written"
+    )
+    source_patch_diff_text = (
+        str(source_patch_diff_path)
+        if source_patch_diff_path is not None
         else "not written"
     )
     flow_file_written = "yes" if written_files else "no"
@@ -119,6 +125,7 @@ def render_validated_flow_artifacts(
             f"- Candidate materialization: {materialization_status}\n"
             f"- `.abc` flow file: {flow_path_text}\n"
             f"- Source patch plan: {source_patch_plan_text}\n"
+            f"- Source patch diff: {source_patch_diff_text}\n"
             f"- Flow file written: {flow_file_written}\n\n"
             "## Materialization Notes\n\n"
             f"{_materialization_notes(materialization_status)}\n"
@@ -144,6 +151,7 @@ def render_validated_flow_artifacts(
             f"- materialization_status: {materialization_status}\n"
             f"- candidate_flow_path: {flow_path_text}\n"
             f"- source_patch_plan_path: {source_patch_plan_text}\n"
+            f"- source_patch_diff_path: {source_patch_diff_text}\n"
             f"- flow_file_written: {flow_file_written}\n"
             "- correctness_status: provisional_until_CEC\n\n"
             "## Validation Plan\n\n"
@@ -182,6 +190,11 @@ def _materialization_notes(status: str) -> str:
             "- Wrote a source patch proposal artifact under the active cycle agent directory.\n"
             "- The proposed target source files were not modified.\n"
             "- Review this plan before any S4 source patch application or build comparison.\n"
+        ),
+        "source_patch_diff": (
+            "- Wrote a machine-applicable unified diff under the active cycle agent directory.\n"
+            "- The source tree was not modified during materialization.\n"
+            "- Apply only through the isolated S4d source patch runner before build comparison.\n"
         ),
     }
     return notes.get(status, "- No materialization action was taken.\n")

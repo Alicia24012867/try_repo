@@ -48,8 +48,9 @@ class FlowAgent(CodingAgent):
 
         system_prompt = (
             "You are the Flow Agent in a small reproduction of Multi-Agent "
-            "Self-Evolved ABC. Propose one conservative ABC flow candidate. "
-            "Return exactly one JSON object and do not include Markdown prose."
+            "Self-Evolved ABC. Propose one conservative FlowTune source patch "
+            "or ABC flow candidate within the assignment scope. Return exactly "
+            "one JSON object and do not include Markdown prose."
         )
 
         return ModelInvocation(
@@ -137,21 +138,28 @@ class FlowAgent(CodingAgent):
                 "For abc_flow: ABC commands only. Do not include shell commands, "
                 "benchmark-name branches, redirection, pipes, or previous-cycle "
                 "output writes. For source_patch_todo: proposal-only patch plan "
-                "inside assignment allowed_to_edit; do not apply source edits."
+                "inside assignment allowed_to_edit. For source_patch_diff: provide "
+                "a unified diff touching only approved source paths; it will be "
+                "applied only in an isolated candidate workspace."
             ),
-            "COMPILE_COMMAND": "SKIPPED: flow-only candidate changes no C source.",
+            "COMPILE_COMMAND": (
+                "python3 -B -m scripts.agents.self_evolved_abc.flow.source_patch_runner "
+                "--assignment <assignment.json> --apply-candidate-patch "
+                "--record-build-gate --build-candidate-binary"
+            ),
             "SMOKE_COMMAND": self._smoke_command(),
             "CEC_COMMAND": (
-                "Pending evaluation runner: run ABC cec between baseline and "
-                "candidate AIGs after result paths are wired."
+                "python3 -B -m scripts.agents.self_evolved_abc.flow.implementation_compare "
+                "--assignment <assignment.json>"
             ),
             "QOR_COMMAND": self._qor_command(),
             "COMPILE_PASS_CONDITION": (
-                "Recorded as SKIPPED with reason: no source code changed."
+                "Candidate source patch applies in an isolated workspace and the "
+                "build manifest records candidate_binary_build_passed."
             ),
             "SMOKE_PASS_CONDITION": "ABC exits 0 and prints parseable ps statistics.",
             "CEC_PASS_CONDITION": (
-                "Every measured design is equivalent once CEC automation exists."
+                "Every measured design has cec_status=cec_pass before QoR is trusted."
             ),
             "QOR_PASS_CONDITION": (
                 "Provisional AND/depth/runtime deltas are recorded for every "
@@ -167,8 +175,8 @@ class FlowAgent(CodingAgent):
 
     def _runtime_context(self, evidence: Mapping[str, str]) -> str:
         lines = [
-            "Flow-only cycle: compile can be skipped unless source edits are introduced.",
-            "cycle_000 evidence files loaded:",
+            "Flow Agent source-patch cycle: source edits must pass isolated patch application, build/smoke, CEC, and QoR review.",
+            "evidence files loaded:",
             *(f"- {path}" for path in evidence),
         ]
         return compact_text_block("compile_or_runtime_context", "\n".join(lines), 4000)

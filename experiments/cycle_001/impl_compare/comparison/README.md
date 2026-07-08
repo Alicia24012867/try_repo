@@ -2,9 +2,9 @@
 
 ## Status
 
-- Stage: S4b patch recorded
+- Stage: S4c build/smoke passed
 - Source patch applied: true
-- Build run: no
+- Build run: true
 - Benchmark/QoR run: no
 - Promotion allowed: no
 
@@ -13,6 +13,9 @@
 - Label: `baseline_unmodified`
 - Binary: `third_party/FlowTune/FlowTune-OpenFPGA/abc`
 - Binary exists: `true`
+- Build status: `baseline_smoke_passed`
+- Build command: `python_smoke_gate`
+- Build exit code: `0`
 - Build info: `../baseline_unmodified/build_info.json`
 
 ## Candidate Implementation
@@ -22,6 +25,9 @@
 - Binary exists: `true`
 - Patch applied: `true`
 - Patch diff: `experiments/cycle_001/impl_compare/candidate_modified/patch.diff`
+- Build status: `build_smoke_passed`
+- Build command: `python_smoke_gate`
+- Build exit code: `0`
 - Build info: `../candidate_modified/build_info.json`
 
 ## Patch Plan
@@ -32,5 +38,5 @@
 
 ## Next Gate
 
-- S4c must record candidate build success before S5 benchmark comparison.
-- S5 must compare baseline and candidate with the same harness and CEC-first QoR policy.
+- S5 can start implementation comparison with the same benchmark harness.
+- Promotion stays blocked until S5/F7 pass the CEC-first QoR gate.

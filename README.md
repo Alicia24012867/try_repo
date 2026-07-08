@@ -22,6 +22,10 @@ near-term target is a three-day, small closed loop:
 - `cycle_001` is initialized as the first Flow Agent cycle skeleton.
 - The old simple agent template has been removed.
 - The active agent scaffold is `scripts/agents/self_evolved_abc/`.
+- The Flow Agent source-evolution path now supports validated source-patch
+  diffs, isolated candidate workspaces, S4 build/smoke manifests, S5/F7
+  CEC-first implementation comparison, review feedback, and next-cycle
+  assignment generation.
 - The LLM API boundary is isolated in `model_client.py`; it supports fixture
   replies for offline tests and OpenAI-compatible chat-completions providers.
 
@@ -102,6 +106,18 @@ scripts/agents/self_evolved_abc/
     flow_agent.py
     logic_minimization_agent.py
     mapper_agent.py
+  flow/
+    contracts.py
+    paths.py
+    command_io.py
+    validation.py
+    materialization.py
+    source_patch.py
+    source_patch_runner.py
+    implementation_compare.py
+    review.py
+    next_cycle.py
+    iteration_loop.py
   shared/
     rulebase.py
 ```
@@ -116,8 +132,14 @@ experiments/cycle_NNN/
     assignments/
     plans/
     candidate_changes/
+    source_patch_todos/
+    source_patches/
     feedback/
     rule_updates/
+  impl_compare/
+    baseline_unmodified/
+    candidate_modified/
+    comparison/
   logs/
   outputs/
   results/
@@ -164,6 +186,23 @@ python3 -B -m scripts.agents.self_evolved_abc.cycle_driver \
   --assignment experiments/cycle_001/agents/assignments/candidate_001.json \
   --agent flow_agent
 ```
+
+Run the Flow Agent source-evolution loop after a validated `source_patch_diff`
+candidate exists:
+
+```bash
+python3 -B -m scripts.agents.self_evolved_abc.flow.iteration_loop \
+  --assignment experiments/cycle_001/agents/assignments/candidate_001.json \
+  --skip-agent \
+  --build-candidate-binary \
+  --next-cycle cycle_002 \
+  --force-next-assignment
+```
+
+For remote Linux/ABC validation, run the same S4/S5/F7 sequence with the remote
+baseline ABC binary path if needed; the candidate ABC path is read from the S4
+manifest after the isolated workspace build. Then sync back
+`experiments/<cycle>/impl_compare/` and the next-cycle assignment.
 
 ## Model Client Configuration
 
@@ -243,7 +282,8 @@ Use `.env` for local model-provider settings and secrets. Use `.local/` for
 machine-specific files, scratch copies, temporary downloads, large generated
 artifacts, and local run dumps. Both are ignored.
 
-`third_party/FlowTune/` is treated as external source. Do not edit it in the
-first flow-only cycle.
+`third_party/FlowTune/` is treated as external source. Flow Agent source
+patches must be stored as artifacts and applied only inside the
+`impl_compare/candidate_modified/workspace` copy until review promotes them.
 
 See `docs/STRUCTURE.md` for a more detailed mapping to the paper workflow.

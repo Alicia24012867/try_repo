@@ -1,25 +1,23 @@
 # Flow Agent Feedback -- candidate_001
 
-## Local Status
+## Review Decision
 
-- validation_status: passed
-- materialization_status: written
-- candidate_flow_path: configs/flows/cycle_001_candidate_001.abc
-- flow_file_written: yes
-- correctness_status: provisional_until_CEC
+- Decision: `REJECT_CEC`
+- Promotion allowed: `false`
+- Champion update: `false`
+- Reason: CEC passed 0/3 rows
+- Next action: Reject or repair the candidate before any QoR discussion.
 
-## Validation Plan
+## Gates
 
-- compile: SKIPPED because no source code is changed
-- smoke: read epfl_adder, source the generated flow, run strash and ps
-- CEC: not_run_local until baseline/candidate AIG comparison is wired
-- QoR: record AND count, depth, runtime, exit status, and skipped reason for adder/bar/sqrt
+- Build status: `build_smoke_passed`
+- CEC pass: 0/3
+- Correctness-backed QoR rows: 0
+- Average AND improvement pct: ``
 
-## Risks
+## Evidence
 
-- Correctness is provisional without CEC
-- A short distilled flow may not generalize beyond the three-design subset
-
-## Rollback Plan
-
-Remove the generated flow file and keep cycle_000 FlowTune scripts as the baseline evidence.
+- `experiments/cycle_001/impl_compare/comparison/impl_compare_summary.md`
+- `experiments/cycle_001/impl_compare/comparison/cec_summary.csv`
+- `experiments/cycle_001/impl_compare/comparison/qor_delta.csv`
+- `experiments/cycle_001/impl_compare/candidate_modified/patch.diff`

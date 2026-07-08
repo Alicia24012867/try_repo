@@ -109,6 +109,9 @@ Act on the paper's Flow Agent role:
   - selected action
   - reward or score
 - In the first small cycle, prefer an ABC `.abc` flow recipe over C source edits.
+  Once CEC-first implementation comparison is available, prefer a scoped
+  `source_patch_diff` for FlowTune source evolution when the assignment allows
+  FlowTune source paths.
 - Keep candidate commands executable with ABC's `source <flow_file>` behavior.
 - Candidate commands should be general synthesis commands, not design-name
   branches or shell commands.
@@ -280,6 +283,11 @@ Follow this exact procedure:
   source patch materialization, compile gates, and review gates are wired.
   Include scoped target files, invariants, validation commands, and a rollback
   plan. Do not include shell command lines in `candidate_steps`.
+- For `candidate_kind: "source_patch_diff"`, include a unified diff under
+  `source_patch.diff`. The diff must touch only assignment-approved paths and
+  must be applicable in an isolated workspace. Prefer FlowTune source files
+  under the approved source scope for paper-core evolution; use Python
+  infrastructure files only for harness repairs.
 - For `candidate_kind: "mapping_heuristic_todo"`, include library/mapping
   assumptions in `compatibility_notes` or `validation_plan`.
 - For `candidate_kind: "diagnostic_only"`, explain why diagnostics are required
@@ -317,7 +325,7 @@ Respond only with one JSON object matching this schema:
 ```json
 {
   "rationale": "why this candidate tests the planner hypothesis",
-  "candidate_kind": "abc_flow | source_patch_todo | mapping_heuristic_todo | diagnostic_only",
+  "candidate_kind": "abc_flow | source_patch_todo | source_patch_diff | diagnostic_only",
   "candidate_steps": ["ordered command, patch, or diagnostic steps"],
   "source_design": "optional source design or empty string",
   "expected_effect": "expected impact on primary and secondary metrics",
@@ -329,6 +337,12 @@ Respond only with one JSON object matching this schema:
     "command_interface": "unchanged | changed_with_approval",
     "build_system": "unchanged | changed_with_reason",
     "defaults": "unchanged | changed_with_reason"
+  },
+  "source_patch": {
+    "patch_format": "unified_diff",
+    "target_scope": "flowtune_c_source | flow_python_infra",
+    "apply_strategy": "isolated_workspace",
+    "diff": "unified diff text"
   },
   "validation_plan": [
     "compile or skipped-with-reason",
@@ -346,8 +360,11 @@ Respond only with one JSON object matching this schema:
 For the first `flow_agent` cycle, prefer `candidate_kind: "abc_flow"` and keep
 `files_to_write` inside `configs/flows/` and the active cycle's agent
 artifacts. When the planner explicitly asks for Flow Agent source-edit
-capability, use `candidate_kind: "source_patch_todo"` and keep
-`files_to_write` inside the assignment's approved source-patch scope.
+capability, use `candidate_kind: "source_patch_diff"` if you can produce a
+minimal unified diff. Use `source_patch_todo` only when more profiling or human
+approval is needed before writing a machine-applicable patch. Keep
+`files_to_write` inside the assignment's approved source-patch scope. Omit
+`source_patch` entirely for non-`source_patch_diff` candidates.
 
 If local validation cannot run, keep `decision: "PROPOSE_CANDIDATE"` only when
 the candidate is syntactically materializable and the validation plan is exact.

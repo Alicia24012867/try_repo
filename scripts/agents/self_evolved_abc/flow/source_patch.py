@@ -21,10 +21,28 @@ def source_patch_plan_relative_path(context: CycleContext) -> Path:
     )
 
 
+def source_patch_diff_relative_path(context: CycleContext) -> Path:
+    """Return the machine-applicable diff artifact path."""
+
+    return (
+        Path("experiments")
+        / context.cycle_id
+        / "agents"
+        / "source_patches"
+        / f"{context.candidate_id}.diff"
+    )
+
+
 def source_patch_plan_path(context: CycleContext) -> Path:
     """Return the absolute source patch proposal artifact path."""
 
     return context.repo_root / source_patch_plan_relative_path(context)
+
+
+def source_patch_diff_path(context: CycleContext) -> Path:
+    """Return the absolute machine-applicable diff artifact path."""
+
+    return context.repo_root / source_patch_diff_relative_path(context)
 
 
 def write_source_patch_plan(
@@ -45,6 +63,23 @@ def write_source_patch_plan(
         ),
         encoding="utf-8",
     )
+    return path
+
+
+def write_source_patch_diff(
+    *,
+    context: CycleContext,
+    response: FlowAgentResponse,
+) -> Path:
+    """Write the validated source patch unified diff without applying it."""
+
+    source_patch = response.source_patch or {}
+    diff_text = str(source_patch.get("diff", "")).strip()
+    if not diff_text:
+        raise ValueError("source_patch_diff response has no diff text")
+    path = source_patch_diff_path(context)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(diff_text.rstrip() + "\n", encoding="utf-8")
     return path
 
 

@@ -28,6 +28,7 @@
     "experiments/cycle_001/outputs",
     "experiments/cycle_001/results",
     "configs/flows",
+    "third_party/FlowTune/src/src/opt",
     "scripts/agents/self_evolved_abc/flow",
     "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
     "configs/agents/prompts"
@@ -36,5 +37,9 @@
     "experiments/cycle_000/results/summary.csv",
     "experiments/cycle_000/results/skipped.csv",
     "experiments/cycle_000/results/run_notes.md"
+  ],
+  "source_patch_mode": "source_patch_diff",
+  "source_patch_allowed_roots": [
+    "third_party/FlowTune/src/src/opt"
   ]
 }

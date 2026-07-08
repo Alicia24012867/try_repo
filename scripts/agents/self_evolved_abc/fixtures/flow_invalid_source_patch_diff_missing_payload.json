@@ -1,0 +1,35 @@
+{
+  "rationale": "Invalid source patch diff without patch payload.",
+  "candidate_kind": "source_patch_diff",
+  "candidate_steps": [
+    "Apply a source patch"
+  ],
+  "source_design": "invalid fixture",
+  "expected_effect": "Should fail validation.",
+  "entry_points": [
+    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"
+  ],
+  "invariants": [
+    "Patch must include a unified diff"
+  ],
+  "risk_hotspots": [
+    "Missing payload"
+  ],
+  "files_to_write": [
+    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged",
+    "build_system": "unchanged",
+    "defaults": "unchanged"
+  },
+  "validation_plan": [
+    "patch apply should fail before build"
+  ],
+  "risks": [
+    "No patch payload"
+  ],
+  "rollback_plan": "No source changes should be applied.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

@@ -2,6 +2,10 @@
 
 Active rulebase was not modified.
 
-## Proposed Updates
+## Proposed Update
 
-- Prefer runner-owned benchmark IO for generated flow candidates.
+- Any source patch that fails or skips CEC must be rejected or repaired before QoR deltas are considered.
+
+## Evidence
+
+- `experiments/cycle_001/impl_compare/comparison/review_decision.json`

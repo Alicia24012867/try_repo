@@ -63,6 +63,10 @@ The executable scaffold follows the paper's agent naming:
   provider integration intentionally isolated from agent role logic.
 - `scripts/agents/self_evolved_abc/cycle_driver.py`: one-agent execution
   entry point for a cycle assignment.
+- `scripts/agents/self_evolved_abc/flow/`: Flow Agent loop implementation:
+  validation, materialization, isolated source-patch application, candidate
+  workspace ABC build, CEC-first implementation comparison, review feedback,
+  and next-cycle handoff.
 
 Per-cycle agent artifacts live under `experiments/<cycle>/agents/`.
 
@@ -96,6 +100,9 @@ Each experiment cycle keeps generated artifacts together:
 - `logs/`: raw ABC, FlowTune, compile, and CEC logs.
 - `outputs/`: generated AIG/BLIF/netlist files.
 - `results/`: parsed CSV/JSON summaries and final tables.
+- `impl_compare/`: baseline/candidate implementation manifests, isolated
+  candidate workspace and binary, CEC logs, QoR delta tables, review decision,
+  and comparison summary for source-evolution cycles.
 
 For the first small reproduction, `experiments/cycle_000/` is the parsed
 baseline and `experiments/cycle_001/` is the first LLM-agent cycle skeleton.

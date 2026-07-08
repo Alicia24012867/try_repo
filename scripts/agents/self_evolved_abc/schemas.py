@@ -63,6 +63,7 @@ class FlowAgentResponse:
     rollback_plan: str
     rule_updates: tuple[str, ...]
     decision: str
+    source_patch: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from scripts.agents.self_evolved_abc.flow.command_io import render_command_log
 from scripts.agents.self_evolved_abc.flow.metrics import (
     parse_last_ps_metrics_text,
     parse_log_header_float,
@@ -28,6 +29,12 @@ from scripts.agents.self_evolved_abc.flow.evaluation import (
 )
 from scripts.agents.self_evolved_abc.flow.materialization import (
     candidate_flow_relative_path,
+)
+from scripts.agents.self_evolved_abc.flow.paths import (
+    ensure_dirs,
+    logs_dir,
+    outputs_dir,
+    results_dir,
 )
 
 
@@ -162,9 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def ensure_cycle_dirs(context: CycleContext) -> None:
-    logs_dir(context).mkdir(parents=True, exist_ok=True)
-    outputs_dir(context).mkdir(parents=True, exist_ok=True)
-    results_dir(context).mkdir(parents=True, exist_ok=True)
+    ensure_dirs(logs_dir(context), outputs_dir(context), results_dir(context))
 
 
 def run_one_flow(
@@ -331,23 +336,6 @@ def load_existing_flow_result(
     )
 
 
-def render_command_log(
-    *,
-    command: str,
-    return_code: int | None,
-    runtime_seconds: float,
-    output: str,
-) -> str:
-    return (
-        f"command: {command}\n"
-        f"return_code: {return_code}\n"
-        f"runtime_seconds: {runtime_seconds:.6f}\n"
-        "\n"
-        "----- output -----\n"
-        f"{output}"
-    )
-
-
 def write_flow_summary(
     context: CycleContext,
     results: Sequence[FlowRunResult],
@@ -433,19 +421,6 @@ def write_run_notes(
 
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
-
-
-def logs_dir(context: CycleContext) -> Path:
-    return context.repo_root / "experiments" / context.cycle_id / "logs"
-
-
-def outputs_dir(context: CycleContext) -> Path:
-    return context.repo_root / "experiments" / context.cycle_id / "outputs"
-
-
-def results_dir(context: CycleContext) -> Path:
-    return context.repo_root / "experiments" / context.cycle_id / "results"
-
 
 def empty_if_none(value: object) -> object:
     return "" if value is None else value

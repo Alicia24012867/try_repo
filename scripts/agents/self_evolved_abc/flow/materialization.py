@@ -7,17 +7,25 @@ from pathlib import Path
 from typing import Mapping
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    FLOW_CANDIDATE_ABC_FLOW,
+    FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+    FLOW_CANDIDATE_SOURCE_PATCH_TODO,
+)
 from scripts.agents.self_evolved_abc.flow.artifacts import (
     render_validated_flow_artifacts,
 )
 from scripts.agents.self_evolved_abc.flow.source_patch import (
+    source_patch_diff_relative_path,
     source_patch_plan_relative_path,
+    write_source_patch_diff,
     write_source_patch_plan,
 )
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts, FlowAgentResponse
 
 
 FLOW_STATUS_WRITTEN = "written"
+FLOW_STATUS_SOURCE_PATCH_DIFF = "source_patch_diff"
 FLOW_STATUS_SOURCE_PATCH_TODO = "source_patch_todo"
 FLOW_STATUS_SKIPPED_BY_DECISION = "skipped_by_decision"
 FLOW_STATUS_SKIPPED_BY_CANDIDATE_KIND = "skipped_by_candidate_kind"
@@ -54,7 +62,7 @@ def should_materialize_flow(response: FlowAgentResponse) -> bool:
 
     return (
         response.decision == "PROPOSE_CANDIDATE"
-        and response.candidate_kind == "abc_flow"
+        and response.candidate_kind == FLOW_CANDIDATE_ABC_FLOW
     )
 
 
@@ -89,6 +97,7 @@ def materialize_validated_flow_response(
     relative_flow_path = candidate_flow_relative_path(context)
     absolute_flow_path = candidate_flow_path(context)
     relative_source_patch_plan = source_patch_plan_relative_path(context)
+    relative_source_patch_diff = source_patch_diff_relative_path(context)
     status = _materialization_status(response)
 
     written_files: tuple[Path, ...] = ()
@@ -103,6 +112,8 @@ def materialize_validated_flow_response(
                 evidence=evidence,
             ),
         )
+    elif status == FLOW_STATUS_SOURCE_PATCH_DIFF:
+        written_files = (write_source_patch_diff(context=context, response=response),)
 
     artifacts = render_validated_flow_artifacts(
         paper_role=context.paper_role,
@@ -114,6 +125,11 @@ def materialize_validated_flow_response(
         source_patch_plan_path=(
             relative_source_patch_plan
             if status == FLOW_STATUS_SOURCE_PATCH_TODO and written_files
+            else None
+        ),
+        source_patch_diff_path=(
+            relative_source_patch_diff
+            if status == FLOW_STATUS_SOURCE_PATCH_DIFF and written_files
             else None
         ),
         written_files=_relative_paths(context, written_files),
@@ -132,9 +148,14 @@ def _materialization_status(response: FlowAgentResponse) -> str:
         return FLOW_STATUS_WRITTEN
     if (
         response.decision == "PROPOSE_CANDIDATE"
-        and response.candidate_kind == "source_patch_todo"
+        and response.candidate_kind == FLOW_CANDIDATE_SOURCE_PATCH_TODO
     ):
         return FLOW_STATUS_SOURCE_PATCH_TODO
+    if (
+        response.decision == "PROPOSE_CANDIDATE"
+        and response.candidate_kind == FLOW_CANDIDATE_SOURCE_PATCH_DIFF
+    ):
+        return FLOW_STATUS_SOURCE_PATCH_DIFF
     if response.decision != "PROPOSE_CANDIDATE":
         return FLOW_STATUS_SKIPPED_BY_DECISION
     return FLOW_STATUS_SKIPPED_BY_CANDIDATE_KIND

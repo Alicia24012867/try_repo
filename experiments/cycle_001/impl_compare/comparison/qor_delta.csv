@@ -1,0 +1,4 @@
+benchmark,cec_status,correctness_backed,baseline_aig_nodes,candidate_aig_nodes,and_delta_candidate_minus_baseline,and_improve_pct,baseline_aig_depth,candidate_aig_depth,depth_delta_candidate_minus_baseline,baseline_runtime_seconds,candidate_runtime_seconds,runtime_delta_seconds,skipped_reason
+benchmarks/epfl/epfl_adder.blif,cec_skipped,False,,,,,,,,0.001114,0.000780,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
+benchmarks/epfl/epfl_bar.blif,cec_skipped,False,,,,,,,,0.000724,0.000669,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
+benchmarks/epfl/epfl_sqrt.blif,cec_skipped,False,,,,,,,,0.000671,0.000658,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
