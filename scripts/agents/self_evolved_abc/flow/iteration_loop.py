@@ -53,27 +53,102 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _run_agent_with_retry(
+    *,
+    repo_root: Path,
+    assignment: Path,
+    max_retries: int,
+) -> None:
+    """Run cycle_driver, retrying on NEEDS_HUMAN_REVIEW with validation feedback."""
+    import json
+
+    agent_cmd = (
+        sys.executable,
+        "-B",
+        "-m",
+        "scripts.agents.self_evolved_abc.cycle_driver",
+        "--repo-root",
+        str(repo_root),
+        "--assignment",
+        str(assignment),
+        "--agent",
+        "flow_agent",
+    )
+
+    for attempt in range(max_retries + 1):
+        print(f"running: {' '.join(agent_cmd)}  (attempt {attempt + 1}/{max_retries + 1})")
+        subprocess.run(agent_cmd, cwd=repo_root, check=False)
+
+        # Derive cycle id from assignment path
+        cycle_id = assignment.parent.parent.parent.name
+        candidate = assignment.stem
+        feedback_path = (
+            repo_root
+            / "experiments"
+            / cycle_id
+            / "agents"
+            / "feedback"
+            / f"{candidate}.md"
+        )
+        candidate_path = (
+            repo_root
+            / "experiments"
+            / cycle_id
+            / "agents"
+            / "candidate_changes"
+            / f"{candidate}.md"
+        )
+
+        if not candidate_path.is_file():
+            return  # model call crashed, don't retry
+
+        decision_text = candidate_path.read_text(encoding="utf-8", errors="replace")
+        if "NEEDS_HUMAN_REVIEW" not in decision_text:
+            return  # accepted or deferred — don't retry
+
+        if attempt >= max_retries:
+            print(
+                f"iteration_loop: NEEDS_HUMAN_REVIEW after "
+                f"{max_retries + 1} attempts — giving up"
+            )
+            return
+
+        # Gather validation errors for the retry
+        feedback_text = ""
+        if feedback_path.is_file():
+            feedback_text = feedback_path.read_text(encoding="utf-8", errors="replace")
+
+        # Patch assignment with validation feedback as a repair hint
+        try:
+            payload = json.loads(assignment.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return
+
+        hint = (
+            "PREVIOUS ATTEMPT FAILED VALIDATION. Fix the following issues "
+            "in your JSON response and try again:\n\n"
+            f"{feedback_text[:3000]}"
+        )
+        original = str(payload.get("planner_hypothesis", ""))
+        payload["planner_hypothesis"] = hint + "\n---\n" + original
+        assignment.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print("iteration_loop: retrying with validation feedback in planner_hypothesis")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo_root = args.repo_root.resolve()
     assignment = args.assignment
     commands: list[tuple[tuple[str, ...], bool]] = []
     if not args.skip_agent:
-        commands.append((
-            (
-                sys.executable,
-                "-B",
-                "-m",
-                "scripts.agents.self_evolved_abc.cycle_driver",
-                "--repo-root",
-                str(repo_root),
-                "--assignment",
-                str(assignment),
-                "--agent",
-                "flow_agent",
-            ),
-            False,
-        ))
+        _run_agent_with_retry(
+            repo_root=repo_root,
+            assignment=assignment,
+            max_retries=2,
+        )
     if not args.skip_patch_apply:
         source_patch_command = [
             sys.executable,

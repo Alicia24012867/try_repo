@@ -24,11 +24,14 @@ CYCLE_DIRS = (
     "agents/assignments",
     "agents/plans",
     "agents/candidate_changes",
+    "agents/source_patch_todos",
+    "agents/source_patches",
     "agents/feedback",
     "agents/rule_updates",
     "logs",
     "outputs",
     "results",
+    "impl_compare",
 )
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +44,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paper-role", default="Flow Agent")
     parser.add_argument("--subsystem", default="configs/flows")
     parser.add_argument("--target-metric", default="and_count")
+    parser.add_argument(
+        "--source-patch-mode",
+        default="source_patch_diff",
+        choices=("source_patch_diff", "abc_flow", "source_patch_todo"),
+        help="Which candidate kind the Flow Agent should produce.",
+    )
+    parser.add_argument(
+        "--source-patch-allowed-root",
+        dest="source_patch_allowed_roots",
+        action="append",
+        default=[],
+        help="Repository paths the model is allowed to patch. Repeatable.",
+    )
     parser.add_argument("--with-assignment", action="store_true", default=True)
     parser.add_argument("--no-assignment", dest="with_assignment", action="store_false")
     parser.add_argument("--force", action="store_true")
@@ -66,7 +82,22 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "benchmarks/epfl/epfl_bar.blif",
         "benchmarks/epfl/epfl_sqrt.blif",
     ]
-        
+    source_patch_roots = list(args.source_patch_allowed_roots) or [
+        "third_party/FlowTune/src/src/opt",
+    ]
+    allowed_to_edit = [
+        f"experiments/{args.cycle_id}/agents",
+        f"experiments/{args.cycle_id}/logs",
+        f"experiments/{args.cycle_id}/outputs",
+        f"experiments/{args.cycle_id}/results",
+        f"experiments/{args.cycle_id}/impl_compare",
+        args.subsystem,
+        # Python infrastructure — model may need to repair harness bugs.
+        "scripts/agents/self_evolved_abc/flow",
+        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+        "configs/agents/prompts",
+    ]
+
     return {
         "agent_name": args.agent_name,
         "paper_role": args.paper_role,
@@ -86,18 +117,14 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
             f"{previous}/results/run_notes.md",
             f"{previous}/outputs",
         ],
-        "allowed_to_edit": [
-            f"experiments/{args.cycle_id}/agents",
-            f"experiments/{args.cycle_id}/logs",
-            f"experiments/{args.cycle_id}/outputs",
-            f"experiments/{args.cycle_id}/results",
-            args.subsystem,
-        ],
+        "allowed_to_edit": allowed_to_edit,
         "recent_evidence": [
             f"{previous}/results/summary.csv",
             f"{previous}/results/skipped.csv",
             f"{previous}/results/run_notes.md",
         ],
+        "source_patch_mode": args.source_patch_mode,
+        "source_patch_allowed_roots": source_patch_roots,
     }
     
 def write_json(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:

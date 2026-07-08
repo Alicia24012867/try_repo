@@ -3,124 +3,107 @@
 Small-scale reproduction workspace for the paper "Autonomous Evolution of EDA
 Tools: Multi-Agent Self-Evolved ABC".
 
-The current objective is not to reproduce the full-scale paper result yet. The
-near-term target is a three-day, small closed loop:
-
-1. parse an initial baseline cycle,
-2. feed the evidence into a paper-style LLM agent scaffold,
-3. generate one conservative candidate,
-4. run a small benchmark subset,
-5. summarize feedback for the next cycle.
+The current objective is to reproduce the paper's closed-loop Flow Agent
+self-evolution: an LLM proposes source-level changes to the FlowTune ABC
+subsystem, the candidate binary is built in an isolated workspace, CEC-first
+implementation comparison validates correctness, and structured feedback drives
+the next iteration — all without human intervention.
 
 ## Current Status
 
-- `cycle_000` is the parsed baseline cycle.
-- `cycle_000` contains 10 EPFL designs discovered, 9 complete comparable
-  designs, and 1 skipped design.
-- `cycle_000/results/summary.csv`, `skipped.csv`, and `run_notes.md` are ready
-  as initialization evidence for the first agent cycle.
-- `cycle_001` is initialized as the first Flow Agent cycle skeleton.
-- The old simple agent template has been removed.
-- The active agent scaffold is `scripts/agents/self_evolved_abc/`.
-- The Flow Agent source-evolution path now supports validated source-patch
-  diffs, isolated candidate workspaces, S4 build/smoke manifests, S5/F7
-  CEC-first implementation comparison, review feedback, and next-cycle
-  assignment generation.
-- The LLM API boundary is isolated in `model_client.py`; it supports fixture
-  replies for offline tests and OpenAI-compatible chat-completions providers.
+- `cycle_000` is the parsed baseline cycle (10 EPFL designs, 9 complete).
+- The Flow Agent autonomous feedback loop is **fully operational**:
+  - Model proposes `source_patch_diff` targeting real FlowTune C source.
+  - Patch is applied in an isolated workspace, binary built, CEC run.
+  - Review decision is generated, and evidence feeds into the next cycle.
+  - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
+    cycle — no manual trigger needed.
+- `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
+  starts the full autonomous loop.
+- Validation failures are retried with diagnostic feedback, and review
+  decisions distinguish *why* a build failed (validation, patch, smoke,
+  compile) rather than collapsing everything into `REPAIR_BUILD`.
+- Logic Minimization Agent and Mapper Agent are placeholders for later phases.
 
 ## Project Structure
 
 ```text
 try_repo/
   README.md                   project entry point and quickstart
-  requirements.txt            Python dependencies for the agent scaffold
+  run.sh                      one-command autonomous loop launcher
+  requirements.txt            Python dependencies
   benchmarks/                 sampled benchmark suites
   configs/                    prompts, rules, checklists, flows, evaluation config
   docs/                       structure notes and local paper copy
   experiments/                per-cycle logs, outputs, results, and agent artifacts
   scripts/                    cycle automation and LLM-agent scaffold
-  third_party/                external source trees such as FlowTune
+  third_party/                external source trees (FlowTune)
   .env                        ignored local model-provider environment
   .local/                     ignored local scratch/archive/run dumps
 ```
 
+## Quickstart
+
+On a Linux host with ABC available:
+
+```bash
+# 1. Install dependencies
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2. Configure model (edit .env with your credentials)
+#    EDA_AGENT_MODEL_PROVIDER=deepseek
+#    EDA_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
+#    EDA_AGENT_MODEL_API_KEY=<secret>
+#    EDA_AGENT_MODEL_NAME=deepseek-chat
+#    EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384
+
+# 3. Launch the autonomous loop (from cycle_001, max 5 cycles)
+bash run.sh
+```
+
+`run.sh` wraps `cycle_loop.py --auto-resume`, so running it again continues
+from the last completed cycle without overwriting any data.
+
 ## Benchmarks
 
 `benchmarks/` contains 10-design sampled suites for the small reproduction:
-
-- `epfl/`
-- `iscas85/`
-- `iscas89/`
-- `iscas99/`
-- `itc99/`
-- `vtr/`
-- `arithmetic/`
-
-`benchmarks/SOURCES.md` records source and sampling notes.
+`epfl/`, `iscas85/`, `iscas89/`, `iscas99/`, `itc99/`, `vtr/`, `arithmetic/`.
+See `benchmarks/SOURCES.md` for source and sampling notes.
 
 ## Configs
 
 `configs/agents/` is the paper-facing agent configuration layer:
-
-- `README.md`: overview of how configs map to the runtime scaffold.
-- `architecture.md`: paper role mapping, data flow, subsystem boundaries, and
-  safety contract.
-- `planner/`: Planning Agent responsibility and iteration record format.
-- `coding/flow_agent.md`: Flow Agent role card.
-- `coding/logic_minimization_agent.md`: Logic Minimization Agent role card.
-- `coding/mapping_agent.md`: Mapper Agent role card.
-- `prompts/`: detailed prompt templates for planning, coding, repair, and
-  review. Model responses are expected to be strict JSON; Markdown artifacts are
-  generated after schema validation.
-- `shared/`: programming guidance, rulebase, evaluation contract, and feedback
+- `prompts/coding_agent_prompt.md`: Flow/Logic/Mapper Agent prompt with
+  paper-aligned instructions, validation schema, mode selection rules.
+- `shared/`: programming guidance, rulebase, evaluation contract, feedback
   schema.
 - `checklists/`: compile, CEC, and QoR review gates.
 
-`configs/flows/` is reserved for candidate ABC flow files generated by the Flow
-Agent.
+`configs/flows/` holds ABC flow recipe files (`.abc` scripts).
 
-`configs/evaluation/` is reserved for run settings and metric definitions.
-
-## Scripts
-
-- `scripts/init_cycle.py`: creates `experiments/cycle_NNN/` skeletons and
-  assignment JSON files.
-- `scripts/summarize_cycle.py`: parses existing ABC/FlowTune logs into
-  `summary.csv`, `skipped.csv`, and `run_notes.md`.
-- `scripts/agents/self_evolved_abc/`: executable paper-style LLM agent
-  scaffold.
-
-Agent runtime layout:
+## Scripts — Agent Scaffold
 
 ```text
 scripts/agents/self_evolved_abc/
-  base_agent.py
-  cycle_context.py
-  cycle_driver.py
-  model_client.py
-  planning_agent.py
-  schemas.py
-  coding_agents/
-    base_coding_agent.py
-    flow_agent.py
-    logic_minimization_agent.py
-    mapper_agent.py
+  cycle_driver.py              single-cycle agent entry point
+  model_client.py              LLM API boundary (OpenAI-compatible)
+  coding_agents/flow_agent.py  Flow Agent with source-file context injection
   flow/
-    contracts.py
-    paths.py
-    command_io.py
-    validation.py
-    materialization.py
-    source_patch.py
-    source_patch_runner.py
-    implementation_compare.py
-    review.py
-    next_cycle.py
-    iteration_loop.py
-  shared/
-    rulebase.py
+    validation.py              strict JSON schema + scope validation
+    materialization.py         artifact writing (.abc / .diff)
+    source_patch_runner.py     S4: isolated workspace, git-apply, smoke, make
+    implementation_compare.py  S5/F7: CEC-first baseline vs candidate
+    review.py                  structured review (5 decision types)
+    next_cycle.py              evidence-chain handoff to next cycle
+    iteration_loop.py          one-cycle pipeline orchestrator
+    cycle_loop.py              multi-cycle autonomous driver (--auto-resume)
+    contracts.py / paths.py    shared labels, paths, scope constants
+  fixtures/                    valid/invalid JSON fixtures for smoke tests
 ```
+
+`scripts/init_cycle.py` and `scripts/summarize_cycle.py` are cycle bootstrapping
+and log-parsing utilities, respectively.
 
 ## Experiments
 
@@ -129,161 +112,65 @@ Each cycle keeps the same structure:
 ```text
 experiments/cycle_NNN/
   agents/
-    assignments/
-    plans/
-    candidate_changes/
-    source_patch_todos/
-    source_patches/
-    feedback/
-    rule_updates/
+    assignments/               planner input for this cycle
+    plans/                     model rationale and entry points
+    candidate_changes/         materialization summary + decision
+    source_patches/            machine-applicable unified diff
+    feedback/                  validation errors + review gate
+    rule_updates/              agent-proposed + review rule proposals
   impl_compare/
-    baseline_unmodified/
-    candidate_modified/
-    comparison/
-  logs/
-  outputs/
-  results/
+    baseline_unmodified/       S4 manifest + build log
+    candidate_modified/        S4 manifest + patch.diff + workspace/
+    comparison/                CEC/QoR CSVs, review_decision.json, summary
+  logs/ outputs/ results/      generated data (gitignored bulk)
 ```
 
-`cycle_000` is the baseline evidence cycle. `cycle_001` is the first
-LLM-assisted Flow Agent cycle skeleton.
+`cycle_000` is the baseline evidence cycle. All subsequent cycles are generated
+automatically by `next_cycle.py` at the end of each iteration.
 
-## Useful Commands
+## Pipeline Stages
 
-Install Python dependencies:
-
-```bash
-python3 -m pip install -r requirements.txt
+```
+F1  cycle_driver      model proposes source_patch_diff (with retry on failure)
+S4d source_patch_runner  apply diff to isolated workspace (git apply --recount)
+S4c source_patch_runner  Python smoke gate (py_compile + fixture validation)
+S4e source_patch_runner  compile candidate ABC binary in workspace
+S5/F7 impl_compare    CEC verification + QoR delta (correctness-backed)
+     review.py         classify: REPAIR_VALIDATION | PATCH | SMOKE | COMPILE
+                       | REJECT_CEC | REPAIR_QOR | ACCEPT_FOR_NEXT_CYCLE
+     next_cycle.py     generate next-cycle assignment with evidence chain
 ```
 
-Load local environment variables:
+## Review Decisions
 
-```bash
-set -a
-source .env
-set +a
-```
-
-Initialize a new cycle:
-
-```bash
-python3 -B scripts/init_cycle.py cycle_001 \
-  --previous-cycle cycle_000 \
-  --candidate-id candidate_001 \
-  --agent-name flow_agent
-```
-
-Summarize a cycle:
-
-```bash
-python3 -B scripts/summarize_cycle.py experiments/cycle_000
-```
-
-Run the paper-style agent scaffold:
-
-```bash
-python3 -B -m scripts.agents.self_evolved_abc.cycle_driver \
-  --assignment experiments/cycle_001/agents/assignments/candidate_001.json \
-  --agent flow_agent
-```
-
-Run the Flow Agent source-evolution loop after a validated `source_patch_diff`
-candidate exists:
-
-```bash
-python3 -B -m scripts.agents.self_evolved_abc.flow.iteration_loop \
-  --assignment experiments/cycle_001/agents/assignments/candidate_001.json \
-  --skip-agent \
-  --build-candidate-binary \
-  --next-cycle cycle_002 \
-  --force-next-assignment
-```
-
-For remote Linux/ABC validation, run the same S4/S5/F7 sequence with the remote
-baseline ABC binary path if needed; the candidate ABC path is read from the S4
-manifest after the isolated workspace build. Then sync back
-`experiments/<cycle>/impl_compare/` and the next-cycle assignment.
+| Decision | Meaning |
+|----------|---------|
+| `REPAIR_VALIDATION` | Model JSON failed schema/scope checks |
+| `REPAIR_PATCH` | Diff context doesn't match real source |
+| `REPAIR_SMOKE` | Python smoke gate failed |
+| `REPAIR_COMPILE` | C compilation failed |
+| `REJECT_CEC` | CEC equivalence check failed |
+| `REPAIR_QOR` | CEC passed but QoR didn't improve |
+| `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — champion |
 
 ## Model Client Configuration
 
-The agent runtime calls models only through
-`scripts/agents/self_evolved_abc/model_client.py`. Agents should not import
-provider SDKs directly.
-
-Install the Python dependencies before using a real provider:
-
-```bash
-python3 -m pip install -r requirements.txt
-```
-
-Local model settings live in `.env`, which is ignored by git because it may
-contain API keys. Use it for the active OpenAI or OpenAI-compatible provider,
-and keep the fixture provider commented as a no-network fallback. Load it with:
-
-```bash
-set -a
-source .env
-set +a
-```
-
-For OpenAI:
-
-```bash
-EDA_AGENT_MODEL_PROVIDER=openai
-EDA_AGENT_MODEL_NAME=gpt-4o-mini
-OPENAI_API_KEY=<secret>
-```
-
-For any OpenAI-compatible endpoint, set a provider label plus base URL, API key,
-and model name:
+Model settings live in `.env` (gitignored). Load with `set -a; source .env; set +a`.
 
 ```bash
 EDA_AGENT_MODEL_PROVIDER=deepseek
 EDA_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
 EDA_AGENT_MODEL_API_KEY=<secret>
 EDA_AGENT_MODEL_NAME=deepseek-chat
+EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384    # needed for unified diffs
 ```
 
-The provider label is used as a configuration profile, not as a hard-coded
-vendor branch. For example, `EDA_AGENT_MODEL_PROVIDER=openrouter` also allows
-provider-specific aliases such as `OPENROUTER_BASE_URL`,
-`OPENROUTER_API_KEY`, and `OPENROUTER_MODEL_NAME`.
-
-Useful optional settings:
-
-```bash
-EDA_AGENT_MODEL_TEMPERATURE=0.2
-EDA_AGENT_MODEL_TIMEOUT_SECONDS=120
-EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=4096
-EDA_AGENT_MODEL_RESPONSE_FORMAT=json_object
-EDA_AGENT_MODEL_TOKEN_PARAMETER=max_tokens
-EDA_AGENT_MODEL_TRUST_ENV=false
-```
-
-Use `EDA_AGENT_MODEL_RESPONSE_FORMAT=json_schema` to request structured outputs
-from providers that support OpenAI JSON schema response formats. Use
-`EDA_AGENT_MODEL_TOKEN_PARAMETER=max_completion_tokens` for models or providers
-that require the newer token-limit parameter. Set
-`EDA_AGENT_MODEL_TRUST_ENV=false` to make the OpenAI SDK ignore proxy-related
-environment variables such as `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY`;
-this is useful when httpx reports SSL EOF errors while using a broken local
-proxy.
-
-For offline scaffold tests, use the fixture provider:
-
-```bash
-EDA_AGENT_MODEL_PROVIDER=fixture
-EDA_AGENT_MODEL_FIXTURE_PATH=.local/agent_fixture.json
-```
+For offline tests: `EDA_AGENT_MODEL_PROVIDER=fixture`.
 
 ## Local-Only Data
 
-Use `.env` for local model-provider settings and secrets. Use `.local/` for
-machine-specific files, scratch copies, temporary downloads, large generated
-artifacts, and local run dumps. Both are ignored.
+`.env` for secrets, `.local/` for machine-specific scratch files. Both ignored.
+`third_party/FlowTune/` is treated as external source — patches are applied
+only inside `impl_compare/candidate_modified/workspace/`.
 
-`third_party/FlowTune/` is treated as external source. Flow Agent source
-patches must be stored as artifacts and applied only inside the
-`impl_compare/candidate_modified/workspace` copy until review promotes them.
-
-See `docs/STRUCTURE.md` for a more detailed mapping to the paper workflow.
+See `docs/STRUCTURE.md` for a detailed mapping to the paper workflow.

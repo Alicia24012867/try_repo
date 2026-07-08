@@ -17,13 +17,17 @@ set +a
 # cycle_001 assignment 由 init_cycle.py 一次性创建后 git 追踪，
 # 无需每次启动都重新初始化。后续循环由 next_cycle.py 自动生成。
 python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \
-  --assignment experiments/cycle_001/agents/assignments/candidate_001.json \
+  --auto-resume \
   --build-candidate-binary \
   --build-jobs 8 \
   --max-cycles 5
 #
 # 参数说明：
-#   --assignment <path>        起始 cycle 的 assignment JSON 文件路径
+#   --auto-resume              自动从最后一个已完成 cycle 的下一个未跑
+#                              cycle 开始（不覆盖已有数据）。
+#                              首次启动时等价于从 cycle_001 开始。
+#                              如需显式指定起始点，改用 --assignment。
+#                              （去掉 --auto-resume 并加回 --assignment）
 #
 #   --build-candidate-binary   在 S4 阶段编译 candidate ABC 二进制。
 #                              去掉此标志则跳过编译，仅做 Python smoke 检查。

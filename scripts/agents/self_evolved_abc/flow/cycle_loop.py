@@ -21,7 +21,11 @@ CONTINUE_DECISIONS = frozenset(
     (
         "ACCEPT_FOR_NEXT_CYCLE",
         "REPAIR_QOR",
-        "REPAIR_BUILD",
+        "REPAIR_BUILD",          # legacy / fallback
+        "REPAIR_VALIDATION",     # model JSON validation failed
+        "REPAIR_PATCH",          # diff didn't apply
+        "REPAIR_SMOKE",          # python smoke gate failed
+        "REPAIR_COMPILE",        # C compile failed
         "REPAIR_EVALUATION",
         "REJECT_CEC",
     )
@@ -35,7 +39,22 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         description="Run the Flow Agent feedback loop across multiple cycles."
     )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
-    parser.add_argument("--assignment", type=Path, required=True)
+    parser.add_argument(
+        "--assignment",
+        type=Path,
+        default=None,
+        help="Explicit starting assignment. Required unless --auto-resume is set.",
+    )
+    parser.add_argument(
+        "--auto-resume",
+        action="store_true",
+        help=(
+            "Automatically find the highest completed cycle (the one with a "
+            "review_decision.json) and start from the next cycle.  Existing "
+            "cycles are never overwritten.  Falls back to cycle_001 if no "
+            "cycles have been run yet."
+        ),
+    )
     parser.add_argument(
         "--max-cycles",
         type=int,
@@ -56,7 +75,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo_root = args.repo_root.resolve()
-    current_assignment = repo_root / args.assignment
+
+    if args.assignment is not None:
+        current_assignment = repo_root / args.assignment
+    elif args.auto_resume:
+        current_assignment = _find_resume_point(repo_root)
+    else:
+        print("cycle_loop: either --assignment or --auto-resume is required")
+        return 2
 
     champion_cycle: str | None = None
     stuck_count = 0
@@ -73,6 +99,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Ensure a flow recipe exists (needed by implementation_compare)
         _ensure_flow_recipe(repo_root, cycle_id)
+
+        # Skip if this cycle already has a review decision
+        if _review_exists(repo_root, cycle_id):
+            print(f"cycle_loop: {cycle_id} already completed — skipping")
+            current_assignment = _next_assignment_path(repo_root, next_cycle_id)
+            if current_assignment is None:
+                print("cycle_loop: stopping — no next assignment after skip")
+                break
+            continue
 
         # Run one full iteration
         iter_cmd = _build_iteration_command(
@@ -209,6 +244,117 @@ def _ensure_flow_recipe(repo_root: Path, cycle_id: str) -> None:
         print(f"cycle_loop: copied flow recipe {template.name} → {flow_path.name}")
     else:
         print("cycle_loop: warning — no flow recipe template found")
+
+
+def _find_resume_point(repo_root: Path) -> Path:
+    """Find the highest completed cycle and return the next assignment.
+
+    A cycle is considered "completed" if its review_decision.json exists.
+    Returns the assignment for cycle (N+1), or cycle_001 if nothing has run.
+    """
+    experiments = repo_root / "experiments"
+    max_completed = 0
+    for cycle_dir in sorted(experiments.glob("cycle_*")):
+        if not cycle_dir.is_dir():
+            continue
+        review = cycle_dir / "impl_compare" / "comparison" / "review_decision.json"
+        if review.is_file():
+            num = int(cycle_dir.name.split("_")[1])
+            if num > max_completed:
+                max_completed = num
+
+    if max_completed == 0:
+        next_cycle = "cycle_001"
+    else:
+        next_cycle = f"cycle_{max_completed + 1:03d}"
+
+    assignment = _assignment_path(repo_root, next_cycle)
+    if assignment.is_file():
+        print(f"cycle_loop: auto-resume → {assignment.relative_to(repo_root)}")
+    else:
+        print(
+            f"cycle_loop: auto-resume → {next_cycle} assignment not found, "
+            f"creating via init_cycle.py"
+        )
+        # Bootstrap: run init_cycle to create the skeleton
+        previous = f"cycle_{max_completed:03d}"
+        subprocess.run(
+            (
+                sys.executable,
+                "-B",
+                "scripts/init_cycle.py",
+                next_cycle,
+                "--previous-cycle",
+                previous,
+                "--candidate-id",
+                "candidate_001",
+                "--agent-name",
+                "flow_agent",
+            ),
+            cwd=repo_root,
+            check=True,
+        )
+        # Patch the assignment with source_patch_mode
+        _patch_assignment_for_source_diff(assignment)
+    return assignment
+
+
+def _review_exists(repo_root: Path, cycle_id: str) -> bool:
+    return (
+        repo_root
+        / "experiments"
+        / cycle_id
+        / "impl_compare"
+        / "comparison"
+        / "review_decision.json"
+    ).is_file()
+
+
+def _assignment_path(repo_root: Path, cycle_id: str) -> Path:
+    return (
+        repo_root
+        / "experiments"
+        / cycle_id
+        / "agents"
+        / "assignments"
+        / "candidate_001.json"
+    )
+
+
+def _next_assignment_path(repo_root: Path, next_cycle_id: str) -> Path | None:
+    path = _assignment_path(repo_root, next_cycle_id)
+    return path if path.is_file() else None
+
+
+def _patch_assignment_for_source_diff(assignment_path: Path) -> None:
+    """Ensure a bootstrapped assignment has source_patch_diff fields."""
+    if not assignment_path.is_file():
+        return
+    payload = json.loads(assignment_path.read_text(encoding="utf-8"))
+    changed = False
+    if "source_patch_mode" not in payload:
+        payload["source_patch_mode"] = "source_patch_diff"
+        changed = True
+    if "source_patch_allowed_roots" not in payload:
+        payload["source_patch_allowed_roots"] = ["third_party/FlowTune/src/src/opt"]
+        changed = True
+    allowed = payload.setdefault("allowed_to_edit", [])
+    for entry in (
+        "third_party/FlowTune/src/src/opt",
+        "scripts/agents/self_evolved_abc/flow",
+    ):
+        if entry not in allowed:
+            allowed.append(entry)
+            changed = True
+    if "experiments/" + assignment_path.parent.parent.parent.name + "/impl_compare" not in allowed:
+        cycle_id = assignment_path.parent.parent.parent.name
+        allowed.append(f"experiments/{cycle_id}/impl_compare")
+        changed = True
+    if changed:
+        assignment_path.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
 
 def _increment_cycle_id(cycle_id: str) -> str:

@@ -73,6 +73,10 @@ def build_next_assignment(
         f"experiments/{next_cycle}/impl_compare",
         "configs/flows",
         FLOWTUNE_SOURCE_SCOPE_PRIMARY,
+        # Python infrastructure — model may need to repair harness bugs.
+        "scripts/agents/self_evolved_abc/flow",
+        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+        "configs/agents/prompts",
     ]
     return {
         "agent_name": current.get("agent_name", "flow_agent"),

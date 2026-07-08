@@ -79,9 +79,7 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
     )
 
     if build_status not in CANDIDATE_BUILD_READY_STATUSES:
-        decision = "REPAIR_BUILD"
-        reason = f"candidate build gate is {build_status or 'missing'}"
-        next_action = "Return build/smoke logs to Flow Agent and request a repair patch."
+        decision, reason, next_action = _classify_build_failure(build_status)
         promotion = False
     elif not cec_rows:
         decision = "REPAIR_EVALUATION"
@@ -107,7 +105,6 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         decision = "REPAIR_QOR"
         reason = "Correctness passed but QoR did not improve on the target metric"
         next_action = "Feed QoR deltas back to the Flow Agent and request a smaller repair."
-        promotion = False
 
     return ReviewDecision(
         cycle_id=context.cycle_id,
@@ -138,13 +135,54 @@ def write_review_artifacts(
         json.dumps(asdict(decision), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    paths.feedback.write_text(render_feedback(context, impl_root, decision), encoding="utf-8")
-    paths.rule_update.write_text(render_rule_update(context, impl_root, decision), encoding="utf-8")
+    # Merge: preserve agent-level diagnostics when review adds its own feedback.
+    # This ensures model validation errors aren't lost when the review gate
+    # reports a build/smoke failure.
+    agent_feedback = _read_existing_feedback(paths.feedback)
+    review_body = render_feedback(context, impl_root, decision)
+    if agent_feedback and _feedback_has_diagnostics(agent_feedback):
+        paths.feedback.write_text(
+            agent_feedback.rstrip()
+            + "\n\n---\n\n"
+            + "## Review Gate (below — appended by review.py)\n\n"
+            + review_body,
+            encoding="utf-8",
+        )
+    else:
+        paths.feedback.write_text(review_body, encoding="utf-8")
+    # Merge rule_updates: preserve agent-proposed rules alongside review rules
+    agent_rules = _read_existing_feedback(paths.rule_update)
+    review_rules = render_rule_update(context, impl_root, decision)
+    if agent_rules and "## Proposed Updates" in agent_rules:
+        paths.rule_update.write_text(
+            agent_rules.rstrip()
+            + "\n\n---\n\n"
+            + "## Review Rule Update (below)\n\n"
+            + review_rules,
+            encoding="utf-8",
+        )
+    else:
+        paths.rule_update.write_text(review_rules, encoding="utf-8")
     return {
         "decision": decision_path,
         "feedback": paths.feedback,
         "rule_update": paths.rule_update,
     }
+
+
+def _read_existing_feedback(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _feedback_has_diagnostics(text: str) -> bool:
+    """True when the feedback contains agent-level info worth preserving."""
+    return (
+        "## Validation Issues" in text
+        or "## Local Status" in text
+        or "## Raw Model Text Preview" in text
+    )
 
 
 def render_feedback(
@@ -229,6 +267,51 @@ def read_build_status(impl_root: Path) -> str | None:
     except json.JSONDecodeError:
         return None
     return str(payload.get("status", "")).strip() or None
+
+
+def _classify_build_failure(build_status: str | None) -> tuple[str, str, str]:
+    """Map a concrete build status to a precise review decision.
+
+    This replaces the old catch-all ``REPAIR_BUILD`` with actionable
+    labels that tell the Flow Agent *what* went wrong.
+    """
+    status = (build_status or "missing").strip()
+    if status in ("missing",):
+        return (
+            "REPAIR_VALIDATION",
+            "Build manifest is missing — model validation likely failed before "
+            "any patch was materialized. Check feedback for validation issues.",
+            "Fix the JSON response fields flagged in the validation issues above.",
+        )
+    if status in ("patch_not_applied", "patch_apply_failed"):
+        return (
+            "REPAIR_PATCH",
+            f"Source patch failed to apply (status={status}). "
+            "The unified diff context does not match the target source file. "
+            "Check that function names, line context, and indentation match "
+            "the source files shown in the prompt exactly.",
+            "Produce a corrected unified diff that matches the real source code.",
+        )
+    if status in ("build_smoke_failed",):
+        return (
+            "REPAIR_SMOKE",
+            f"Python build/smoke gate failed (status={status}). "
+            "Check the build log for fixture or py_compile errors.",
+            "Fix the smoke gate failure before requesting implementation comparison.",
+        )
+    if status in ("candidate_binary_build_failed",):
+        return (
+            "REPAIR_COMPILE",
+            f"Candidate ABC binary build failed (status={status}). "
+            "The C source patch likely introduced a compile error. "
+            "Check the build log for compiler messages.",
+            "Fix the compile error in the patched source file.",
+        )
+    return (
+        "REPAIR_BUILD",
+        f"candidate build gate is {build_status or 'missing'}",
+        "Return build/smoke logs to Flow Agent and request a repair patch.",
+    )
 
 
 def read_csv(path: Path) -> list[dict[str, str]]:

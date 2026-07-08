@@ -1123,11 +1123,36 @@ def run_validation_fixture_smoke(
     context: CycleContext,
     log_lines: list[str],
 ) -> int:
-    """Run valid/invalid response fixtures through the Flow validator."""
+    """Run valid/invalid response fixtures through the Flow validator.
+
+    Fixtures are validated against a permissive context so that
+    cycle-agnostic fixture paths (e.g. ``scripts/…``) never fail due
+    to the current assignment's ``allowed_to_edit`` scope.
+    """
 
     fixture_root = (
         context.repo_root / "scripts" / "agents" / "self_evolved_abc" / "fixtures"
     )
+    # Build a permissive assignment that allows fixture paths regardless
+    # of which cycle is being tested.
+    fixture_assignment = dict(context.assignment)
+    permissive_allowed = list(fixture_assignment.get("allowed_to_edit", ()))
+    for entry in (
+        "scripts/agents/self_evolved_abc/flow",
+        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+        "configs/agents/prompts",
+        "configs/flows",
+        "third_party/FlowTune/src/src/opt",
+        "third_party/FlowTune/src/src/opt/nwk",
+    ):
+        if entry not in permissive_allowed:
+            permissive_allowed.append(entry)
+    fixture_assignment["allowed_to_edit"] = permissive_allowed
+    fixture_context = CycleContext(
+        repo_root=context.repo_root,
+        assignment=fixture_assignment,
+    )
+
     failures = 0
     log_lines.extend(("", "validation_fixtures:"))
     for fixture_name, expected_ok in VALIDATION_FIXTURE_EXPECTATIONS:
@@ -1149,7 +1174,7 @@ def run_validation_fixture_smoke(
             failures += 1
             continue
 
-        result = validate_flow_agent_response(payload, context)
+        result = validate_flow_agent_response(payload, fixture_context)
         if result.ok != expected_ok:
             log_lines.append(
                 f"FAIL {fixture_name}: expected_ok={expected_ok} actual_ok={result.ok}"
