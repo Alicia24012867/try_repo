@@ -1,4 +1,4 @@
 benchmark,implementation_label,abc_exit_code,aig_nodes,aig_depth,runtime_seconds,aig_path,log_path,skipped_reason
-benchmarks/epfl/epfl_adder.blif,candidate_modified,,,,0.000780,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_adder.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_adder.qor.log,exec_error:OSError
-benchmarks/epfl/epfl_bar.blif,candidate_modified,,,,0.000669,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_bar.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_bar.qor.log,exec_error:OSError
-benchmarks/epfl/epfl_sqrt.blif,candidate_modified,,,,0.000658,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_sqrt.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_sqrt.qor.log,exec_error:OSError
+benchmarks/epfl/epfl_adder.blif,candidate_modified,0,895,255,0.204241,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_adder.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_adder.qor.log,
+benchmarks/epfl/epfl_bar.blif,candidate_modified,0,2952,12,0.278320,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_bar.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_bar.qor.log,
+benchmarks/epfl/epfl_sqrt.blif,candidate_modified,0,18411,6106,2.457002,experiments/cycle_001/impl_compare/candidate_modified/outputs/epfl_sqrt.aig,experiments/cycle_001/impl_compare/candidate_modified/logs/epfl_sqrt.qor.log,

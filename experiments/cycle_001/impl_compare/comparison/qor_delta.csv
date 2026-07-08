@@ -1,4 +1,4 @@
 benchmark,cec_status,correctness_backed,baseline_aig_nodes,candidate_aig_nodes,and_delta_candidate_minus_baseline,and_improve_pct,baseline_aig_depth,candidate_aig_depth,depth_delta_candidate_minus_baseline,baseline_runtime_seconds,candidate_runtime_seconds,runtime_delta_seconds,skipped_reason
-benchmarks/epfl/epfl_adder.blif,cec_skipped,False,,,,,,,,0.001114,0.000780,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
-benchmarks/epfl/epfl_bar.blif,cec_skipped,False,,,,,,,,0.000724,0.000669,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
-benchmarks/epfl/epfl_sqrt.blif,cec_skipped,False,,,,,,,,0.000671,0.000658,,exec_error:OSError; exec_error:OSError; baseline:exec_error:OSError; candidate:exec_error:OSError
+benchmarks/epfl/epfl_adder.blif,cec_pass,True,895,895,0,0.000000,255,255,0,0.246194,0.204241,-0.041952,
+benchmarks/epfl/epfl_bar.blif,cec_pass,True,2952,2952,0,0.000000,12,12,0,0.340218,0.278320,-0.061898,
+benchmarks/epfl/epfl_sqrt.blif,cec_pass,True,18411,18411,0,0.000000,6106,6106,0,2.461873,2.457002,-0.004871,

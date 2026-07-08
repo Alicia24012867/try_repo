@@ -2,7 +2,7 @@
 
 ## Status
 
-- Stage: S4c build/smoke passed
+- Stage: S4e candidate binary build passed
 - Source patch applied: true
 - Build run: true
 - Benchmark/QoR run: no
@@ -21,12 +21,12 @@
 ## Candidate Implementation
 
 - Label: `candidate_modified`
-- Binary: `third_party/FlowTune/FlowTune-OpenFPGA/abc`
+- Binary: `experiments/cycle_001/impl_compare/candidate_modified/workspace/third_party/FlowTune/src/abc`
 - Binary exists: `true`
 - Patch applied: `true`
 - Patch diff: `experiments/cycle_001/impl_compare/candidate_modified/patch.diff`
-- Build status: `build_smoke_passed`
-- Build command: `python_smoke_gate`
+- Build status: `candidate_binary_build_passed`
+- Build command: `python_smoke_gate && flowtune_candidate_make`
 - Build exit code: `0`
 - Build info: `../candidate_modified/build_info.json`
 
@@ -38,5 +38,5 @@
 
 ## Next Gate
 
-- S5 can start implementation comparison with the same benchmark harness.
+- S5/F7 can compare baseline ABC against the candidate workspace ABC.
 - Promotion stays blocked until S5/F7 pass the CEC-first QoR gate.

@@ -2,18 +2,18 @@
 
 ## Review Decision
 
-- Decision: `REJECT_CEC`
+- Decision: `REPAIR_QOR`
 - Promotion allowed: `false`
 - Champion update: `false`
-- Reason: CEC passed 0/3 rows
-- Next action: Reject or repair the candidate before any QoR discussion.
+- Reason: Correctness passed but QoR did not improve on the target metric
+- Next action: Feed QoR deltas back to the Flow Agent and request a smaller repair.
 
 ## Gates
 
-- Build status: `build_smoke_passed`
-- CEC pass: 0/3
-- Correctness-backed QoR rows: 0
-- Average AND improvement pct: ``
+- Build status: `candidate_binary_build_passed`
+- CEC pass: 3/3
+- Correctness-backed QoR rows: 3
+- Average AND improvement pct: `0.000000`
 
 ## Evidence
 

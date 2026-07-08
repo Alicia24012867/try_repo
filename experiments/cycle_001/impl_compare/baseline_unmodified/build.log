@@ -14,10 +14,10 @@ notes:
 
 gate_output:
 S4c Python smoke gate
-repo_root: /Users/arisa/Desktop/try_repo
+repo_root: /home/huangyb/try_repo
 
 py_compile:
-command: /opt/anaconda3/bin/python3 -B -m py_compile scripts/agents/self_evolved_abc/flow/source_patch_runner.py scripts/agents/self_evolved_abc/flow/source_patch.py scripts/agents/self_evolved_abc/flow/materialization.py scripts/agents/self_evolved_abc/flow/validation.py scripts/agents/self_evolved_abc/flow/artifacts.py scripts/agents/self_evolved_abc/flow/runner.py scripts/agents/self_evolved_abc/flow/evaluation.py scripts/agents/self_evolved_abc/flow/implementation_compare.py scripts/agents/self_evolved_abc/flow/iteration_loop.py scripts/agents/self_evolved_abc/flow/next_cycle.py scripts/agents/self_evolved_abc/flow/review.py scripts/agents/self_evolved_abc/flow_runner.py scripts/agents/self_evolved_abc/flow_evaluation.py scripts/agents/self_evolved_abc/coding_agents/flow_agent.py scripts/agents/self_evolved_abc/cycle_driver.py
+command: /opt/rh/rh-python38/root/usr/bin/python3 -B -m py_compile scripts/agents/self_evolved_abc/flow/source_patch_runner.py scripts/agents/self_evolved_abc/flow/source_patch.py scripts/agents/self_evolved_abc/flow/materialization.py scripts/agents/self_evolved_abc/flow/validation.py scripts/agents/self_evolved_abc/flow/artifacts.py scripts/agents/self_evolved_abc/flow/runner.py scripts/agents/self_evolved_abc/flow/evaluation.py scripts/agents/self_evolved_abc/flow/implementation_compare.py scripts/agents/self_evolved_abc/flow/iteration_loop.py scripts/agents/self_evolved_abc/flow/next_cycle.py scripts/agents/self_evolved_abc/flow/review.py scripts/agents/self_evolved_abc/flow_runner.py scripts/agents/self_evolved_abc/flow_evaluation.py scripts/agents/self_evolved_abc/coding_agents/flow_agent.py scripts/agents/self_evolved_abc/cycle_driver.py
 return_code: 0
 
 validation_fixtures:

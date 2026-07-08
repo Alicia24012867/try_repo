@@ -2,11 +2,11 @@
 
 ## Decision Gate
 
-- Candidate build status: `build_smoke_passed`
-- QoR rows complete: 0/3
-- CEC pass: 0/3
-- Correctness-backed delta rows: 0/3
-- Average AND improvement pct: ``
+- Candidate build status: `candidate_binary_build_passed`
+- QoR rows complete: 3/3
+- CEC pass: 3/3
+- Correctness-backed delta rows: 3/3
+- Average AND improvement pct: `0.000000`
 - Promotion allowed: `false`
 
 ## Artifacts

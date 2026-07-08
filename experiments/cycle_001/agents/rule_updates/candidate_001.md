@@ -4,7 +4,7 @@ Active rulebase was not modified.
 
 ## Proposed Update
 
-- Any source patch that fails or skips CEC must be rejected or repaired before QoR deltas are considered.
+- Keep Flow Agent source-patch edits conservative until implementation comparison produces correctness-backed QoR improvement.
 
 ## Evidence
 
