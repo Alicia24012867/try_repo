@@ -18,21 +18,12 @@ import json
 import re
 from pathlib import Path
 
-CYCLE_RE = re.compile(r"^cycle_\d{3,}$")
-
-CYCLE_DIRS = (
-    "agents/assignments",
-    "agents/plans",
-    "agents/candidate_changes",
-    "agents/source_patch_todos",
-    "agents/source_patches",
-    "agents/feedback",
-    "agents/rule_updates",
-    "logs",
-    "outputs",
-    "results",
-    "impl_compare",
+from scripts.agents.self_evolved_abc.flow.assignment import (
+    FLOW_CYCLE_DIRS,
+    normalize_flow_assignment_scope,
 )
+
+CYCLE_RE = re.compile(r"^cycle_\d{3,}$")
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Initialize an experiment cycle.")
@@ -69,7 +60,7 @@ def validate_cycle_id(value: str) -> str:
     return value
 
 def create_cycle_dirs(cycle_dir: Path) -> None:
-    for relative in CYCLE_DIRS:
+    for relative in FLOW_CYCLE_DIRS:
         path = cycle_dir / relative
         path.mkdir(parents=True, exist_ok=True)
         gitkeep = path / ".gitkeep"
@@ -85,20 +76,8 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
     source_patch_roots = list(args.source_patch_allowed_roots) or [
         "third_party/FlowTune/src/src/opt",
     ]
-    allowed_to_edit = [
-        f"experiments/{args.cycle_id}/agents",
-        f"experiments/{args.cycle_id}/logs",
-        f"experiments/{args.cycle_id}/outputs",
-        f"experiments/{args.cycle_id}/results",
-        f"experiments/{args.cycle_id}/impl_compare",
-        args.subsystem,
-        # Python infrastructure — model may need to repair harness bugs.
-        "scripts/agents/self_evolved_abc/flow",
-        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
-        "configs/agents/prompts",
-    ]
 
-    return {
+    assignment = {
         "agent_name": args.agent_name,
         "paper_role": args.paper_role,
         "cycle_id": args.cycle_id,
@@ -126,6 +105,7 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "source_patch_mode": args.source_patch_mode,
         "source_patch_allowed_roots": source_patch_roots,
     }
+    return normalize_flow_assignment_scope(assignment)
     
 def write_json(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
     if path.exists() and not overwrite:

@@ -135,7 +135,7 @@ flow_agent:
   paper_role: Flow Agent
   default_scope:
     - configs/flows/
-    - third_party/FlowTune/src/opt/flowtune/       # later source-edit cycles only
+    - third_party/FlowTune/src/src/opt/            # source_patch_diff cycles
   allowed_change_types:
     - pass selection heuristics
     - sampling and search schedule
@@ -309,10 +309,50 @@ Follow this procedure before writing the plan:
    - select one subsystem
    - define allowed paths
    - define compile, CEC, and benchmark evidence required
+   - for Flow Agent source-code evolution, explicitly set
+     `source_patch_mode: source_patch_diff` and
+     `source_patch_allowed_roots: ["third_party/FlowTune/src/src/opt"]`
 8. For any rulebase proposal:
    - cite the cycle evidence that motivates it
    - classify the action as add, tighten, relax, retire, or none
    - keep the proposal out of the active rulebase until review
+
+## Flow Agent Source-Patch Planning Rules
+
+Use these rules whenever the selected agent is `flow_agent` for the current
+source-level feedback loop:
+
+- Prefer `source_patch_mode: source_patch_diff` for materialized source
+  evolution. Use `abc_flow` only for legacy flow-recipe experiments, and use
+  `source_patch_todo` only when the planner intentionally wants proposal-only
+  design notes.
+- Set `subsystem` and `source_patch_allowed_roots` to
+  `third_party/FlowTune/src/src/opt` unless evidence justifies a narrower
+  FlowTune source subdirectory.
+- Include the source-patch root in `allowed_to_edit` together with active-cycle
+  artifact directories. Do not give write access to benchmarks, previous-cycle
+  evidence, generated outputs outside the active cycle, or unrelated ABC
+  subsystems.
+- The `coding_agent_task` must name the feedback being acted on: validation
+  failure, patch-apply failure, smoke/compile failure, CEC mismatch, runtime
+  issue, or QoR regression/opportunity.
+- The task should identify one likely file family when possible:
+  `nwk/` for FlowTune network bookkeeping and structural feedback, `fsim/` for
+  simulation/sampling feedback, `fxu/` for factoring/extraction behavior, and
+  `ret/` only when explicitly justified.
+- Require the coding agent to produce one scoped unified diff, not a broad
+  rewrite, not benchmark-specific branches, and not a detached script that
+  bypasses the ABC command surface.
+- Require the validation evidence to separate local checks from remote checks:
+  local schema/patch/smoke checks are allowed; candidate ABC build, CEC, and
+  benchmark QoR normally run on the remote Linux host.
+- Acceptance criteria must be CEC-first: a source patch can be promoted only
+  after isolated patch application, candidate binary build, full correctness
+  pass, and correctness-backed QoR improvement or an explicitly approved
+  trade-off.
+- Rollback criteria must include patch-apply failure, compile failure, CEC
+  failure, broad runtime regression, missing/invalid QoR rows, scope violation,
+  and any evidence that the patch depends on benchmark names.
 
 ## Planning Heuristics
 
@@ -328,8 +368,8 @@ Use these paper-aligned heuristics:
   unknown.
 - Combined subsystem evolution is high risk. Use it only after single-subsystem
   candidates have stable evidence.
-- FlowTune candidates are the safest first-cycle target because they can test
-  flow-level hypotheses without editing ABC source.
+- FlowTune candidates are the safest current target because they can test
+  flow-level hypotheses within a bounded source-patch scope.
 - AIG optimization candidates should be chosen when AIG node/depth deltas show
   broad, pre-mapping opportunity across multiple designs.
 - Mapping candidates should be chosen only when library/mapping setup and
@@ -338,9 +378,12 @@ Use these paper-aligned heuristics:
 ## First-Cycle Small-Reproduction Policy
 
 For `cycle_001`, default to `flow_agent` unless the evidence proves another
-agent is necessary. The intended first candidate is a conservative ABC flow file
-under `configs/flows/`, not a source patch. Treat QoR as process evidence until
-compile, smoke, and CEC gates are wired into the local runner.
+agent is necessary. The intended candidate is a conservative `source_patch_diff`
+targeting `third_party/FlowTune/src/src/opt`. Treat QoR as reviewable only after
+the remote compile, smoke, CEC, and QoR gates produce correctness-backed rows.
+The first source patch should be small enough to explain in one sentence and
+should target a real FlowTune file exposed in the coding prompt's source-file
+context; never plan a nonexistent placeholder such as `flowtune/flowtune.c`.
 
 ## Required Output
 
@@ -353,6 +396,10 @@ Respond only with one JSON object matching this schema:
   "task_type": "optimization",
   "candidate_id": "candidate_001",
   "risk_level": "low",
+  "source_patch_mode": "source_patch_diff",
+  "source_patch_allowed_roots": [
+    "third_party/FlowTune/src/src/opt"
+  ],
   "benchmark_scope": [
     "benchmarks/epfl/epfl_adder.blif",
     "benchmarks/epfl/epfl_bar.blif",
@@ -368,7 +415,9 @@ Respond only with one JSON object matching this schema:
     "experiments/{{CYCLE_ID}}/logs",
     "experiments/{{CYCLE_ID}}/outputs",
     "experiments/{{CYCLE_ID}}/results",
-    "configs/flows"
+    "experiments/{{CYCLE_ID}}/impl_compare",
+    "configs/flows",
+    "third_party/FlowTune/src/src/opt"
   ],
   "evidence_summary": {
     "compile": "pass | fail | missing",

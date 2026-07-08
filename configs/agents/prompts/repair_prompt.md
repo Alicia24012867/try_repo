@@ -12,6 +12,8 @@ validation commands.
 
 Restore one of the following gates:
 
+- response validation and scope gate
+- source-patch application gate
 - compile gate
 - smoke-test gate
 - CEC or `dsat` correctness gate
@@ -80,7 +82,7 @@ Allowed repair scope:
 Dominant failure type:
 
 ```text
-{{FAILURE_TYPE}}        # compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown
+{{FAILURE_TYPE}}        # validation | patch | compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown
 ```
 
 Compile log excerpt:
@@ -124,7 +126,46 @@ Follow this exact procedure:
 7. State whether the repair preserves the original subsystem attribution.
 8. State what evidence the next planner should use to update the rulebase.
 
+## Repair Decision Mapping
+
+Map review/runner feedback into one repair action before changing anything:
+
+- `REPAIR_VALIDATION`: repair model JSON, mode selection, path scope,
+  `files_to_write`, missing `source_patch.diff`, or missing validation plan.
+  Keep the same candidate idea unless the validation error proves the requested
+  scope is impossible.
+- `REPAIR_PATCH`: repair a unified diff that failed to apply. Use exact source
+  context, keep repository-relative paths, and preserve the original patch
+  target unless the evidence shows the target file was wrong.
+- `REPAIR_SMOKE`: repair local import, runner, fixture, command, or minimal ABC
+  smoke failures without weakening the smoke condition.
+- `REPAIR_COMPILE`: repair C syntax, declarations, includes, type usage, build
+  registration, or command helper integration.
+- `REJECT_CEC`: prefer semantic rollback or a narrowly justified semantic
+  repair. QoR is invalid until CEC passes.
+- `REPAIR_QOR`: CEC passed, but QoR failed. Repair only if a small adjustment is
+  clearly tied to the original hypothesis; otherwise recommend rollback or
+  planner review.
+
 ## Failure-Specific Guidance
+
+### Response Validation Failure
+
+- Do not switch `source_patch_mode` or `candidate_kind` to avoid validation.
+- For `source_patch_diff`, keep `candidate_kind: "source_patch_diff"` and add a
+  real unified diff under `source_patch.diff`.
+- Ensure every diff target appears in `files_to_write`.
+- Ensure the validation plan names compile, smoke, CEC, and QoR/runtime gates.
+- If the needed path is outside scope, use `planner_review` rather than
+  expanding scope yourself.
+
+### Source-Patch Application Failure
+
+- Fix diff headers, path spelling, hunk context, or indentation.
+- Re-read the target source file and use real surrounding lines.
+- Do not replace the failed source patch with a flow-script candidate unless the
+  planner changes the assignment mode.
+- Do not edit generated artifacts to make the patch appear applied.
 
 ### Compile Failure
 
@@ -170,6 +211,8 @@ Follow this exact procedure:
 - Do not change acceptance thresholds.
 - Do not introduce benchmark-specific conditions.
 - Do not retry the same failed idea more than once without new evidence.
+- In `source_patch_diff` mode, keep the repair inside the original source-patch
+  roots and active-cycle artifacts.
 - Do not update the active rulebase directly. Return rule lessons only as
   evidence-backed recommendations.
 
@@ -209,7 +252,7 @@ Respond only with one JSON object matching this schema:
 ```json
 {
   "failure_classification": {
-    "type": "compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown",
+    "type": "validation | patch | compile | smoke | cec | dsat | runtime | qor_regression | scope | unknown",
     "severity": "low | medium | high"
   },
   "diagnosis": {

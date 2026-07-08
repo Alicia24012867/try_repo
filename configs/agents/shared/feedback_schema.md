@@ -11,19 +11,20 @@ human-readable form.
   "cycle_id": "cycle_001",
   "candidate_id": "candidate_001",
   "selected_agent": "flow_agent",
-  "candidate_kind": "abc_flow",
+  "candidate_kind": "source_patch_diff",
   "benchmark_scope": ["benchmarks/epfl/epfl_adder.blif"],
-  "compile_status": "SKIPPED",
+  "patch_status": "PASS",
+  "compile_status": "PASS",
   "smoke_status": "PASS",
-  "cec_status": "SKIPPED",
+  "cec_status": "PASS",
   "qor_status": "PASS",
   "primary_metric": "and_count",
   "primary_metric_delta": -127,
   "secondary_metric_delta": {"depth": 0, "runtime_seconds": 1.0},
-  "accepted": false,
-  "decision": "ACCEPT_PROCESS",
+  "accepted": true,
+  "decision": "ACCEPT_FOR_NEXT_CYCLE",
   "rollback_reason": "",
-  "notes": "QoR is provisional until CEC is added."
+  "notes": "QoR is accepted only because the matching CEC rows passed."
 }
 ```
 
@@ -33,12 +34,12 @@ human-readable form.
 {
   "agent_name": "flow_agent",
   "paper_role": "Flow Agent",
-  "hypothesis": "A conservative flow derived from cycle_000 may reduce ANDs.",
-  "candidate_artifacts": ["configs/flows/cycle_001_candidate_001.abc"],
-  "changed_files": [],
-  "validation_summary": "Generated flow only; benchmark pending.",
+  "hypothesis": "A conservative FlowTune source patch may improve one flow decision point without changing semantics.",
+  "candidate_artifacts": ["experiments/cycle_001/agents/source_patches/candidate_001/patch.diff"],
+  "changed_files": ["third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"],
+  "validation_summary": "Patch applied in isolation; candidate build, smoke, CEC, and QoR gates passed remotely.",
   "observed_regressions": [],
-  "next_suggestion": "Run the flow on the three-design EPFL subset."
+  "next_suggestion": "Use CEC-backed QoR rows as feedback for the next Flow Agent assignment."
 }
 ```
 
@@ -48,8 +49,8 @@ human-readable form.
 {
   "rule_id": "R-FLOW-003",
   "action": "add",
-  "reason": "The selected source script generalized to the small subset.",
-  "evidence": "experiments/cycle_001/results/run_notes.md",
+  "reason": "The source patch produced correctness-backed QoR evidence on the small subset.",
+  "evidence": "experiments/cycle_001/impl_compare/comparison/review_decision.json",
   "approved_by": "human_review"
 }
 ```
@@ -61,4 +62,11 @@ human-readable form.
 - `SKIPPED`: gate did not run and must be explained.
 - `TIMEOUT`: gate exceeded its budget.
 - `NEEDS_HUMAN_REVIEW`: model or parser produced ambiguous output.
-
+- `REPAIR_VALIDATION`: model JSON, mode, or path-scope contract failed.
+- `REPAIR_PATCH`: source patch failed to apply in the isolated workspace.
+- `REPAIR_SMOKE`: smoke or lightweight runner gate failed.
+- `REPAIR_COMPILE`: candidate binary build failed.
+- `REPAIR_EVALUATION`: remote comparison artifacts are missing or unparseable.
+- `REJECT_CEC`: correctness failed or was skipped, so QoR is invalid.
+- `REPAIR_QOR`: correctness passed but target QoR did not improve.
+- `ACCEPT_FOR_NEXT_CYCLE`: build, CEC, and correctness-backed QoR passed.

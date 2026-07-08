@@ -21,9 +21,13 @@ The `flow/` package follows the paper's evolution loop:
 
 - `contracts.py`: shared paper-facing labels, candidate kinds, source scopes,
   smoke files, and fixture expectations.
+- `assignment.py`: active-cycle directory list, Flow Agent edit-scope
+  construction, and `source_patch_mode`/subsystem normalization.
 - `paths.py`: canonical cycle, result, and implementation-comparison paths.
 - `command_io.py`: shared command log format used by local and remote runners.
-- `validation.py`: Flow Agent JSON/schema/scope validation.
+- `validation.py`: Flow Agent JSON/schema/scope validation, including code-level
+  enforcement that `source_patch_mode` matches `candidate_kind` for materialized
+  proposals.
 - `materialization.py`, `source_patch.py`: `.abc` flow and source-patch artifact
   materialization without direct source-tree mutation.
 - `source_patch_runner.py`: S4 manifests, isolated patch application,
@@ -34,6 +38,14 @@ The `flow/` package follows the paper's evolution loop:
 - `next_cycle.py`, `iteration_loop.py`: feedback handoff into the next cycle.
 - `evaluation.py`, `runner.py`, `metrics.py`: flow-recipe evaluation and ABC log
   parsing used by the earlier flow-only path.
+
+## Local Versus Remote Execution
+
+Local development should stay lightweight: run Python compilation, fixture
+validation, and assignment normalization checks. Full candidate binary builds,
+ABC execution, CEC, and QoR comparison are intended for the remote Linux/ABC
+host after rsync. The local macOS workspace may contain a Linux FlowTune binary,
+which is useful for remote runs but not locally executable.
 
 ## Compatibility Entrypoints
 

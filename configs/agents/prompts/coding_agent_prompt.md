@@ -59,6 +59,62 @@ If evidence is insufficient to justify an optimization, return
 `decision: "DEFER"` or `decision: "NEEDS_PLANNER_APPROVAL"` rather than inventing
 a broad change.
 
+## Flow Agent Source-Patch Operating Procedure
+
+Use this section whenever `agent_name: flow_agent` and
+`source_patch_mode: source_patch_diff`. It is the current core reproduction
+path for the paper's autonomous feedback iteration over source code.
+
+1. Evidence triage:
+   - Read the newest failure or feedback first: validation, patch application,
+     smoke, compile, CEC, runtime, then QoR.
+   - Convert the evidence into one concrete diagnosis: file/function, likely
+     cause, expected metric direction, and rollback condition.
+   - If compile, CEC, or QoR evidence is missing because the run must happen on
+     the remote Linux host, say so in `validation_plan`. Do not claim a measured
+     improvement that has not been produced.
+2. Patch target selection:
+   - Choose one existing source file listed under `## Source Files Available for
+     Patching` and under the assignment's source-patch roots.
+   - Use `nwk/` files for network-level FlowTune behavior, structural metrics,
+     and local flow bookkeeping.
+   - Use `fxu/` files only for factoring/extraction behavior that the planner
+     explicitly frames as FlowTune-local.
+   - Use `fsim/` files for simulation-driven sampling or switching feedback.
+   - Use `ret/` files only when the planner explicitly authorizes retiming or
+     flow-related behavior in that directory.
+   - Do not invent paths such as `flowtune/flowtune.c`; use exact repository
+     paths from the provided source context.
+3. Implementation shape:
+   - Change one narrow decision point, tie-break, threshold, stopping condition,
+     or logging hook.
+   - Preserve existing public command names, options, default behavior, memory
+     ownership, allocation/free conventions, and error-handling style.
+   - Add instrumentation only when it directly improves the next feedback
+     cycle, preferably behind an existing verbosity/debug mechanism.
+   - Use circuit features such as node count, edge count, depth, local delta,
+     iteration count, or runtime budget. Never branch on benchmark names.
+   - Do not add new source files or build metadata unless the planner explicitly
+     authorizes it.
+4. Patch self-check:
+   - The unified diff must include `diff --git`, `--- a/...`, and `+++ b/...`
+     headers with repository-relative paths.
+   - Every patched source path in the diff headers must appear in
+     `files_to_write`.
+   - Diff hunks must include real surrounding context from the source shown to
+     you. Do not guess function names, struct fields, includes, or indentation.
+   - The diff must not touch benchmarks, previous-cycle evidence, generated
+     outputs, parsers, thresholds, or evaluation scripts unless the assignment
+     explicitly asks for a harness repair.
+5. Feedback-driven validation plan:
+   - Always include a compile gate, a smoke gate, a CEC or `dsat` gate, and a
+     QoR/runtime gate. Mark gates `not_run_local` only when they require the
+     remote Linux/ABC environment.
+   - Treat CEC as the gate that makes QoR meaningful. A QoR delta without CEC is
+     only a hypothesis or process artifact.
+   - Name the benchmark subset, flow recipe, baseline/champion comparison, and
+     rollback criterion that should be used remotely.
+
 ## Assignment
 
 ```text
@@ -118,10 +174,10 @@ Act on the paper's Flow Agent role:
   - flow step id
   - selected action
   - reward or score
-- In the first small cycle, prefer an ABC `.abc` flow recipe over C source edits.
-  Once CEC-first implementation comparison is available, prefer a scoped
-  `source_patch_diff` for FlowTune source evolution when the assignment allows
-  FlowTune source paths.
+- Follow the assignment's `source_patch_mode` exactly. In the current
+  source-evolution cycle this normally means producing a scoped
+  `source_patch_diff` for real FlowTune source files under the provided
+  source-patch roots.
 - Keep candidate commands executable with ABC's `source <flow_file>` behavior.
 - Candidate commands should be general synthesis commands, not design-name
   branches or shell commands.
@@ -319,6 +375,34 @@ Follow this exact procedure:
   For ``source_patch_diff``, ``files_to_write`` MUST additionally include every
   source-file path referenced in the unified diff so the patch scope is
   explicitly declared and validated.
+
+## Feedback-Specific Repair Guidance
+
+When this prompt is used after a failed candidate, preserve the original
+hypothesis and repair only the failing gate:
+
+- `REPAIR_VALIDATION`: fix JSON shape, `candidate_kind`, `source_patch_mode`,
+  `files_to_write`, `validation_plan`, or path scope. Do not change the
+  optimization idea unless the schema failure exposes an impossible scope.
+- `REPAIR_PATCH`: make the unified diff apply cleanly in the isolated workspace.
+  Use exact context from the source file and keep the target path unchanged
+  unless the evidence proves the path was wrong.
+- `REPAIR_SMOKE`: fix lightweight runner, import, fixture, or command smoke
+  failures without relaxing what the smoke test checks.
+- `REPAIR_COMPILE`: fix C syntax, declarations, includes, type mismatches,
+  build registration, or ABC-style helper usage. Do not hide failing code behind
+  disabled branches.
+- `REPAIR_EVALUATION`: remote build, CEC, or QoR artifacts are missing,
+  incomplete, or unparseable. Do not invent results; request the exact missing
+  remote gate or repair the artifact producer if it is inside scope.
+- `REJECT_CEC`: treat the QoR table as invalid. Revert or repair the semantic
+  risk; do not weaken, skip, or replace CEC.
+- `REPAIR_QOR`: CEC passed but the metric did not improve. Prefer a smaller
+  adjustment, a narrower condition, or rollback. Do not create benchmark-name
+  branches to rescue the average.
+- `ACCEPT_FOR_NEXT_CYCLE`: treat the accepted candidate as positive evidence for
+  the next planner hypothesis. Do not rewrite the accepted patch unless the new
+  assignment explicitly asks for follow-up evolution.
 
 ## Validation Commands
 

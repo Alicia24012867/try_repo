@@ -14,6 +14,8 @@ set +a
 # ----------------------------------------------------------------------------
 # 启动多轮自主迭代闭环
 # ----------------------------------------------------------------------------
+# 注意：完整 ABC 编译、CEC、QoR 对比应在远程 Linux/ABC host 上运行。
+# 本地 macOS 仅用于轻量 Python 校验和代码编辑。
 # cycle_001 assignment 由 init_cycle.py 一次性创建后 git 追踪，
 # 无需每次启动都重新初始化。后续循环由 next_cycle.py 自动生成。
 python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \

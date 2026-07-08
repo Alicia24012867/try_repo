@@ -28,13 +28,24 @@ from scripts.agents.self_evolved_abc.flow.validation import (
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 
 
+FLOW_SOURCE_CONTEXT_KEY_PATTERNS = (
+    "nwkFlow",
+    "retFlow",
+    "fsimCore",
+    "cswCore",
+    "fxu",
+    "nwkCheck",
+    "nwkMerge",
+)
+
+
 class FlowAgent(CodingAgent):
     """Flow Agent for flow scheduling and FlowTune-related candidates."""
 
     agent_name = "flow_agent"
     paper_role = "Flow Agent"
     prompt_template = "configs/agents/prompts/coding_agent_prompt.md"
-    allowed_subsystems = ("configs/flows", "third_party/FlowTune/src/opt/flowtune")
+    allowed_subsystems = ("configs/flows", "third_party/FlowTune/src/src/opt")
     candidate_kind = "abc_flow"
 
     def response_schema(self) -> Mapping[str, Any]:
@@ -229,32 +240,13 @@ class FlowAgent(CodingAgent):
             "### File Index (all source files under allowed scope)",
             "",
         ]
-        all_files: list[tuple[str, int]] = []
-        for root in allowed_roots:
-            root_path = repo_root / root
-            if not root_path.is_dir():
-                continue
-            for src_file in sorted(root_path.rglob("*.c")):
-                rel = str(src_file.relative_to(repo_root))
-                size = src_file.stat().st_size
-                all_files.append((rel, size))
-            for src_file in sorted(root_path.rglob("*.h")):
-                rel = str(src_file.relative_to(repo_root))
-                size = src_file.stat().st_size
-                all_files.append((rel, size))
+        all_files = self._collect_source_files(allowed_roots)
 
         for rel, size in all_files:
             chunks.append(f"- {rel}  ({size} bytes)")
 
         # Full content for key files most relevant to Flow Agent
-        key_patterns = (
-            "nwkFlow", "retFlow", "fsimCore", "cswCore",
-            "fxu", "nwkCheck", "nwkMerge",
-        )
-        key_files = [
-            (rel, size) for rel, size in all_files
-            if any(pattern in rel for pattern in key_patterns)
-        ]
+        key_files = self._select_key_source_files(all_files)
         if key_files:
             chunks.append("")
             chunks.append("### Key File Contents (full source)")
@@ -280,6 +272,49 @@ class FlowAgent(CodingAgent):
                 chunks.append("")
 
         return "\n".join(chunks)
+
+    def _collect_source_files(
+        self,
+        allowed_roots: object,
+    ) -> list[tuple[str, int]]:
+        repo_root = self.context.repo_root
+        files: list[tuple[str, int]] = []
+        for root in self._as_root_tuple(allowed_roots):
+            root_path = repo_root / str(root)
+            if not root_path.is_dir():
+                continue
+            for src_file in sorted(
+                path
+                for pattern in ("*.c", "*.h")
+                for path in root_path.rglob(pattern)
+            ):
+                files.append(
+                    (
+                        str(src_file.relative_to(repo_root)),
+                        src_file.stat().st_size,
+                    )
+                )
+        return files
+
+    def _as_root_tuple(self, value: object) -> tuple[object, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            return (value,)
+        try:
+            return tuple(value)  # type: ignore[arg-type]
+        except TypeError:
+            return (value,)
+
+    def _select_key_source_files(
+        self,
+        all_files: list[tuple[str, int]],
+    ) -> list[tuple[str, int]]:
+        return [
+            (rel, size)
+            for rel, size in all_files
+            if any(pattern in rel for pattern in FLOW_SOURCE_CONTEXT_KEY_PATTERNS)
+        ]
 
     def _read_optional_block(self, label: str, path: Path, max_chars: int) -> str:
         if not path.exists():

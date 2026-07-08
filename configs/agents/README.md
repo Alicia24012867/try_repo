@@ -38,7 +38,9 @@ LLM API and they do not modify ABC or FlowTune source code.
 
 1. Parse the previous cycle into `summary.csv`, `skipped.csv`, and
    `run_notes.md`.
-2. Build an assignment under `experiments/<cycle>/agents/assignments/`.
+2. Build an assignment under `experiments/<cycle>/agents/assignments/`;
+   Flow Agent assignments are normalized by `flow/assignment.py` so source-patch
+   scope and active-cycle artifact paths stay consistent.
 3. Render the Planning Agent prompt with the previous cycle evidence and
    current rulebase.
 4. Dispatch one scoped coding agent.
@@ -48,15 +50,20 @@ LLM API and they do not modify ABC or FlowTune source code.
 7. Review the candidate and decide whether to accept, repair, reject, or defer.
 8. Update the rulebase only after the evidence is reviewable.
 
-## First-Cycle Reproduction Profile
+## Current Flow-Agent Reproduction Profile
 
-For `cycle_001`, keep the scope intentionally small:
+For `cycle_001`, keep the benchmark scope intentionally small while exercising
+the source-level feedback loop:
 
 - Agent: Flow Agent.
 - Benchmark subset: `epfl_adder`, `epfl_bar`, and `epfl_sqrt`.
-- Candidate type: ABC flow script under `configs/flows/`.
-- Source edits: none.
+- Candidate type: `source_patch_diff`.
+- Source patch scope: `third_party/FlowTune/src/src/opt`.
 - Required evidence: `cycle_000` summary, skipped table, run notes, and
   selected FlowTune scripts.
-- Correctness caveat: QoR is provisional until a CEC gate is added.
+- Correctness policy: QoR is not trusted unless the remote S5/F7 comparison
+  produces CEC-backed delta rows.
 
+The earlier `.abc` flow path remains available for fixtures and legacy
+flow-recipe evaluation, but the current autonomous loop targets FlowTune source
+patches.

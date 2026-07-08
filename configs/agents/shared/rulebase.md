@@ -20,14 +20,17 @@ proposal to active policy.
 
 ## Flow Agent Rules
 
-- R-FLOW-001: First-cycle Flow Agent candidates are ABC flow scripts, not source
-  patches.
-- R-FLOW-002: Candidate commands must be valid ABC commands and executable via
-  `source <flow_file>`.
-- R-FLOW-003: Prefer flows inspired by designs with positive AND improvement
-  and no severe depth/runtime regression.
-- R-FLOW-004: Do not select a script from a skipped design.
-- R-FLOW-005: Record the source design or rationale for any generated flow.
+- R-FLOW-001: In `source_patch_diff` mode, Flow Agent candidates must produce a
+  unified diff targeting assignment-approved FlowTune source paths.
+- R-FLOW-002: The assignment `source_patch_mode` and model `candidate_kind` must
+  match for materialized proposals.
+- R-FLOW-003: Source patches must apply only inside the isolated candidate
+  workspace before any build, CEC, or QoR comparison.
+- R-FLOW-004: Legacy `abc_flow` candidates must contain valid ABC commands and
+  remain executable via `source <flow_file>`.
+- R-FLOW-005: Do not select evidence from skipped designs as positive guidance.
+- R-FLOW-006: Record the source design, source file entry points, invariants,
+  and rollback action for every generated Flow Agent candidate.
 
 ## Logic Minimization Agent Rules
 
@@ -51,4 +54,3 @@ proposal to active policy.
 - Relax a rule only after at least one successful cycle shows the restriction is
   unnecessarily blocking progress.
 - Retire a rule only in a review artifact that cites the replacement policy.
-

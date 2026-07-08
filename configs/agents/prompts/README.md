@@ -26,8 +26,8 @@ unfinished configuration.
 - `planner_prompt.md`: decides the next evolution step and assigns scoped work.
 - `coding_agent_prompt.md`: guides one coding agent through profiling,
   hypothesis testing, patching, and validation.
-- `repair_prompt.md`: focuses only on fixing compile, smoke, CEC, runtime, or
-  regression failures from a candidate.
+- `repair_prompt.md`: focuses only on fixing validation, patch-apply, compile,
+  smoke, CEC, runtime, or regression failures from a candidate.
 - `review_prompt.md`: evaluates whether a candidate becomes the champion, gets
   repaired, or is rolled back.
 
@@ -38,7 +38,8 @@ unfinished configuration.
 2. Convert the planner JSON into an assignment under
    `experiments/{{CYCLE_ID}}/agents/assignments/`.
 3. Render `coding_agent_prompt.md` for the selected paper role.
-4. If compile, smoke, CEC, or runtime fails, render `repair_prompt.md`.
+4. If validation, patch application, compile, smoke, CEC, or runtime fails,
+   render `repair_prompt.md`.
 5. If validation completes, render `review_prompt.md`.
 6. Store model-derived artifacts under `experiments/{{CYCLE_ID}}/agents/`.
 
@@ -65,10 +66,27 @@ For the current scaffold:
 - Prompts should expose auxiliary metrics, not only a scalar reward, because the
   paper's loop uses structural and mapped QoR feedback to guide later cycles.
 - Rulebase updates are proposals until a review artifact cites evidence.
-- First-cycle prompts should favor reversible flow artifacts and diagnostics
-  over source edits.
+- First-cycle prompts should favor conservative FlowTune `source_patch_diff`
+  candidates that can be applied in an isolated workspace, built remotely, and
+  evaluated with CEC-backed QoR.
 - Prompt rendering should summarize logs and CSVs; benchmark sources and
   generated outputs should not be copied wholesale into a model call.
+
+## Current Source-Patch Bundle
+
+The active Flow Agent reproduction path is source-code feedback iteration:
+
+- Planner output should set `source_patch_mode: source_patch_diff` and
+  `source_patch_allowed_roots: ["third_party/FlowTune/src/src/opt"]`.
+- Coding output must use `candidate_kind: "source_patch_diff"` and include a
+  repository-relative unified diff under `source_patch.diff`.
+- Every diff target must also appear in `files_to_write`.
+- Local validation covers JSON/schema checks, scope checks, patch application,
+  and lightweight Python smoke checks.
+- Full candidate ABC build, CEC, and QoR collection are remote Linux/ABC tasks.
+- Review feedback should use the precise codes `REPAIR_VALIDATION`,
+  `REPAIR_PATCH`, `REPAIR_SMOKE`, `REPAIR_COMPILE`, `REPAIR_EVALUATION`,
+  `REJECT_CEC`, `REPAIR_QOR`, or `ACCEPT_FOR_NEXT_CYCLE`.
 
 ## Minimal Context Bundle
 

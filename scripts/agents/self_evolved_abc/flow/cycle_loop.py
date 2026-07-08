@@ -15,6 +15,10 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from scripts.agents.self_evolved_abc.flow.assignment import (
+    normalize_flow_assignment_scope,
+)
+
 
 # Review decisions that should keep the loop running.
 CONTINUE_DECISIONS = frozenset(
@@ -270,6 +274,7 @@ def _find_resume_point(repo_root: Path) -> Path:
 
     assignment = _assignment_path(repo_root, next_cycle)
     if assignment.is_file():
+        _normalize_assignment_file(assignment)
         print(f"cycle_loop: auto-resume → {assignment.relative_to(repo_root)}")
     else:
         print(
@@ -295,7 +300,7 @@ def _find_resume_point(repo_root: Path) -> Path:
             check=True,
         )
         # Patch the assignment with source_patch_mode
-        _patch_assignment_for_source_diff(assignment)
+        _normalize_assignment_file(assignment)
     return assignment
 
 
@@ -326,33 +331,15 @@ def _next_assignment_path(repo_root: Path, next_cycle_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _patch_assignment_for_source_diff(assignment_path: Path) -> None:
-    """Ensure a bootstrapped assignment has source_patch_diff fields."""
+def _normalize_assignment_file(assignment_path: Path) -> None:
+    """Ensure a Flow Agent assignment has self-consistent scope fields."""
     if not assignment_path.is_file():
         return
     payload = json.loads(assignment_path.read_text(encoding="utf-8"))
-    changed = False
-    if "source_patch_mode" not in payload:
-        payload["source_patch_mode"] = "source_patch_diff"
-        changed = True
-    if "source_patch_allowed_roots" not in payload:
-        payload["source_patch_allowed_roots"] = ["third_party/FlowTune/src/src/opt"]
-        changed = True
-    allowed = payload.setdefault("allowed_to_edit", [])
-    for entry in (
-        "third_party/FlowTune/src/src/opt",
-        "scripts/agents/self_evolved_abc/flow",
-    ):
-        if entry not in allowed:
-            allowed.append(entry)
-            changed = True
-    if "experiments/" + assignment_path.parent.parent.parent.name + "/impl_compare" not in allowed:
-        cycle_id = assignment_path.parent.parent.parent.name
-        allowed.append(f"experiments/{cycle_id}/impl_compare")
-        changed = True
-    if changed:
+    normalized = normalize_flow_assignment_scope(payload)
+    if normalized != payload:
         assignment_path.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            json.dumps(normalized, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
 

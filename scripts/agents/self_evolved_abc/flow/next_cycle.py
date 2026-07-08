@@ -10,6 +10,10 @@ from pathlib import Path
 from typing import Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
+from scripts.agents.self_evolved_abc.flow.assignment import (
+    FLOW_CYCLE_DIRS,
+    normalize_flow_assignment_scope,
+)
 from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
@@ -65,20 +69,7 @@ def build_next_assignment(
         f"{previous_base}/agents/feedback/{context.candidate_id}.md",
         f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
     ]
-    allowed_to_edit = [
-        f"experiments/{next_cycle}/agents",
-        f"experiments/{next_cycle}/logs",
-        f"experiments/{next_cycle}/outputs",
-        f"experiments/{next_cycle}/results",
-        f"experiments/{next_cycle}/impl_compare",
-        "configs/flows",
-        FLOWTUNE_SOURCE_SCOPE_PRIMARY,
-        # Python infrastructure — model may need to repair harness bugs.
-        "scripts/agents/self_evolved_abc/flow",
-        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
-        "configs/agents/prompts",
-    ]
-    return {
+    assignment = {
         "agent_name": current.get("agent_name", "flow_agent"),
         "paper_role": current.get("paper_role", "Flow Agent"),
         "cycle_id": next_cycle,
@@ -95,11 +86,11 @@ def build_next_assignment(
         ),
         "benchmark_scope": current.get("benchmark_scope", ()),
         "allowed_to_read": evidence,
-        "allowed_to_edit": allowed_to_edit,
         "recent_evidence": evidence,
         "source_patch_mode": FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
         "source_patch_allowed_roots": [FLOWTUNE_SOURCE_SCOPE_PRIMARY],
     }
+    return normalize_flow_assignment_scope(assignment)
 
 
 def write_next_assignment(
@@ -111,19 +102,7 @@ def write_next_assignment(
     overwrite: bool,
 ) -> Path:
     cycle_dir = repo_root / "experiments" / cycle_id
-    for relative in (
-        "agents/assignments",
-        "agents/plans",
-        "agents/candidate_changes",
-        "agents/feedback",
-        "agents/rule_updates",
-        "agents/source_patch_todos",
-        "agents/source_patches",
-        "logs",
-        "outputs",
-        "results",
-        "impl_compare",
-    ):
+    for relative in FLOW_CYCLE_DIRS:
         (cycle_dir / relative).mkdir(parents=True, exist_ok=True)
     path = cycle_dir / "agents" / "assignments" / f"{candidate_id}.json"
     if path.exists() and not overwrite:

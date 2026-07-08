@@ -12,18 +12,25 @@ the next iteration — all without human intervention.
 ## Current Status
 
 - `cycle_000` is the parsed baseline cycle (10 EPFL designs, 9 complete).
-- The Flow Agent autonomous feedback loop is **fully operational**:
+- The Flow Agent source-patch feedback loop is wired and locally smoke-tested:
   - Model proposes `source_patch_diff` targeting real FlowTune C source.
   - Patch is applied in an isolated workspace, binary built, CEC run.
   - Review decision is generated, and evidence feeds into the next cycle.
   - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
     cycle — no manual trigger needed.
+- Assignment scope is normalized through `flow/assignment.py`, so
+  `source_patch_diff` cycles consistently allow `third_party/FlowTune/src/src/opt`
+  and active-cycle artifact directories.
 - `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
   starts the full autonomous loop.
 - Validation failures are retried with diagnostic feedback, and review
   decisions distinguish *why* a build failed (validation, patch, smoke,
   compile) rather than collapsing everything into `REPAIR_BUILD`.
 - Logic Minimization Agent and Mapper Agent are placeholders for later phases.
+
+Local macOS development is used for editing, prompt/schema validation, and
+Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
+QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
 
 ## Project Structure
 
@@ -42,9 +49,25 @@ try_repo/
   .local/                     ignored local scratch/archive/run dumps
 ```
 
-## Quickstart
+## Local Development
 
-On a Linux host with ABC available:
+Use local commands for small checks only:
+
+```bash
+python3 -B -m py_compile \
+  scripts/init_cycle.py \
+  scripts/agents/self_evolved_abc/flow/assignment.py \
+  scripts/agents/self_evolved_abc/flow/validation.py \
+  scripts/agents/self_evolved_abc/flow/source_patch_runner.py \
+  scripts/agents/self_evolved_abc/coding_agents/flow_agent.py
+```
+
+The checked-in FlowTune binary is a Linux executable. On macOS it may fail with
+`exec format error`; that is expected and is not a local test failure.
+
+## Remote Quickstart
+
+On the Linux/ABC host after syncing the repository:
 
 ```bash
 # 1. Install dependencies
@@ -64,6 +87,14 @@ bash run.sh
 
 `run.sh` wraps `cycle_loop.py --auto-resume`, so running it again continues
 from the last completed cycle without overwriting any data.
+
+Recommended workflow:
+
+1. Edit and run lightweight Python validation locally.
+2. Rsync the repository to the remote Linux/ABC host.
+3. Run `bash run.sh` remotely.
+4. Rsync `experiments/<cycle>/` artifacts back locally for review and the next
+   implementation step.
 
 ## Benchmarks
 
@@ -90,6 +121,7 @@ scripts/agents/self_evolved_abc/
   model_client.py              LLM API boundary (OpenAI-compatible)
   coding_agents/flow_agent.py  Flow Agent with source-file context injection
   flow/
+    assignment.py            assignment scope normalization + cycle directories
     validation.py              strict JSON schema + scope validation
     materialization.py         artifact writing (.abc / .diff)
     source_patch_runner.py     S4: isolated workspace, git-apply, smoke, make
@@ -128,9 +160,15 @@ experiments/cycle_NNN/
 `cycle_000` is the baseline evidence cycle. All subsequent cycles are generated
 automatically by `next_cycle.py` at the end of each iteration.
 
+`cycle_001` starts in `source_patch_diff` mode. Its assignment targets
+`third_party/FlowTune/src/src/opt` and uses a small EPFL benchmark scope
+(`epfl_adder`, `epfl_bar`, `epfl_sqrt`) for the first source-level feedback
+loop.
+
 ## Pipeline Stages
 
 ```
+F0  assignment.py     normalize source_patch_diff scope and active-cycle paths
 F1  cycle_driver      model proposes source_patch_diff (with retry on failure)
 S4d source_patch_runner  apply diff to isolated workspace (git apply --recount)
 S4c source_patch_runner  Python smoke gate (py_compile + fixture validation)

@@ -14,8 +14,9 @@ running and recording them.
 - Pass condition: command exits with status 0 and produces the expected binary.
 - Fail condition: nonzero exit, missing binary, build-system error, or timeout.
 
-For the first flow-only cycle, compile may be marked `SKIPPED` because no source
-code is changed.
+For legacy `abc_flow` candidates, compile may be marked `SKIPPED` because no
+source code is changed. For the current `source_patch_diff` loop, candidate
+binary build is required before implementation comparison.
 
 ## Smoke Gate
 
@@ -32,21 +33,22 @@ code is changed.
 - Log path: `experiments/<cycle>/logs/<design>.cec.log`.
 - Pass condition: every measured design is equivalent.
 - Fail condition: CEC mismatch, timeout, crash, or missing comparison output.
-- Current caveat: `cycle_000` and the first small flow cycle may report QoR as
-  provisional until this gate is wired into the harness.
+- Current caveat: `cycle_000` is baseline evidence without independent CEC.
+  Later source-patch cycles must use S5/F7 CEC-backed `qor_delta.csv` rows
+  before QoR is considered reviewable.
 
 ## Benchmark Gate
 
-- First small cycle: EPFL subset containing `epfl_adder`, `epfl_bar`, and
-  `epfl_sqrt`.
+- Current small source-patch cycle: EPFL subset containing `epfl_adder`,
+  `epfl_bar`, and `epfl_sqrt`.
 - Full sampled scope: the 10-design subsets under `benchmarks/`.
 - Every benchmark run must record design name, input path, flow path, log path,
   output path, exit status, runtime, AND count, depth, and skip reason.
 
 ## QoR Metrics
 
-- Primary first-cycle metric: AIG AND count.
-- Secondary first-cycle metrics: AIG depth, runtime, skipped design count,
+- Primary source-patch metric: AIG AND count.
+- Secondary source-patch metrics: AIG depth, runtime, skipped design count,
   crash/assertion count.
 - Later mapping metrics: LUT count, mapper area, mapper delay estimate.
 - Later timing metrics: STA worst slack and post-buffer/sizing area when a
@@ -54,12 +56,12 @@ code is changed.
 
 ## Acceptance Policy
 
-- `ACCEPT_PROCESS`: candidate artifacts are complete and benchmarked, but
-  correctness remains provisional.
-- `ACCEPT_QOR`: compile/smoke/CEC pass and QoR improves within regression
-  limits.
-- `REQUEST_REPAIR`: failure is local and still inside allowed scope.
-- `REJECT`: correctness failure, scope violation, unreproducible artifact, or
-  benchmark-name hard-coding.
+- `ACCEPT_FOR_NEXT_CYCLE`: candidate build/smoke/CEC pass and correctness-backed
+  QoR improves on the target metric.
+- `REPAIR_VALIDATION`: model JSON, mode, or path scope validation failed.
+- `REPAIR_PATCH`: unified diff did not apply in the isolated workspace.
+- `REPAIR_SMOKE` or `REPAIR_COMPILE`: local Python smoke or candidate C build
+  failed.
+- `REJECT_CEC`: CEC failed, skipped, timed out, crashed, or was unparseable.
+- `REPAIR_QOR`: CEC passed but target QoR did not improve.
 - `DEFER`: insufficient evidence or missing evaluation gate.
-

@@ -3,7 +3,7 @@
   "paper_role": "Flow Agent",
   "cycle_id": "cycle_001",
   "candidate_id": "candidate_001",
-  "subsystem": "configs/flows",
+  "subsystem": "third_party/FlowTune/src/src/opt",
   "planner_hypothesis": "Use the previous cycle's QoR and skipped-case evidence to propose one conservative flow candidate for a small benchmark subset.",
   "target_metric": "and_count",
   "secondary_metrics": [
@@ -29,6 +29,7 @@
     "experiments/cycle_001/results",
     "experiments/cycle_001/impl_compare",
     "configs/flows",
+    "third_party/FlowTune/src/src/opt",
     "scripts/agents/self_evolved_abc/flow",
     "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
     "configs/agents/prompts"

@@ -22,6 +22,10 @@ so this repository maps its main concepts into local experiment folders.
 - `docs/`: project documentation and the local paper reference.
 - `.local/`: ignored local-only scratch, archives, binaries, and run dumps.
 
+The normal development pattern is local editing and lightweight Python checks,
+followed by rsync to a Linux/ABC host for candidate ABC build, CEC, and QoR
+evaluation. Generated remote artifacts are synced back under `experiments/`.
+
 ## Benchmark Suites
 
 The paper evaluates ISCAS, ITC, EPFL, VTR, and arithmetic blocks. This small
@@ -64,16 +68,17 @@ The executable scaffold follows the paper's agent naming:
 - `scripts/agents/self_evolved_abc/cycle_driver.py`: one-agent execution
   entry point for a cycle assignment.
 - `scripts/agents/self_evolved_abc/flow/`: Flow Agent loop implementation:
-  validation, materialization, isolated source-patch application, candidate
-  workspace ABC build, CEC-first implementation comparison, review feedback,
-  and next-cycle handoff.
+  assignment normalization, validation, materialization, isolated source-patch
+  application, candidate workspace ABC build, CEC-first implementation
+  comparison, review feedback, and next-cycle handoff.
 
 Per-cycle agent artifacts live under `experiments/<cycle>/agents/`.
 
 ## Automation Scripts
 
 - `scripts/init_cycle.py`: creates a new `experiments/cycle_NNN/` skeleton and
-  optional assignment JSON.
+  optional assignment JSON. It normalizes Flow Agent edit scope through
+  `scripts/agents/self_evolved_abc/flow/assignment.py`.
 - `scripts/summarize_cycle.py`: parses existing ABC/FlowTune logs into
   `summary.csv`, `skipped.csv`, and `run_notes.md`.
 
@@ -105,4 +110,7 @@ Each experiment cycle keeps generated artifacts together:
   and comparison summary for source-evolution cycles.
 
 For the first small reproduction, `experiments/cycle_000/` is the parsed
-baseline and `experiments/cycle_001/` is the first LLM-agent cycle skeleton.
+baseline and `experiments/cycle_001/` is the first LLM-agent source-patch cycle
+skeleton. The `cycle_001` assignment is in `source_patch_diff` mode and targets
+`third_party/FlowTune/src/src/opt` while keeping generated artifacts inside the
+active cycle directory.

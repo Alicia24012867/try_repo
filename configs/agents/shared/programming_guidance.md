@@ -1,8 +1,9 @@
 # ABC Programming Guidance
 
 This guidance is the compact programming tutorial supplied to coding agents
-before they propose source changes. For the first LLM-assisted flow cycle,
-agents should use it as context only; source edits remain disabled.
+before they propose source changes. The current Flow Agent cycle permits scoped
+source patches only when the assignment selects `source_patch_diff` and lists
+the target source roots.
 
 ## Build System
 
@@ -47,8 +48,10 @@ agents should use it as context only; source edits remain disabled.
 - hard-coding benchmark names
 - optimizing QoR before compile and CEC gates are available
 
-## First-Cycle Rule
+## Current Flow-Agent Source-Patch Rule
 
-The first LLM-assisted cycle may generate a flow file and markdown artifacts,
-but it must not modify `third_party/FlowTune/src/`.
-
+For `source_patch_diff`, produce a unified diff for real files under
+`third_party/FlowTune/src/src/opt/`. The runner materializes the diff as an
+artifact and applies it only inside
+`experiments/<cycle>/impl_compare/candidate_modified/workspace/`; do not assume
+the repository source tree is modified locally.

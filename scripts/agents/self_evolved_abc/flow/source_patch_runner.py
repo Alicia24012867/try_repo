@@ -1133,26 +1133,6 @@ def run_validation_fixture_smoke(
     fixture_root = (
         context.repo_root / "scripts" / "agents" / "self_evolved_abc" / "fixtures"
     )
-    # Build a permissive assignment that allows fixture paths regardless
-    # of which cycle is being tested.
-    fixture_assignment = dict(context.assignment)
-    permissive_allowed = list(fixture_assignment.get("allowed_to_edit", ()))
-    for entry in (
-        "scripts/agents/self_evolved_abc/flow",
-        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
-        "configs/agents/prompts",
-        "configs/flows",
-        "third_party/FlowTune/src/src/opt",
-        "third_party/FlowTune/src/src/opt/nwk",
-    ):
-        if entry not in permissive_allowed:
-            permissive_allowed.append(entry)
-    fixture_assignment["allowed_to_edit"] = permissive_allowed
-    fixture_context = CycleContext(
-        repo_root=context.repo_root,
-        assignment=fixture_assignment,
-    )
-
     failures = 0
     log_lines.extend(("", "validation_fixtures:"))
     for fixture_name, expected_ok in VALIDATION_FIXTURE_EXPECTATIONS:
@@ -1174,6 +1154,7 @@ def run_validation_fixture_smoke(
             failures += 1
             continue
 
+        fixture_context = build_fixture_validation_context(context, payload)
         result = validate_flow_agent_response(payload, fixture_context)
         if result.ok != expected_ok:
             log_lines.append(
@@ -1188,6 +1169,35 @@ def run_validation_fixture_smoke(
 
     log_lines.append(f"fixture_failures: {failures}")
     return 1 if failures else 0
+
+
+def build_fixture_validation_context(
+    context: CycleContext,
+    payload: Mapping[str, object],
+) -> CycleContext:
+    """Create a permissive context for cycle-agnostic validation fixtures."""
+
+    fixture_assignment = dict(context.assignment)
+    candidate_kind = str(payload.get("candidate_kind", "")).strip()
+    if candidate_kind in ("abc_flow", "source_patch_todo", "source_patch_diff"):
+        fixture_assignment["source_patch_mode"] = candidate_kind
+
+    permissive_allowed = list(fixture_assignment.get("allowed_to_edit", ()))
+    for entry in (
+        "scripts/agents/self_evolved_abc/flow",
+        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+        "configs/agents/prompts",
+        "configs/flows",
+        "third_party/FlowTune/src/src/opt",
+        "third_party/FlowTune/src/src/opt/nwk",
+    ):
+        if entry not in permissive_allowed:
+            permissive_allowed.append(entry)
+    fixture_assignment["allowed_to_edit"] = permissive_allowed
+    return CycleContext(
+        repo_root=context.repo_root,
+        assignment=fixture_assignment,
+    )
 
 
 def sha256_file(path: Path) -> str | None:

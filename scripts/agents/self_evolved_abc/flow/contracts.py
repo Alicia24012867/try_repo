@@ -58,6 +58,7 @@ FLOW_SOURCE_PATCH_DIFF_ALLOWED_ROOTS = (
 FLOW_SOURCE_PATCH_TODO_ALLOWED_ROOTS = FLOW_INFRA_ALLOWED_ROOTS
 
 PYTHON_SMOKE_FILES = (
+    "scripts/agents/self_evolved_abc/flow/assignment.py",
     "scripts/agents/self_evolved_abc/flow/source_patch_runner.py",
     "scripts/agents/self_evolved_abc/flow/source_patch.py",
     "scripts/agents/self_evolved_abc/flow/materialization.py",

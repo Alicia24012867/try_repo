@@ -4,8 +4,9 @@
 
 The Logic Minimization Agent proposes technology-independent AIG optimization
 changes, including rewrite, refactor, resubstitution, balancing, and command
-orchestration. This agent is inactive for the first flow-only cycle but its
-contract is defined so later cycles can enable it safely.
+orchestration. This agent is inactive while the Flow Agent source-patch loop is
+being stabilized, but its contract is defined so later cycles can enable it
+safely.
 
 ## Allowed Scope
 
@@ -52,6 +53,6 @@ The model response must include:
 
 ## Activation Policy
 
-Enable this agent only after the flow-only cycle proves that assignments,
-prompt rendering, result parsing, and review artifacts are stable.
-
+Enable this agent only after the Flow Agent source-patch loop proves that
+assignments, prompt rendering, isolated builds, CEC, result parsing, and review
+artifacts are stable.

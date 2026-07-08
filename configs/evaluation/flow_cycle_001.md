@@ -1,4 +1,11 @@
-# Flow Evaluation Plan -- cycle_001 candidate_001
+# Legacy Flow Evaluation Plan -- cycle_001 candidate_001
+
+This file documents the earlier `.abc` flow-recipe evaluation path. The current
+autonomous Flow Agent loop uses `source_patch_diff` assignments, isolated
+candidate workspaces, candidate binary builds, and S5/F7 CEC-backed QoR
+comparison. Keep this plan as reference material for legacy `abc_flow` fixtures
+and manual flow experiments; do not treat it as the active cycle_001 execution
+plan.
 
 ## Scope
 

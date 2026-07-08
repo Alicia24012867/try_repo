@@ -48,6 +48,46 @@ not yet correctness-backed QoR improvements.
   suite coverage to show generalization.
 - Rulebase updates must cite the gate or QoR evidence that motivates them.
 
+## Source-Patch Review Checklist
+
+For `candidate_kind: source_patch_diff`, review these extra items before any
+QoR discussion:
+
+- The model response passed schema, mode, and path-scope validation.
+- The unified diff applied cleanly in an isolated workspace.
+- Every patched source path is within the assignment's `allowed_to_edit` and
+  source-patch roots.
+- The patch did not modify benchmarks, previous-cycle evidence, result parsers,
+  acceptance thresholds, or generated outputs.
+- The candidate binary was built from the isolated patched workspace, not from
+  the baseline source tree.
+- CEC rows compare baseline and candidate outputs for the same designs and
+  flows.
+- QoR rows are marked correctness-backed only when the matching CEC row passed.
+- Any missing remote evidence is called out as `missing` or `skipped`, not
+  silently treated as neutral.
+
+## Feedback Code Mapping
+
+Return a precise `feedback_code` so the next planner or repair prompt can act
+on the dominant failure:
+
+- `REPAIR_VALIDATION`: JSON schema, candidate kind, source-patch mode, path
+  scope, `files_to_write`, or validation-plan contract failed.
+- `REPAIR_PATCH`: the unified diff did not apply cleanly in the isolated
+  workspace.
+- `REPAIR_SMOKE`: local smoke, fixture, runner, or minimal command check failed.
+- `REPAIR_COMPILE`: candidate source applied but the candidate binary did not
+  build.
+- `REPAIR_EVALUATION`: build/CEC/QoR artifacts are missing, incomplete, or
+  unparseable.
+- `REJECT_CEC`: CEC failed, timed out, crashed, was skipped, or has mismatched
+  coverage.
+- `REPAIR_QOR`: CEC passed, but the target QoR did not improve or regressions
+  exceed the acceptance policy.
+- `ACCEPT_FOR_NEXT_CYCLE`: build, smoke, full CEC, and correctness-backed QoR
+  passed with acceptable regressions.
+
 ## Candidate Context
 
 ```text
@@ -181,6 +221,7 @@ Follow this exact procedure:
 
 1. Check compile:
    - if fail or missing, decision is `repair` or `rollback`.
+   - if a source patch did not apply before compile, use `REPAIR_PATCH`.
 2. Check CEC:
    - if fail or missing, decision is `repair` or `rollback`.
    - set QoR status to invalid.
@@ -245,6 +286,7 @@ Respond only with one JSON object matching this schema:
 ```json
 {
   "decision": "accept | reject | repair | hold_for_more_evaluation | rollback | accept_process",
+  "feedback_code": "ACCEPT_FOR_NEXT_CYCLE | REPAIR_VALIDATION | REPAIR_PATCH | REPAIR_SMOKE | REPAIR_COMPILE | REPAIR_EVALUATION | REJECT_CEC | REPAIR_QOR",
   "confidence": "low | medium | high",
   "champion_update": false,
   "gate_summary": {

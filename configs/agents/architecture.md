@@ -48,9 +48,12 @@ reproduction small enough to complete locally and then run remotely.
 - Flow Agent:
   - Read: `experiments/<previous>/results/`, `experiments/<previous>/outputs/`,
     `configs/flows/`, FlowTune command documentation.
-  - First-cycle write: `configs/flows/` and `experiments/<cycle>/agents/`.
-  - Later-cycle source boundary: `third_party/FlowTune/src/opt/flowtune/` if
-    source edits are explicitly enabled.
+  - Active-cycle artifact write: `experiments/<cycle>/agents/`,
+    `experiments/<cycle>/impl_compare/`, logs, outputs, and results.
+  - Current source-patch boundary: `third_party/FlowTune/src/src/opt/` when
+    `source_patch_mode` is `source_patch_diff`.
+  - Legacy flow-recipe write: `configs/flows/` when `source_patch_mode` is
+    `abc_flow`.
 - Logic Minimization Agent:
   - Later-cycle source boundary: ABC/FlowTune AIG and command orchestration
     modules under `third_party/FlowTune/src/`.
@@ -72,4 +75,3 @@ reproduction small enough to complete locally and then run remotely.
 - Any skipped design must be listed with an explicit reason.
 - A candidate that improves one design by hard-coding names is rejected.
 - Rulebase updates must cite evidence from a cycle artifact.
-

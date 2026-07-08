@@ -175,6 +175,15 @@ def validate_flow_agent_response(
     all_issues.extend(issues)
 
     if not all_issues:
+        all_issues.extend(
+            validate_assignment_mode_matches_candidate_kind(
+                candidate_kind=candidate_kind or "",
+                decision=decision or "",
+                context=context,
+            )
+        )
+
+    if not all_issues:
         normalized_steps, issues = validate_candidate_steps(
             candidate_steps or (),
             candidate_kind=candidate_kind or "",
@@ -358,6 +367,47 @@ def expect_optional_mapping(
     if field not in data or data.get(field) is None:
         return None, ()
     return expect_mapping(data, field)
+
+
+def validate_assignment_mode_matches_candidate_kind(
+    *,
+    candidate_kind: str,
+    decision: str,
+    context: CycleContext,
+) -> tuple[ValidationIssue, ...]:
+    """Ensure materialized candidates obey the assignment-selected mode."""
+
+    if decision != "PROPOSE_CANDIDATE":
+        return ()
+
+    mode = str(context.assignment.get("source_patch_mode", "")).strip()
+    if not mode:
+        return ()
+
+    expected_by_mode = {
+        FLOW_CANDIDATE_ABC_FLOW: FLOW_CANDIDATE_ABC_FLOW,
+        FLOW_CANDIDATE_SOURCE_PATCH_DIFF: FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+        FLOW_CANDIDATE_SOURCE_PATCH_TODO: FLOW_CANDIDATE_SOURCE_PATCH_TODO,
+    }
+    expected = expected_by_mode.get(mode)
+    if expected is None:
+        return (
+            ValidationIssue(
+                "source_patch_mode",
+                "assignment source_patch_mode must be one of: "
+                + ", ".join(sorted(expected_by_mode)),
+            ),
+        )
+
+    if candidate_kind != expected:
+        return (
+            ValidationIssue(
+                "candidate_kind",
+                f"assignment source_patch_mode={mode!r} requires "
+                f"candidate_kind={expected!r}, got {candidate_kind!r}",
+            ),
+        )
+    return ()
 
 
 def validate_path_in_allowed_scope(
