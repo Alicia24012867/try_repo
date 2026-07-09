@@ -14,6 +14,11 @@ import sys
 from pathlib import Path
 from typing import Any, Sequence
 
+from scripts.agents.self_evolved_abc.benchmarks import (
+    apply_benchmark_suite,
+    benchmark_suite_names,
+    expand_benchmark_suite,
+)
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
@@ -38,6 +43,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--assignment", type=Path, required=True)
     parser.add_argument("--next-cycle", default=None)
     parser.add_argument("--candidate-id", default=None)
+    parser.add_argument(
+        "--benchmark-suite",
+        choices=benchmark_suite_names(),
+        default=None,
+        help=(
+            "Override the next assignment benchmark scope. "
+            "Use large_70 to evaluate the full local benchmark sample."
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
 
@@ -47,7 +61,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     context = CycleContext.from_assignment_file(args.repo_root.resolve(), args.assignment)
     next_cycle = args.next_cycle or increment_cycle_id(context.cycle_id)
     candidate_id = args.candidate_id or context.candidate_id
-    assignment = build_next_assignment(context, next_cycle, candidate_id)
+    assignment = build_next_assignment(
+        context,
+        next_cycle,
+        candidate_id,
+        benchmark_suite=args.benchmark_suite,
+    )
     path = write_next_assignment(
         context.repo_root,
         next_cycle,
@@ -63,6 +82,7 @@ def build_next_assignment(
     context: CycleContext,
     next_cycle: str,
     candidate_id: str,
+    benchmark_suite: str | None = None,
 ) -> dict[str, object]:
     previous_base = f"experiments/{context.cycle_id}"
     current = dict(context.assignment)
@@ -77,12 +97,17 @@ def build_next_assignment(
         f"{previous_base}/agents/feedback/{context.candidate_id}.md",
         f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
     ]
+    benchmark_scope, benchmark_suite_name = _next_benchmark_scope(
+        context,
+        current,
+        benchmark_suite,
+    )
 
     # --- Planning engine integration (always active) ---
     engine = PlanningEngine(context.repo_root)
     plan_result = engine.plan(
         context.cycle_id,
-        benchmark_count=len(context.benchmark_scope) or None,
+        benchmark_count=len(benchmark_scope) or None,
     )
     # Engine always returns a result — uses default strategy when no evidence.
     assert plan_result is not None, "PlanningEngine.plan() must not return None"
@@ -106,7 +131,8 @@ def build_next_assignment(
         "secondary_metrics": current.get(
             "secondary_metrics", ["depth", "runtime", "stability"]
         ),
-        "benchmark_scope": current.get("benchmark_scope", ()),
+        "benchmark_suite": benchmark_suite_name,
+        "benchmark_scope": benchmark_scope,
         "allowed_to_read": evidence,
         "recent_evidence": evidence,
         "source_patch_mode": FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
@@ -114,6 +140,20 @@ def build_next_assignment(
         **champion,
     }
     return normalize_flow_assignment_scope(assignment)
+
+
+def _next_benchmark_scope(
+    context: CycleContext,
+    current: dict[str, Any],
+    benchmark_suite: str | None,
+) -> tuple[list[str], str]:
+    suite = benchmark_suite or str(current.get("benchmark_suite", "")).strip()
+    if suite and suite not in ("custom", "explicit"):
+        scoped = apply_benchmark_suite(context.repo_root, current, suite)
+        return list(scoped.get("benchmark_scope", ())), suite
+    if benchmark_suite:
+        return expand_benchmark_suite(context.repo_root, benchmark_suite), benchmark_suite
+    return list(current.get("benchmark_scope", ())), suite or "custom"
 
 
 def _build_champion_payload(

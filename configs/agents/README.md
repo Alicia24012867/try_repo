@@ -52,18 +52,19 @@ LLM API and they do not modify ABC or FlowTune source code.
 
 ## Current Flow-Agent Reproduction Profile
 
-For `cycle_001`, keep the benchmark scope intentionally small while exercising
-the source-level feedback loop:
+For `cycle_001`, use the source-level feedback loop with a named benchmark
+suite:
 
 - Agent: Flow Agent.
-- Benchmark subset: `epfl_adder`, `epfl_bar`, and `epfl_sqrt`.
+- Benchmark suite: `large_70` for broader remote evaluation; use `standard_30`
+  or `epfl_10` only for faster smoke/debug runs.
 - Candidate type: `source_patch_diff`.
 - Source patch scope: `third_party/FlowTune/src/src/opt` plus command wrappers
   under `third_party/FlowTune/src/src/base/abci`.
 - Default evaluation flow: `fx; strash; rewrite -z; resub -K 8; dc2; csweep;
   refactor -z; strash; print_stats`.
-- Required evidence: `cycle_000` summary, skipped table, run notes, and
-  selected FlowTune scripts.
+- Required evidence: previous review decision, CEC/QoR deltas, feedback,
+  rule-update notes, and selected FlowTune source excerpts.
 - Correctness policy: QoR is not trusted unless the remote S5/F7 comparison
   produces CEC-backed delta rows.
 

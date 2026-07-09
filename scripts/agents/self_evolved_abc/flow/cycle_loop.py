@@ -40,7 +40,7 @@ CONTINUE_DECISIONS = frozenset(
     )
 )
 
-STUCK_THRESHOLD = 3  # consecutive cycles with the same decision → warn and stop
+DEFAULT_STUCK_REPEATS = 3  # repeat transitions with the same decision -> warn and stop
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -86,12 +86,23 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "recommends batch_search or another non-LLM action first."
         ),
     )
+    parser.add_argument(
+        "--same-decision-repeat-limit",
+        type=int,
+        default=DEFAULT_STUCK_REPEATS,
+        help=(
+            "Stop after this many consecutive repeated review decisions. "
+            "The default 3 means four same-decision cycles in a row. "
+            "Use 0 to disable this guard for long remote runs."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo_root = args.repo_root.resolve()
+    same_decision_repeat_limit = max(0, args.same_decision_repeat_limit)
 
     if args.assignment is not None:
         current_assignment = repo_root / args.assignment
@@ -103,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     champion_cycle: str | None = None
-    stuck_count = 0
+    same_decision_repeats = 0
     last_decision: str | None = None
 
     for iteration in range(1, args.max_cycles + 1):
@@ -166,16 +177,21 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Detect stuck state
         if decision == last_decision:
-            stuck_count += 1
+            same_decision_repeats += 1
         else:
-            stuck_count = 0
+            same_decision_repeats = 0
         last_decision = decision
 
-        if stuck_count >= STUCK_THRESHOLD:
+        if (
+            same_decision_repeat_limit > 0
+            and same_decision_repeats >= same_decision_repeat_limit
+        ):
             print(
                 f"cycle_loop: stopping — same decision {decision!r} "
-                f"for {stuck_count} consecutive cycles"
+                f"repeated {same_decision_repeats} times "
+                f"(run length {same_decision_repeats + 1} cycles)"
             )
+            _print_pending_assignment(repo_root, next_cycle_id)
             break
 
         if decision not in CONTINUE_DECISIONS:
@@ -400,6 +416,19 @@ def _assignment_path(repo_root: Path, cycle_id: str) -> Path:
 def _next_assignment_path(repo_root: Path, next_cycle_id: str) -> Path | None:
     path = _assignment_path(repo_root, next_cycle_id)
     return path if path.is_file() else None
+
+
+def _print_pending_assignment(repo_root: Path, cycle_id: str) -> None:
+    assignment = _assignment_path(repo_root, cycle_id)
+    if assignment.is_file():
+        print(
+            "cycle_loop: pending assignment = "
+            f"{assignment.relative_to(repo_root)}"
+        )
+        print(
+            "cycle_loop: consider batch_search from the pending assignment "
+            "before spending another LLM cycle"
+        )
 
 
 def _normalize_assignment_file(repo_root: Path, assignment_path: Path) -> None:

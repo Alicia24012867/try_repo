@@ -156,6 +156,12 @@ planner may recommend batch search before another LLM call. The loop prints
 that recommendation; pass `--honor-planner-skip-llm` to `cycle_loop.py` if you
 want the remote run to stop before spending the next model call.
 
+The repeated-decision guard is configurable. By default the loop stops after
+three repeated review decisions, which means four same-decision cycles in a
+row. Use `--same-decision-repeat-limit 0` for an uninterrupted remote run, or
+resume from the printed pending assignment if the guard stops after generating
+the next cycle.
+
 Recommended workflow:
 
 1. Edit and run lightweight Python validation locally.
@@ -178,6 +184,7 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --start-cycle cycle_020 \
   --batch-id flow_wide_cycle_020 \
   --variant-set flow_wide \
+  --benchmark-suite large_70 \
   --force
 
 # Run the generated candidates on the remote Linux/ABC host.
@@ -193,8 +200,8 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --summarize-only
 ```
 
-After a full `flow_wide` batch, retest only the nonzero candidates on all EPFL
-benchmarks before spending another model call:
+After a full `flow_wide` batch, retest only the nonzero candidates on the
+larger 70-design suite before spending another model call:
 
 ```bash
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
@@ -203,13 +210,12 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --batch-id csweep_retest_cycle_050 \
   --variant-set flow_wide \
   --include-variants csweep_floor_c12_lkeep,csweep_floor_c16_lkeep,csweep_default_c6_l5,csweep_default_c12_l6,csweep_default_c16_l6 \
-  --benchmark-glob 'benchmarks/epfl/*.blif' \
+  --benchmark-suite large_70 \
   --force
 ```
 
-If that EPFL retest shows improvements on multiple benchmarks, repeat with an
-additional `--benchmark-glob 'benchmarks/iscas85/*.blif'` to check whether the
-signal generalizes beyond EPFL.
+Use `--benchmark-suite standard_30` for the smaller BLIF-only suite, or
+`--benchmark-glob` repeatedly for a custom scope.
 
 Outputs live in `experiments/batches/<batch-id>/summary.csv` and
 `experiments/batches/<batch-id>/winner.json`. Generated cycles use normal
@@ -221,6 +227,24 @@ review and implementation-compare tooling as LLM-generated cycles.
 `benchmarks/` contains 10-design sampled suites for the small reproduction:
 `epfl/`, `iscas85/`, `iscas89/`, `iscas99/`, `itc99/`, `vtr/`, `arithmetic/`.
 See `benchmarks/SOURCES.md` for source and sampling notes.
+
+Named benchmark suites:
+
+- `epfl_10`: EPFL BLIF only, useful for fast smoke runs.
+- `standard_30`: EPFL + ISCAS85 + ISCAS89 BLIF designs.
+- `large_70`: all seven 10-design local suites, including Verilog designs.
+
+New cycles can be initialized or regenerated with a named suite:
+
+```bash
+python3 -B scripts/init_cycle.py cycle_001 --benchmark-suite large_70 --force
+
+python3 -B -m scripts.agents.self_evolved_abc.flow.next_cycle \
+  --assignment experiments/cycle_004/agents/assignments/candidate_001.json \
+  --next-cycle cycle_005 \
+  --benchmark-suite large_70 \
+  --force
+```
 
 ## Configs
 
@@ -388,8 +412,13 @@ EDA_AGENT_MODEL_PROVIDER=deepseek
 EDA_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
 EDA_AGENT_MODEL_API_KEY=<secret>
 EDA_AGENT_MODEL_NAME=deepseek-chat
-EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384    # needed for unified diffs
+EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384    # raise to 32768+ if JSON/diffs truncate
 ```
+
+Larger output budgets help when the model response is cut off, malformed, or
+missing part of a unified diff. They do not usually fix repeated `REPAIR_QOR`
+once candidates already compile and pass CEC; at that point use diagnostics and
+batch search to widen the source-patch search space.
 
 For offline tests: `EDA_AGENT_MODEL_PROVIDER=fixture`.
 

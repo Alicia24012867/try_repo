@@ -21,6 +21,12 @@ benchmark families discussed in the paper.
 - `arithmetic/`: 10 arithmetic Verilog designs selected from VTR arithmetic
   multipliers and generated adder-tree circuits.
 
+## Named Evaluation Sets
+
+- `epfl_10`: `epfl/` only, for fast smoke checks.
+- `standard_30`: `epfl/`, `iscas85/`, and `iscas89/` BLIF designs.
+- `large_70`: all seven local 10-design suites, including the Verilog suites.
+
 ## Temporary Download Sources
 
 The source repositories were cloned only into `/private/tmp` during setup:

@@ -308,10 +308,10 @@ def _reconstruct_strategy_history(
     repo_root: Path,
     up_to_cycle: str,
 ) -> list[Strategy]:
-    """Read _planning_meta from all prior cycles to know which commands were tried."""
+    """Read _planning_meta through ``up_to_cycle`` to know tried commands."""
     strategies: list[Strategy] = []
     cycle_num = _cycle_number(up_to_cycle)
-    for num in range(1, cycle_num):
+    for num in range(1, cycle_num + 1):
         prior = _format_cycle_id(up_to_cycle, num)
         meta = _read_planning_meta(repo_root, prior)
         if meta:

@@ -39,9 +39,10 @@ binary build is required before implementation comparison.
 
 ## Benchmark Gate
 
-- Current small source-patch cycle: EPFL subset containing `epfl_adder`,
-  `epfl_bar`, and `epfl_sqrt`.
-- Full sampled scope: the 10-design subsets under `benchmarks/`.
+- Fast smoke suite: `epfl_10`.
+- Standard suite: `standard_30` (EPFL + ISCAS85 + ISCAS89 BLIF designs).
+- Large suite: `large_70` (all seven 10-design sampled suites under
+  `benchmarks/`, including Verilog designs).
 - Every benchmark run must record design name, input path, flow path, log path,
   output path, exit status, runtime, AND count, depth, and skip reason.
 

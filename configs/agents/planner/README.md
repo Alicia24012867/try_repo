@@ -29,17 +29,18 @@ small, scoped assignment for one coding agent.
 
 ## Decision Policy
 
-Prefer the smallest next cycle that can teach something reliable. For the first
-reproduction, choose the Flow Agent unless evidence clearly requires source
-changes in AIG optimization or mapping. Do not expand benchmark scope until the
-cycle artifact path, result parser, and review process are stable.
+Prefer the smallest next cycle that can teach something reliable, then expand
+coverage once artifact generation, CEC, QoR parsing, and review are stable.
+For the current Flow Agent reproduction, use `large_70` when checking whether
+weak nonzero QoR signals generalize beyond the BLIF-only suite.
 
 ## First-Cycle Default
 
 - Selected agent: `flow_agent`.
-- Candidate type: ABC flow script.
-- Benchmark scope: `epfl_adder`, `epfl_bar`, `epfl_sqrt`.
-- Source edits: disabled.
-- Acceptance: requires successful run logs and parsed QoR; CEC caveat remains
-  explicit until a correctness gate is implemented.
-
+- Candidate type: `source_patch_diff`.
+- Benchmark suite: `large_70` for remote evaluation; `standard_30` or
+  `epfl_10` for faster local/remote smoke checks.
+- Source edits: restricted to FlowTune optimization sources and command
+  wrappers declared in the assignment.
+- Acceptance: requires candidate build, CEC pass on every measured design, and
+  correctness-backed QoR above the promotion thresholds.

@@ -19,6 +19,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+from scripts.agents.self_evolved_abc.benchmarks import (
+    apply_benchmark_patterns as apply_benchmark_patterns_to_assignment,
+    apply_benchmark_suite,
+    benchmark_suite_names,
+)
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
@@ -131,6 +136,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "benchmark_scope. Can be repeated."
         ),
     )
+    parser.add_argument(
+        "--benchmark-suite",
+        choices=benchmark_suite_names(),
+        default=None,
+        help=(
+            "Named benchmark suite overriding the base assignment scope. "
+            "Use large_70 for the full local benchmark sample."
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--run",
@@ -173,13 +187,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_root,
             repo_path(repo_root, args.base_assignment),
         )
-        if args.benchmark_glob:
+        if args.benchmark_suite and args.benchmark_glob:
+            print("batch_search: use either --benchmark-suite or --benchmark-glob")
+            return 2
+        if args.benchmark_suite:
             context = CycleContext(
                 repo_root,
-                apply_benchmark_globs(
-                    repo_root,
-                    context.assignment,
-                    args.benchmark_glob,
+                normalize_flow_assignment_scope(
+                    apply_benchmark_suite(
+                        repo_root,
+                        context.assignment,
+                        args.benchmark_suite,
+                    )
+                ),
+            )
+        elif args.benchmark_glob:
+            context = CycleContext(
+                repo_root,
+                normalize_flow_assignment_scope(
+                    apply_benchmark_patterns_to_assignment(
+                        repo_root,
+                        context.assignment,
+                        args.benchmark_glob,
+                    )
                 ),
             )
         manifest = generate_batch(
@@ -812,32 +842,6 @@ def repo_path(repo_root: Path, path: Path) -> Path:
 
 def parse_variant_filter(text: str) -> set[str]:
     return {item.strip() for item in text.split(",") if item.strip()}
-
-
-def apply_benchmark_globs(
-    repo_root: Path,
-    assignment: dict[str, Any],
-    patterns: Sequence[str],
-) -> dict[str, Any]:
-    matches: list[str] = []
-    seen: set[str] = set()
-    for pattern in patterns:
-        if not pattern.strip():
-            continue
-        for path in sorted(repo_root.glob(pattern)):
-            if not path.is_file():
-                continue
-            relative = str(repo_path(repo_root, path).relative_to(repo_root))
-            if relative in seen:
-                continue
-            seen.add(relative)
-            matches.append(relative)
-    if not matches:
-        joined = ", ".join(patterns)
-        raise ValueError(f"benchmark glob matched no files: {joined}")
-    updated = dict(assignment)
-    updated["benchmark_scope"] = matches
-    return normalize_flow_assignment_scope(updated)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

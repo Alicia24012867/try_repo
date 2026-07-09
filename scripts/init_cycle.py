@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Initialize one experiment cycle skeleton.
 
-Without --benchmark flags, the assignment expands to all .blif designs
-under benchmarks/epfl/, benchmarks/iscas85/, and benchmarks/iscas89/
-(30 designs total).
+Without --benchmark flags, the assignment expands the selected benchmark
+suite.  The default suite is standard_30 (EPFL + ISCAS85 + ISCAS89, 30
+BLIF designs).  Use --benchmark-suite large_70 to include the Verilog slices
+under ISCAS99/ITC99/VTR/arithmetic as well.
 
 Example with explicit scope:
     python3 -B scripts/init_cycle.py cycle_001 \\
@@ -19,8 +20,19 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 from pathlib import Path
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.agents.self_evolved_abc.benchmarks import (
+    DEFAULT_BENCHMARK_SUITE,
+    apply_benchmark_suite,
+    benchmark_suite_names,
+    expand_benchmark_suite,
+)
 from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
     normalize_flow_assignment_scope,
@@ -65,6 +77,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-assignment", dest="with_assignment", action="store_false")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--benchmark", action="append", default=())
+    parser.add_argument(
+        "--benchmark-suite",
+        choices=benchmark_suite_names(),
+        default=DEFAULT_BENCHMARK_SUITE,
+        help=(
+            "Benchmark suite used when --benchmark is not supplied. "
+            "Use large_70 for the full local benchmark sample."
+        ),
+    )
     return parser.parse_args()
 
 def validate_cycle_id(value: str) -> str:
@@ -79,23 +100,13 @@ def create_cycle_dirs(cycle_dir: Path) -> None:
         gitkeep = path / ".gitkeep"
         gitkeep.touch(exist_ok=True)
         
-def _default_benchmarks(repo_root: Path) -> list[str]:
-    """Expand EPFL + ISCAS85 + ISCAS89 .blif globs into a sorted scope."""
-    patterns = (
-        "benchmarks/epfl/*.blif",
-        "benchmarks/iscas85/*.blif",
-        "benchmarks/iscas89/*.blif",
-    )
-    result: list[str] = []
-    for pattern in patterns:
-        for path in sorted(repo_root.glob(pattern)):
-            result.append(str(path.relative_to(repo_root)))
-    return result
-
-
 def build_assignment(args: argparse.Namespace) -> dict[str, object]:
     previous = f"experiments/{args.previous_cycle}"
-    benchmarks = list(args.benchmark) or _default_benchmarks(args.repo_root)
+    explicit_benchmarks = list(args.benchmark)
+    benchmarks = explicit_benchmarks or expand_benchmark_suite(
+        args.repo_root,
+        args.benchmark_suite,
+    )
     source_patch_roots = list(args.source_patch_allowed_roots) or [
         FLOWTUNE_SOURCE_SCOPE_PRIMARY,
         FLOWTUNE_ABCI_SCOPE,
@@ -114,6 +125,7 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "target_metric": args.target_metric,
         "secondary_metrics": ["depth", "runtime", "stability"],
         "promotion_thresholds": DEFAULT_PROMOTION_THRESHOLDS.as_dict(),
+        "benchmark_suite": "custom" if explicit_benchmarks else args.benchmark_suite,
         "benchmark_scope": benchmarks,
         "allowed_to_read": [
             f"{previous}/results/summary.csv",
@@ -131,6 +143,12 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
     }
+    if not explicit_benchmarks:
+        assignment = apply_benchmark_suite(
+            args.repo_root,
+            assignment,
+            args.benchmark_suite,
+        )
     assignment = normalize_flow_assignment_scope(assignment)
     return _apply_initial_planning(args.repo_root, args.previous_cycle, assignment)
 

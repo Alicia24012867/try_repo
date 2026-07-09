@@ -237,6 +237,33 @@ def _qor_repair_strategy(
     if evidence.improved_benchmark_count > 0:
         threshold_gap = _diagnose_threshold_gap(evidence, benchmark_count)
         if threshold_gap:
+            if _is_repeated_weak_signal(evidence, previous_strategies):
+                next_command = _next_untried_command(previous_strategies)
+                source_dir = _source_dir_for_command(next_command)
+                last_command = _last_target_command(previous_strategies)
+                return Strategy(
+                    task_type="batch_search",
+                    target_command=next_command,
+                    target_source_dir=source_dir,
+                    target_parameter_kind=_default_parameter_kind(next_command),
+                    hypothesis_template=(
+                        f"Repeated `{last_command}` patches produced only tiny "
+                        f"QoR deltas ({evidence.improved_benchmark_count} changed "
+                        f"benchmark(s), total AND reduction "
+                        f"{_actual_total_reduction(evidence)}). Do not continue "
+                        "single-shot amplification. Run flow_wide batch_search "
+                        f"and prioritize `{next_command}` plus command-default "
+                        "variants with materially larger expected effect."
+                    ),
+                    rationale=(
+                        f"Repeated weak nonzero QoR on {last_command}: "
+                        f"{threshold_gap} Switching/batch-searching before "
+                        "another LLM source patch."
+                    ),
+                    should_skip_llm=True,
+                    should_relax_thresholds=False,
+                    discouraged_targets=discouraged,
+                )
             return Strategy(
                 task_type="optimization",
                 target_command=_last_target_command(previous_strategies),
@@ -356,6 +383,65 @@ def _last_parameter_kind(
     if previous_strategies:
         return previous_strategies[-1].target_parameter_kind
     return "cut_limit"
+
+
+def _consecutive_target_count(
+    previous_strategies: Sequence[Strategy],
+    command: str,
+) -> int:
+    """Count how many trailing strategies used the same target command."""
+    if not command:
+        return 0
+    count = 0
+    for strategy in reversed(previous_strategies):
+        if strategy.target_command != command:
+            break
+        count += 1
+    return count
+
+
+def _actual_total_reduction(evidence: CycleEvidence) -> int:
+    if evidence.total_and_delta is None:
+        return 0
+    return max(0, -evidence.total_and_delta)
+
+
+def _is_repeated_weak_signal(
+    evidence: CycleEvidence,
+    previous_strategies: Sequence[Strategy],
+) -> bool:
+    """True when repeated same-command edits are far below promotion signal.
+
+    A tiny nonzero delta is useful evidence, but after repeated attempts it is
+    better handled by deterministic batch search or a command switch than by
+    another one-off LLM patch.
+    """
+    last_command = _last_target_command(previous_strategies)
+    if _consecutive_target_count(previous_strategies, last_command) < 2:
+        return False
+    if not evidence.all_cec_pass or evidence.improved_benchmark_count <= 0:
+        return False
+
+    avg_required = max(0.0, evidence.min_average_and_improve_pct)
+    avg_actual = evidence.average_and_improve_pct
+    avg_far_short = (
+        avg_required > 0.0
+        and avg_actual is not None
+        and avg_actual < avg_required * 0.10
+    )
+
+    total_required = max(0, evidence.min_total_and_reduction)
+    total_far_short = (
+        total_required > 0
+        and _actual_total_reduction(evidence) < total_required
+    )
+
+    breadth_is_minimal = (
+        evidence.min_improved_benchmarks > 0
+        and evidence.improved_benchmark_count <= evidence.min_improved_benchmarks
+    )
+
+    return avg_far_short and (total_far_short or breadth_is_minimal)
 
 
 def _diagnose_threshold_gap(

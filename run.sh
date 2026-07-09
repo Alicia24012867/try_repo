@@ -20,6 +20,8 @@ set +a
 #
 # cycle_001 assignment is created once by init_cycle.py and tracked in git.
 # Later cycle assignments are generated automatically by next_cycle.py.
+# To start a fresh larger run, regenerate cycle_001 with:
+#   python3 -B scripts/init_cycle.py cycle_001 --benchmark-suite large_70 --force
 python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \
   --auto-resume \
   --build-candidate-binary \
@@ -48,7 +50,8 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \
 #
 #   Stop conditions:
 #     - --max-cycles reached
-#     - same review decision for 3 consecutive cycles
+#     - same review decision repeats 3 times (configurable with
+#       --same-decision-repeat-limit, use 0 to disable)
 #     - repeated NEEDS_HUMAN_REVIEW validation failures
 #     - next assignment does not exist
 #

@@ -18,6 +18,9 @@ from typing import Any
 # ---------------------------------------------------------------------------
 # Imports under test
 # ---------------------------------------------------------------------------
+from scripts.agents.self_evolved_abc.benchmarks import (
+    expand_benchmark_suite,
+)
 from scripts.agents.self_evolved_abc.planning.evidence import (
     BenchmarkDelta,
     CycleEvidence,
@@ -416,6 +419,32 @@ check("2f: partial → same command", s.target_command == "fx")
 check("2f: partial → relax thresholds (2 >= 3-1)",
       s.should_relax_thresholds)
 check("2f: partial → don't skip LLM", not s.should_skip_llm)
+
+# 2f.2: REPAIR_QOR — repeated tiny nonzero signal should switch to batch/search
+ev_tiny_repeated = CycleEvidence(
+    cycle_id="c005", candidate_id="x",
+    review_decision="REPAIR_QOR", promotion_allowed=False,
+    champion_update=False, build_status="candidate_binary_build_passed",
+    cec_pass_count=30, cec_total_count=30, all_cec_pass=True,
+    average_and_improve_pct=0.000754, total_and_delta=-8,
+    improved_benchmark_count=3, regressed_benchmark_count=0,
+    unchanged_benchmark_count=27, correctness_backed_rows=30,
+    min_average_and_improve_pct=3.0, min_total_and_reduction=15,
+    min_improved_benchmarks=3, all_deltas_zero=False,
+)
+prev_repeated = [
+    Strategy(task_type="optimization", target_command="csweep",
+             target_source_dir="third_party/FlowTune/src/src/opt/csw",
+             target_parameter_kind="cut_limit",
+             hypothesis_template="", rationale="")
+    for _ in range(2)
+]
+s = select_strategy(ev_tiny_repeated, previous_strategies=prev_repeated,
+                    cycle_number=5, benchmark_count=30)
+check("2f.2: repeated tiny → batch_search", s.task_type == "batch_search")
+check("2f.2: repeated tiny → skip LLM", s.should_skip_llm)
+check("2f.2: repeated tiny → switch command", s.target_command == "fx")
+check("2f.2: repeated tiny → no threshold relax", not s.should_relax_thresholds)
 
 # 2g: REPAIR_QOR — regressions, all commands tried
 ev_reg = CycleEvidence(
@@ -831,6 +860,20 @@ check("9a: __init__ exports select_strategy", True)
 # 9b: next_cycle.py imports PlanningEngine
 from scripts.agents.self_evolved_abc.flow.next_cycle import build_next_assignment as bna
 check("9b: next_cycle imports PlanningEngine", True)
+
+
+# ===================================================================
+# SECTION 10: Benchmark suites
+# ===================================================================
+section("10. BENCHMARK SUITES")
+
+repo_root = Path.cwd()
+standard_30 = expand_benchmark_suite(repo_root, "standard_30")
+large_70 = expand_benchmark_suite(repo_root, "large_70")
+check("10a: standard_30 has 30 designs", len(standard_30) == 30)
+check("10b: large_70 has 70 designs", len(large_70) == 70)
+check("10c: large_70 includes Verilog", any(path.endswith(".v") for path in large_70))
+check("10d: large_70 includes standard_30", set(standard_30).issubset(large_70))
 
 
 # ===================================================================
