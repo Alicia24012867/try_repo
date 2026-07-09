@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
@@ -588,7 +589,7 @@ def validate_abc_command(
     hard_coded_names = _benchmark_hard_code_tokens(benchmark_scope)
     lower_command = normalized.lower()
     for token in hard_coded_names:
-        if token in lower_command:
+        if _contains_benchmark_token(lower_command, token):
             issues.append(
                 ValidationIssue(
                     "candidate_steps",
@@ -729,7 +730,7 @@ def validate_source_patch_steps(
             )
 
         for token in hard_coded_names:
-            if token in lower_step:
+            if _contains_benchmark_token(lower_step, token):
                 issues.append(
                     ValidationIssue(
                     field=f"candidate_steps[{index}]",
@@ -1038,6 +1039,20 @@ def _benchmark_hard_code_tokens(benchmark_scope: tuple[str, ...]) -> tuple[str, 
         tokens.add(Path(lower_path).name)
         tokens.add(Path(lower_path).stem)
     return tuple(sorted(tokens))
+
+
+def _contains_benchmark_token(text: str, token: str) -> bool:
+    """Return true for real benchmark mentions without substring false hits.
+
+    Large suites contain short design names such as ``fir`` and ``b01``. A raw
+    substring search incorrectly flags ordinary words like ``first``. Full
+    benchmark paths are still matched as substrings; file names and stems must
+    appear as separated tokens.
+    """
+    if token == "benchmarks/" or "/" in token:
+        return token in text
+    pattern = rf"(?<![a-z0-9_]){re.escape(token)}(?![a-z0-9_])"
+    return re.search(pattern, text) is not None
 
 
 def _failed(issues: tuple[ValidationIssue, ...]) -> ValidationResult:

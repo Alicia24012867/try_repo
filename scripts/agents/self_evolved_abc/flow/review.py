@@ -274,6 +274,8 @@ def render_feedback(
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'impl_compare_summary.md'}`",
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'cec_summary.csv'}`",
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'qor_delta.csv'}`",
+            f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'build.log'}`",
+            f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'build_info.json'}`",
             f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'patch.diff'}`",
             "",
         )
@@ -356,9 +358,11 @@ def _classify_build_failure(build_status: str | None) -> tuple[str, str, str]:
     if status in ("build_smoke_failed",):
         return (
             "REPAIR_SMOKE",
-            f"Python build/smoke gate failed (status={status}). "
-            "Check the build log for fixture or py_compile errors.",
-            "Fix the smoke gate failure before requesting implementation comparison.",
+            f"S4 Python smoke/fixture gate failed (status={status}). "
+            "This gate runs py_compile and Flow response validation fixtures "
+            "before ABC CEC/QoR starts; check candidate_modified/build.log.",
+            "Fix the harness, validator, fixture, or assignment-scope issue "
+            "before requesting another Flow Agent source patch.",
         )
     if status in ("candidate_binary_build_failed",):
         return (

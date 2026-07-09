@@ -345,6 +345,22 @@ check("2b: build fail → repair", s.task_type == "repair")
 check("2b: discouraged has target", "some/file.c" in s.discouraged_targets)
 check("2b: build fail → don't skip LLM", not s.should_skip_llm)
 
+# 2b.2: Python smoke failure → instrumentation, skip LLM
+ev_smoke = CycleEvidence(
+    cycle_id="c001", candidate_id="x",
+    review_decision="REPAIR_SMOKE", promotion_allowed=False,
+    champion_update=False, build_status="build_smoke_failed",
+    cec_pass_count=0, cec_total_count=0, all_cec_pass=False,
+    average_and_improve_pct=None, total_and_delta=None,
+    improved_benchmark_count=0, regressed_benchmark_count=0,
+    unchanged_benchmark_count=0, correctness_backed_rows=0,
+    previous_patch_target="some/file.c",
+)
+s = select_strategy(ev_smoke, cycle_number=2, benchmark_count=70)
+check("2b.2: smoke fail → instrumentation", s.task_type == "instrumentation")
+check("2b.2: smoke fail → skip LLM", s.should_skip_llm)
+check("2b.2: smoke fail → discouraged target", "some/file.c" in s.discouraged_targets)
+
 # 2c: CEC fail → repair
 ev_cec = CycleEvidence(
     cycle_id="c002", candidate_id="x",
@@ -874,6 +890,35 @@ check("10a: standard_30 has 30 designs", len(standard_30) == 30)
 check("10b: large_70 has 70 designs", len(large_70) == 70)
 check("10c: large_70 includes Verilog", any(path.endswith(".v") for path in large_70))
 check("10d: large_70 includes standard_30", set(standard_30).issubset(large_70))
+
+
+# ===================================================================
+# SECTION 11: Flow validation smoke with large benchmark suites
+# ===================================================================
+section("11. FLOW VALIDATION SMOKE")
+
+from scripts.agents.self_evolved_abc.cycle_context import CycleContext as SmokeContext
+from scripts.agents.self_evolved_abc.flow.source_patch_runner import (
+    run_python_smoke_gate,
+)
+from scripts.agents.self_evolved_abc.flow.validation import (
+    _contains_benchmark_token,
+)
+
+check("11a: short benchmark token does not match first",
+      not _contains_benchmark_token("run cec-first implementation comparison", "fir"))
+check("11b: short benchmark token matches isolated fir",
+      _contains_benchmark_token("target fir for diagnostics", "fir"))
+check("11c: benchmark path still matches",
+      _contains_benchmark_token("read benchmarks/vtr/fir.v", "benchmarks/vtr/fir.v"))
+
+smoke_ctx = SmokeContext.from_assignment_file(
+    repo_root,
+    repo_root / "experiments/cycle_001/agents/assignments/candidate_001.json",
+)
+smoke_result = run_python_smoke_gate(smoke_ctx)
+check("11d: Python smoke passes with large_70 assignment",
+      smoke_result.exit_code == 0)
 
 
 # ===================================================================

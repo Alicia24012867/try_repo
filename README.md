@@ -364,6 +364,7 @@ Thresholds scale with benchmark scope and tighten as champions accumulate:
 | 30 designs | early | 1.8% | 15 | 3 |
 | 30 designs | normal | 3.0% | 15 | 3 |
 | 30 designs | 3+ champs | 3.6% | 15 | 3 |
+| 70 designs | early | 1.2% | 20 | 5 |
 | 70 designs | normal | 2.0% | 20 | 5 |
 
 ### Local Validation
@@ -372,9 +373,10 @@ Thresholds scale with benchmark scope and tighten as champions accumulate:
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
 ```
 
-Covers 132 assertions across 9 sections: paper compliance, evidence reading,
+Covers 147 assertions across 11 sections: paper compliance, evidence reading,
 strategy routing (all 7 branches), threshold adaptation (all branches),
-engine operations, next_cycle integration, LLM planner, and edge cases.
+engine operations, next_cycle integration, LLM planner, benchmark suites,
+validation smoke, and edge cases.
 
 ## Pipeline Stages
 
@@ -402,6 +404,12 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 | `REJECT_CEC` | CEC equivalence check failed |
 | `REPAIR_QOR` | CEC passed but QoR didn't improve |
 | `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — champion |
+
+For `REPAIR_SMOKE`, inspect
+`experiments/<cycle>/impl_compare/candidate_modified/build.log` first. This is
+the Python/fixture smoke gate before ABC CEC/QoR starts; it is usually a harness,
+validator, fixture, or assignment-scope issue rather than evidence that a new
+ABC source patch is needed.
 
 ## Model Client Configuration
 

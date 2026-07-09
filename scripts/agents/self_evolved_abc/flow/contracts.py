@@ -111,6 +111,7 @@ FLOW_SOURCE_TOUCHPOINTS = {
 }
 
 PYTHON_SMOKE_FILES = (
+    "scripts/agents/self_evolved_abc/benchmarks.py",
     "scripts/agents/self_evolved_abc/flow/assignment.py",
     "scripts/agents/self_evolved_abc/flow/source_patch_runner.py",
     "scripts/agents/self_evolved_abc/flow/source_patch.py",

@@ -149,6 +149,29 @@ def _default_strategy(cycle_number: int) -> Strategy:
 
 
 def _repair_strategy(evidence: CycleEvidence, gate: str) -> Strategy:
+    if evidence.review_decision == "REPAIR_SMOKE":
+        return Strategy(
+            task_type="instrumentation",
+            target_command="",
+            target_source_dir="",
+            target_parameter_kind="",
+            hypothesis_template=(
+                f"S4 Python smoke/fixture gate failed in {evidence.cycle_id}. "
+                "Inspect candidate_modified/build.log and fix the harness, "
+                "validator, fixture, or assignment scope before requesting "
+                "another Flow Agent source patch."
+            ),
+            rationale=(
+                "Python smoke gate failed before CEC/QoR. This is not evidence "
+                "that a different ABC source patch is needed."
+            ),
+            should_skip_llm=True,
+            discouraged_targets=(
+                (evidence.previous_patch_target,)
+                if evidence.previous_patch_target
+                else ()
+            ),
+        )
     return Strategy(
         task_type="repair",
         target_command="",
