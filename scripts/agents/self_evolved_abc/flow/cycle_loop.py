@@ -22,6 +22,7 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     DEFAULT_EVAL_FLOW_COMMANDS,
     LEGACY_EVAL_FLOW_COMMANDS,
 )
+from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
 
 
 # Review decisions that should keep the loop running.
@@ -77,6 +78,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--build-jobs", type=int, default=4)
     parser.add_argument("--build-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--honor-planner-skip-llm",
+        action="store_true",
+        help=(
+            "Stop before calling the Flow Agent when the Planning Engine "
+            "recommends batch_search or another non-LLM action first."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -86,6 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.assignment is not None:
         current_assignment = repo_root / args.assignment
+        _normalize_assignment_file(repo_root, current_assignment)
     elif args.auto_resume:
         current_assignment = _find_resume_point(repo_root)
     else:
@@ -107,6 +117,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         # Ensure a flow recipe exists (needed by implementation_compare)
         _ensure_flow_recipe(repo_root, cycle_id)
+
+        planner_skip = _planner_skip_requested(current_assignment)
+        if planner_skip:
+            message = _planner_skip_message(current_assignment)
+            print(message)
+            if args.honor_planner_skip_llm:
+                print("cycle_loop: stopping before LLM call per planner request")
+                break
 
         # Skip if this cycle already has a review decision
         if _review_exists(repo_root, cycle_id):
@@ -327,7 +345,7 @@ def _find_resume_point(repo_root: Path) -> Path:
 
     assignment = _assignment_path(repo_root, next_cycle)
     if assignment.is_file():
-        _normalize_assignment_file(assignment)
+        _normalize_assignment_file(repo_root, assignment)
         print(f"cycle_loop: auto-resume → {assignment.relative_to(repo_root)}")
     else:
         print(
@@ -353,7 +371,7 @@ def _find_resume_point(repo_root: Path) -> Path:
             check=True,
         )
         # Patch the assignment with source_patch_mode
-        _normalize_assignment_file(assignment)
+        _normalize_assignment_file(repo_root, assignment)
     return assignment
 
 
@@ -384,17 +402,99 @@ def _next_assignment_path(repo_root: Path, next_cycle_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _normalize_assignment_file(assignment_path: Path) -> None:
+def _normalize_assignment_file(repo_root: Path, assignment_path: Path) -> None:
     """Ensure a Flow Agent assignment has self-consistent scope fields."""
     if not assignment_path.is_file():
         return
     payload = json.loads(assignment_path.read_text(encoding="utf-8"))
     normalized = normalize_flow_assignment_scope(payload)
+    normalized = _ensure_planning_fields(repo_root, normalized)
     if normalized != payload:
         assignment_path.write_text(
             json.dumps(normalized, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+
+def _ensure_planning_fields(
+    repo_root: Path,
+    assignment: dict[str, object],
+) -> dict[str, object]:
+    """Backfill deterministic planning fields for old checked-in assignments."""
+
+    if assignment.get("agent_name") != "flow_agent":
+        return assignment
+    meta = assignment.get("_planning_meta")
+    has_planning = (
+        isinstance(meta, dict)
+        and bool(assignment.get("promotion_thresholds"))
+        and bool(assignment.get("planner_hypothesis"))
+    )
+    if has_planning:
+        return assignment
+
+    previous_cycle_id = str(
+        assignment.get("previous_cycle_id")
+        or _previous_cycle_id(str(assignment.get("cycle_id", "cycle_001")))
+    )
+    engine = PlanningEngine(repo_root)
+    result = engine.plan(
+        previous_cycle_id,
+        benchmark_count=_benchmark_count(assignment),
+    )
+    if result is None:
+        return assignment
+
+    planned = {
+        **assignment,
+        "previous_cycle_id": previous_cycle_id,
+        **engine.next_assignment_updates(result),
+    }
+    return normalize_flow_assignment_scope(planned)
+
+
+def _benchmark_count(assignment: dict[str, object]) -> int | None:
+    scope = assignment.get("benchmark_scope", ())
+    if isinstance(scope, (str, bytes)):
+        return 1 if scope else None
+    try:
+        count = len(scope)  # type: ignore[arg-type]
+    except TypeError:
+        return None
+    return count or None
+
+
+def _previous_cycle_id(cycle_id: str) -> str:
+    prefix, _, num = cycle_id.rpartition("_")
+    if not num.isdigit():
+        return "cycle_000"
+    previous = max(0, int(num) - 1)
+    return f"{prefix}_{previous:0{len(num)}d}"
+
+
+def _planner_skip_requested(assignment_path: Path) -> bool:
+    try:
+        payload = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    meta = payload.get("_planning_meta")
+    return isinstance(meta, dict) and bool(meta.get("should_skip_llm"))
+
+
+def _planner_skip_message(assignment_path: Path) -> str:
+    try:
+        payload = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return "cycle_loop: planner requested skip LLM, but assignment is unreadable"
+    meta = payload.get("_planning_meta")
+    if not isinstance(meta, dict):
+        return "cycle_loop: planner requested skip LLM"
+    command = meta.get("target_command", "unknown")
+    rationale = meta.get("strategy_rationale", "")
+    return (
+        "cycle_loop: planner recommends batch_search before another LLM call "
+        f"(target_command={command}; rationale={rationale})"
+    )
 
 
 def _increment_cycle_id(cycle_id: str) -> str:

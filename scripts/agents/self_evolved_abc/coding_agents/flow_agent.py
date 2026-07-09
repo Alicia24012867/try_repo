@@ -37,7 +37,7 @@ from scripts.agents.self_evolved_abc.flow.validation import (
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 
 
-FLOW_SOURCE_CONTEXT_KEY_SUFFIXES = (
+FLOW_SOURCE_CONTEXT_COMMON_KEY_SUFFIXES = (
     "third_party/FlowTune/src/src/base/abci/abcFxu.c",
     "third_party/FlowTune/src/src/opt/csw/cswCore.c",
     "third_party/FlowTune/src/src/opt/fxu/fxuSelect.c",
@@ -45,9 +45,61 @@ FLOW_SOURCE_CONTEXT_KEY_SUFFIXES = (
     "third_party/FlowTune/src/src/opt/fxu/fxu.h",
     "third_party/FlowTune/src/src/opt/fxu/fxuCreate.c",
 )
+FLOW_SOURCE_CONTEXT_KEY_SUFFIXES_BY_COMMAND = {
+    "fx": (
+        "third_party/FlowTune/src/src/base/abci/abcFx.c",
+        "third_party/FlowTune/src/src/base/abci/abcFxu.c",
+        "third_party/FlowTune/src/src/opt/fxu/fxu.c",
+        "third_party/FlowTune/src/src/opt/fxu/fxuSelect.c",
+        "third_party/FlowTune/src/src/opt/fxu/fxuCreate.c",
+    ),
+    "rewrite": (
+        "third_party/FlowTune/src/src/base/abci/abcRewrite.c",
+        "third_party/FlowTune/src/src/opt/rwr/rwrEva.c",
+        "third_party/FlowTune/src/src/opt/rwr/rwrMan.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ),
+    "resub": (
+        "third_party/FlowTune/src/src/base/abci/abcResub.c",
+        "third_party/FlowTune/src/src/opt/res/resCore.c",
+        "third_party/FlowTune/src/src/opt/res/resWin.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ),
+    "dc2": (
+        "third_party/FlowTune/src/src/base/abci/abcDar.c",
+        "third_party/FlowTune/src/src/opt/dar/darCore.c",
+        "third_party/FlowTune/src/src/opt/dar/darScript.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ),
+    "csweep": (
+        "third_party/FlowTune/src/src/opt/csw/cswCore.c",
+        "third_party/FlowTune/src/src/base/abci/abcDar.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ),
+    "refactor": (
+        "third_party/FlowTune/src/src/base/abci/abcRefactor.c",
+        "third_party/FlowTune/src/src/opt/dar/darRefact.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ),
+}
+FLOW_SOURCE_CONTEXT_PATTERNS_BY_COMMAND = {
+    "fx": (
+        "Abc_CommandFx",
+        "Abc_CommandFxu",
+        "Fxu_FastExtract",
+        "Fxu_Select",
+        "LitCountMax",
+    ),
+    "rewrite": ("Abc_CommandRewrite", "Abc_NtkRewrite", "Rwr_NodeRewrite"),
+    "resub": ("Abc_CommandResubstitute", "Abc_NtkResubstitute", "Res_ManPerform"),
+    "dc2": ("Abc_CommandDc2", "Abc_NtkDC2", "Dar_ManCompress2"),
+    "csweep": ("Abc_CommandCSweep", "Abc_NtkCSweep", "Csw_Sweep"),
+    "refactor": ("Abc_CommandRefactor", "Abc_NtkRefactor", "Dar_ManRefactor"),
+}
 SOURCE_INDEX_LIMIT = 120
-KEY_SOURCE_LIMIT = 5
-KEY_SOURCE_CHAR_LIMIT = 2500
+KEY_SOURCE_LIMIT = 8
+KEY_SOURCE_CHAR_LIMIT = 6000
+SOURCE_CONTEXT_WINDOW_LINES = 80
 
 
 class FlowAgent(CodingAgent):
@@ -374,7 +426,7 @@ class FlowAgent(CodingAgent):
         key_files = self._select_key_source_files(all_files)
         if key_files:
             chunks.append("")
-            chunks.append("### Key File Contents (full source)")
+            chunks.append("### Key Source Context")
             chunks.append("")
             for rel, size in key_files:
                 path = self._source_context_file(Path(rel))
@@ -384,12 +436,7 @@ class FlowAgent(CodingAgent):
                     chunks.append(f"#### {rel}\n[could not read]\n")
                     continue
                 if len(content) > KEY_SOURCE_CHAR_LIMIT:
-                    half = KEY_SOURCE_CHAR_LIMIT // 2
-                    content = (
-                        content[:half].rstrip()
-                        + f"\n\n... [{len(content) - KEY_SOURCE_CHAR_LIMIT} chars omitted] ...\n\n"
-                        + content[-half:].lstrip()
-                    )
+                    content = self._source_excerpt(rel, content)
                 chunks.append(f"#### {rel} ({size} bytes)")
                 chunks.append("```c")
                 chunks.append(content)
@@ -443,11 +490,93 @@ class FlowAgent(CodingAgent):
     ) -> list[tuple[str, int]]:
         by_path = {rel: (rel, size) for rel, size in all_files}
         selected: list[tuple[str, int]] = []
-        for suffix in FLOW_SOURCE_CONTEXT_KEY_SUFFIXES:
-            item = by_path.get(suffix)
-            if item is not None:
-                selected.append(item)
+        seen: set[str] = set()
+
+        def add(rel: str) -> None:
+            item = by_path.get(rel)
+            if item is None or rel in seen:
+                return
+            selected.append(item)
+            seen.add(rel)
+
+        target_command = self._planned_target_command()
+        for suffix in FLOW_SOURCE_CONTEXT_KEY_SUFFIXES_BY_COMMAND.get(
+            target_command, ()
+        ):
+            add(suffix)
+        for suffix in FLOW_SOURCE_CONTEXT_COMMON_KEY_SUFFIXES:
+            add(suffix)
+
+        target_source_dir = self._planned_target_source_dir()
+        if target_source_dir:
+            prefix = target_source_dir.rstrip("/") + "/"
+            for rel, _size in all_files:
+                if rel.startswith(prefix):
+                    add(rel)
+                if len(selected) >= KEY_SOURCE_LIMIT:
+                    break
         return selected[:KEY_SOURCE_LIMIT]
+
+    def _planned_target_command(self) -> str:
+        meta = self.context.assignment.get("_planning_meta")
+        if isinstance(meta, Mapping):
+            command = str(meta.get("target_command", "")).strip()
+            if command:
+                return command
+        return str(self.context.assignment.get("target_command", "")).strip()
+
+    def _planned_target_source_dir(self) -> str:
+        meta = self.context.assignment.get("_planning_meta")
+        if isinstance(meta, Mapping):
+            source_dir = str(meta.get("target_source_dir", "")).strip()
+            if source_dir:
+                return source_dir
+        return str(self.context.assignment.get("target_source_dir", "")).strip()
+
+    def _source_excerpt(self, rel: str, content: str) -> str:
+        patterns = FLOW_SOURCE_CONTEXT_PATTERNS_BY_COMMAND.get(
+            self._planned_target_command(), ()
+        )
+        lines = content.splitlines()
+        windows: list[tuple[int, int]] = []
+        for index, line in enumerate(lines):
+            if not any(pattern in line for pattern in patterns):
+                continue
+            start = max(0, index - SOURCE_CONTEXT_WINDOW_LINES // 2)
+            end = min(len(lines), index + SOURCE_CONTEXT_WINDOW_LINES // 2)
+            windows.append((start, end))
+            if len(windows) >= 3:
+                break
+
+        if not windows:
+            half = KEY_SOURCE_CHAR_LIMIT // 2
+            return (
+                content[:half].rstrip()
+                + f"\n\n... [{len(content) - KEY_SOURCE_CHAR_LIMIT} chars omitted from {rel}] ...\n\n"
+                + content[-half:].lstrip()
+            )
+
+        merged: list[tuple[int, int]] = []
+        for start, end in windows:
+            if merged and start <= merged[-1][1]:
+                prev_start, prev_end = merged[-1]
+                merged[-1] = (prev_start, max(prev_end, end))
+            else:
+                merged.append((start, end))
+
+        snippets: list[str] = []
+        previous_end = 0
+        for start, end in merged:
+            if start > previous_end:
+                snippets.append(f"... [lines {previous_end + 1}-{start} omitted] ...")
+            snippets.extend(lines[start:end])
+            previous_end = end
+        if previous_end < len(lines):
+            snippets.append(f"... [lines {previous_end + 1}-{len(lines)} omitted] ...")
+        excerpt = "\n".join(snippets)
+        if len(excerpt) <= KEY_SOURCE_CHAR_LIMIT:
+            return excerpt
+        return excerpt[:KEY_SOURCE_CHAR_LIMIT].rstrip() + "\n... [excerpt truncated] ..."
 
     def _read_optional_block(self, label: str, path: Path, max_chars: int) -> str:
         if not path.exists():

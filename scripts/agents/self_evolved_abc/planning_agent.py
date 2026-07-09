@@ -87,6 +87,9 @@ class PlanningAgent(PaperAgent):
                         "rollback",
                         "instrumentation",
                         "evaluation_only",
+                        "review_or_followup",
+                        "batch_search",
+                        "hold",
                     ],
                 },
                 "candidate_id": {"type": "string"},
@@ -118,6 +121,10 @@ class PlanningAgent(PaperAgent):
                     "type": "array",
                     "items": {"type": "string"},
                 },
+                "evaluation_flow_commands": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
                 "evidence_summary": {
                     "type": "object",
                     "properties": {
@@ -133,6 +140,7 @@ class PlanningAgent(PaperAgent):
                     "type": "array",
                     "items": {"type": "string"},
                 },
+                "validation_evidence": {"type": "object"},
                 "rollback_criteria": {
                     "type": "array",
                     "items": {"type": "string"},
@@ -410,4 +418,3 @@ class PlanningAgent(PaperAgent):
             raise ValueError(
                 "Planning Agent prompt still contains scaffold TODO."
             )
-

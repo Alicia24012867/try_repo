@@ -126,8 +126,9 @@ def select_strategy(
 def _default_strategy(cycle_number: int) -> Strategy:
     """First-cycle or fallback: target csweep (most reliable nonzero signal).
 
-    The compliance doc confirms csweep is the only source family with nonzero
-    signal in deterministic sweeps.
+    First-cycle planning should still produce an executable LLM task. Batch
+    search is reserved for evidence-backed zero-delta or repeated weak-signal
+    cycles.
     """
     return Strategy(
         task_type="optimization",
@@ -143,7 +144,7 @@ def _default_strategy(cycle_number: int) -> Strategy:
             "signal in batch_search. Targeting known-productive parameters "
             "avoids zero-delta cycles."
         ),
-        should_skip_llm=(cycle_number <= 3),
+        should_skip_llm=False,
     )
 
 

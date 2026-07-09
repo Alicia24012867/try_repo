@@ -9,7 +9,7 @@ from typing import Mapping
 
 @dataclass(frozen=True)
 class PromotionThresholds:
-    min_average_and_improve_pct: float = 0.05
+    min_average_and_improve_pct: float = 3.0
     min_total_and_reduction: int = 10
     min_improved_benchmarks: int = 2
 

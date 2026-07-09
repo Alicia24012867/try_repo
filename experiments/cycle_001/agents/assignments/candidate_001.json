@@ -1,15 +1,32 @@
 {
+  "_planning_meta": {
+    "discouraged_targets": [],
+    "engine": "deterministic",
+    "should_relax_thresholds": false,
+    "should_skip_llm": false,
+    "strategy_rationale": "csweep is the only eval-flow command family with confirmed nonzero signal in batch_search. Targeting known-productive parameters avoids zero-delta cycles.",
+    "target_command": "csweep",
+    "target_parameter_kind": "cut_limit",
+    "target_source_dir": "third_party/FlowTune/src/src/opt/csw",
+    "task_type": "optimization",
+    "threshold_rationale": "min_improved_benchmarks=3 (10% of 30 designs, capped at 5); min_average_and_improve_pct=1.8% (early-cycle leniency: 3.0% \u00d7 0.6); min_total_and_reduction=15 (for 30 designs)"
+  },
   "agent_name": "flow_agent",
-  "paper_role": "Flow Agent",
-  "cycle_id": "cycle_001",
-  "candidate_id": "candidate_001",
-  "subsystem": "third_party/FlowTune/src/src/opt",
-  "planner_hypothesis": "Use the previous cycle's QoR and skipped-case evidence to propose one conservative flow candidate for a small benchmark subset.",
-  "target_metric": "and_count",
-  "secondary_metrics": [
-    "depth",
-    "runtime",
-    "stability"
+  "allowed_to_edit": [
+    "experiments/cycle_001/agents",
+    "experiments/cycle_001/logs",
+    "experiments/cycle_001/outputs",
+    "experiments/cycle_001/results",
+    "experiments/cycle_001/impl_compare",
+    "configs/flows",
+    "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci"
+  ],
+  "allowed_to_read": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md",
+    "experiments/cycle_000/outputs"
   ],
   "benchmark_scope": [
     "benchmarks/epfl/epfl_adder.blif",
@@ -43,35 +60,9 @@
     "benchmarks/iscas89/s420.blif",
     "benchmarks/iscas89/s444.blif"
   ],
-  "allowed_to_read": [
-    "experiments/cycle_000/results/summary.csv",
-    "experiments/cycle_000/results/skipped.csv",
-    "experiments/cycle_000/results/run_notes.md",
-    "experiments/cycle_000/outputs"
-  ],
-  "allowed_to_edit": [
-    "experiments/cycle_001/agents",
-    "experiments/cycle_001/logs",
-    "experiments/cycle_001/outputs",
-    "experiments/cycle_001/results",
-    "experiments/cycle_001/impl_compare",
-    "configs/flows",
-    "third_party/FlowTune/src/src/opt",
-    "third_party/FlowTune/src/src/base/abci",
-    "scripts/agents/self_evolved_abc/flow",
-    "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
-    "configs/agents/prompts"
-  ],
-  "recent_evidence": [
-    "experiments/cycle_000/results/summary.csv",
-    "experiments/cycle_000/results/skipped.csv",
-    "experiments/cycle_000/results/run_notes.md"
-  ],
-  "source_patch_mode": "source_patch_diff",
-  "source_patch_allowed_roots": [
-    "third_party/FlowTune/src/src/opt",
-    "third_party/FlowTune/src/src/base/abci"
-  ],
+  "candidate_id": "candidate_001",
+  "cycle_id": "cycle_001",
+  "discouraged_patch_targets": [],
   "evaluation_flow_commands": [
     "fx",
     "strash",
@@ -84,17 +75,62 @@
     "print_stats"
   ],
   "flow_source_touchpoints": {
-    "fx": [
-      "third_party/FlowTune/src/src/opt/fxu",
-      "third_party/FlowTune/src/src/base/abci/abcFxu.c"
-    ],
-    "rewrite/refactor/resub/dc2": [
-      "third_party/FlowTune/src/src/opt",
-      "third_party/FlowTune/src/src/base/abci"
-    ],
     "csweep": [
       "third_party/FlowTune/src/src/opt/csw",
-      "third_party/FlowTune/src/src/base/abci/abcSweep.c"
+      "third_party/FlowTune/src/src/base/abci/abcDar.c",
+      "third_party/FlowTune/src/src/base/abci/abc.c"
+    ],
+    "dc2": [
+      "third_party/FlowTune/src/src/opt/dar",
+      "third_party/FlowTune/src/src/base/abci/abcDar.c",
+      "third_party/FlowTune/src/src/base/abci/abc.c"
+    ],
+    "fx": [
+      "third_party/FlowTune/src/src/opt/fxu",
+      "third_party/FlowTune/src/src/base/abci/abcFx.c",
+      "third_party/FlowTune/src/src/base/abci/abcFxu.c"
+    ],
+    "refactor": [
+      "third_party/FlowTune/src/src/base/abci/abcRefactor.c",
+      "third_party/FlowTune/src/src/opt/dar",
+      "third_party/FlowTune/src/src/base/abci/abc.c"
+    ],
+    "resub": [
+      "third_party/FlowTune/src/src/opt/res",
+      "third_party/FlowTune/src/src/base/abci/abcResub.c"
+    ],
+    "rewrite": [
+      "third_party/FlowTune/src/src/opt/rwr",
+      "third_party/FlowTune/src/src/base/abci/abcRewrite.c"
     ]
-  }
+  },
+  "paper_role": "Flow Agent",
+  "planner_hypothesis": "No previous cycle evidence is available. This is the first Flow Agent source-patch cycle.\nStrategy: optimization. Target command: `csweep`. Rationale: csweep is the only eval-flow command family with confirmed nonzero signal in batch_search. Targeting known-productive parameters avoids zero-delta cycles.\nPromotion thresholds for next champion: avg AND improvement >= 1.8%, total AND reduction >= 15, improved benchmarks >= 3. (min_improved_benchmarks=3 (10% of 30 designs, capped at 5); min_average_and_improve_pct=1.8% (early-cycle leniency: 3.0% \u00d7 0.6); min_total_and_reduction=15 (for 30 designs))\nIncrease csweep cut/leaf floors unconditionally in Csw_Sweep before Csw_ManStart to expand the cut-sweeping search space.",
+  "planner_should_skip_llm": false,
+  "previous_cycle_id": "cycle_000",
+  "promotion_thresholds": {
+    "min_average_and_improve_pct": 1.7999999999999998,
+    "min_improved_benchmarks": 3,
+    "min_total_and_reduction": 15
+  },
+  "recent_evidence": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md"
+  ],
+  "secondary_metrics": [
+    "depth",
+    "runtime",
+    "stability"
+  ],
+  "source_patch_allowed_roots": [
+    "third_party/FlowTune/src/src/opt",
+    "third_party/FlowTune/src/src/base/abci"
+  ],
+  "source_patch_mode": "source_patch_diff",
+  "subsystem": "third_party/FlowTune/src/src/opt",
+  "target_command": "csweep",
+  "target_metric": "and_count",
+  "target_parameter_kind": "cut_limit",
+  "target_source_dir": "third_party/FlowTune/src/src/opt/csw"
 }

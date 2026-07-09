@@ -34,6 +34,7 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOWTUNE_ABCI_SCOPE,
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
 )
+from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
 
 CYCLE_RE = re.compile(r"^cycle_\d{3,}$")
 
@@ -78,11 +79,6 @@ def create_cycle_dirs(cycle_dir: Path) -> None:
         gitkeep = path / ".gitkeep"
         gitkeep.touch(exist_ok=True)
         
-def build_assignment(args: argparse.Namespace) -> dict[str, object]:
-    previous = f"experiments/{args.previous_cycle}"
-    benchmarks = list(args.benchmark) or _default_benchmarks(args.repo_root)
-
-
 def _default_benchmarks(repo_root: Path) -> list[str]:
     """Expand EPFL + ISCAS85 + ISCAS89 .blif globs into a sorted scope."""
     patterns = (
@@ -135,7 +131,33 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
     }
-    return normalize_flow_assignment_scope(assignment)
+    assignment = normalize_flow_assignment_scope(assignment)
+    return _apply_initial_planning(args.repo_root, args.previous_cycle, assignment)
+
+
+def _apply_initial_planning(
+    repo_root: Path,
+    previous_cycle_id: str,
+    assignment: dict[str, object],
+) -> dict[str, object]:
+    """Seed new Flow Agent assignments with deterministic planner output."""
+
+    if assignment.get("agent_name") != "flow_agent":
+        return assignment
+    engine = PlanningEngine(repo_root)
+    result = engine.plan(
+        previous_cycle_id,
+        benchmark_count=len(assignment.get("benchmark_scope", ())) or None,
+    )
+    if result is None:
+        return assignment
+
+    planned = {
+        **assignment,
+        "previous_cycle_id": previous_cycle_id,
+        **engine.next_assignment_updates(result),
+    }
+    return normalize_flow_assignment_scope(planned)
     
 def write_json(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
     if path.exists() and not overwrite:

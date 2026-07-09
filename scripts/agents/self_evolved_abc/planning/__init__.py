@@ -5,8 +5,10 @@ target commands and source directories, and generates actionable hypotheses
 without an LLM call. The LLM-based planner (planning_agent.py) renders the
 paper-aligned planner prompt and delegates to the model.
 
-Neither is wired into the running loop yet — they operate on completed cycle
-artifacts and produce assignment updates for the next cycle.
+The deterministic engine is wired into cycle initialization, auto-resume
+normalization, and next-cycle assignment generation. It persists planning
+metadata so later cycles can reconstruct command history and avoid repeated
+zero-delta targets.
 """
 
 from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine

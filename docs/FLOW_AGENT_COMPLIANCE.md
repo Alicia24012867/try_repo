@@ -31,6 +31,29 @@ on the Linux server.
 - Flow Agent prompt source context is bounded. The model sees a source index and
   selected key snippets instead of every matching `fxu`/`opt` file, improving
   token efficiency and feedback focus.
+- Planning metadata is now injected at all assignment entry points:
+  `init_cycle.py`, `cycle_loop --auto-resume`, and `next_cycle.py`.
+- Flow command touchpoints are split per reachable command (`fx`, `rewrite`,
+  `resub`, `dc2`, `csweep`, `refactor`) instead of one coarse shared mapping.
+- `source_patch_diff` assignments no longer allow model-generated changes to
+  prompt/evaluation harness paths; framework repairs remain outside the Flow
+  Agent source-diff loop.
+- CEC is run with the baseline/champion ABC binary so the equivalence checker
+  is independent of candidate source edits.
+
+## Local Compliance Pass: Planning Agent Integration
+
+- `cycle_001` is planner-seeded with target command `csweep`, target source
+  directory `third_party/FlowTune/src/src/opt/csw`, 30-design adaptive
+  thresholds, and `_planning_meta` for cross-cycle history.
+- The first no-evidence cycle remains executable by the LLM. Batch-search skip
+  recommendations are reserved for evidence-backed zero-delta or repeated weak
+  signal cycles.
+- Flow Agent source context now follows the planner target and extracts nearby
+  source windows around command functions, reducing behavior-neutral edits from
+  missing context.
+- Review still refuses weak one-row improvements unless they meet the configured
+  correctness-backed promotion thresholds.
 
 ## Remote Diagnosis: No Champion After Cycle 004
 

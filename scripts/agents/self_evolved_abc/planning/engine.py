@@ -64,7 +64,12 @@ class PlanningEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    def plan(self, previous_cycle_id: str) -> PlanningResult | None:
+    def plan(
+        self,
+        previous_cycle_id: str,
+        *,
+        benchmark_count: int | None = None,
+    ) -> PlanningResult | None:
         """Plan the next cycle based on the previous cycle's evidence.
 
         Reconstructs cross-cycle history by scanning earlier cycles'
@@ -89,15 +94,15 @@ class PlanningEngine:
             self._repo_root, previous_cycle_id
         )
 
-        benchmark_count = (
+        effective_benchmark_count = (
             len(evidence.per_benchmark)
             if evidence is not None and evidence.per_benchmark
-            else 30
+            else benchmark_count or 30
         )
 
         # --- Thresholds ---
         thresholds = propose_thresholds(
-            benchmark_count=benchmark_count,
+            benchmark_count=effective_benchmark_count,
             previous_evidence=tuple(history),
             cycle_number=cycle_number,
         )
@@ -107,7 +112,7 @@ class PlanningEngine:
             evidence,
             previous_strategies=tuple(strategies),
             cycle_number=cycle_number,
-            benchmark_count=benchmark_count,
+            benchmark_count=effective_benchmark_count,
         )
         strategies.append(strategy)
 
@@ -155,28 +160,23 @@ class PlanningEngine:
         """Build the fields to merge into a next-cycle assignment."""
         strategy = result.strategy
         thresholds = result.thresholds
+        planning_meta = planning_meta_from_result(result)
 
         return {
             "planner_hypothesis": result.hypothesis,
             "promotion_thresholds": thresholds.as_dict(),
             "discouraged_patch_targets": list(strategy.discouraged_targets),
+            "target_command": strategy.target_command,
+            "target_source_dir": strategy.target_source_dir,
+            "target_parameter_kind": strategy.target_parameter_kind,
+            "planner_should_skip_llm": strategy.should_skip_llm,
             "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
             "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
             "source_patch_allowed_roots": [
                 FLOWTUNE_SOURCE_SCOPE_PRIMARY,
                 FLOWTUNE_ABCI_SCOPE,
             ],
-            "_planning_meta": {
-                "engine": "deterministic",
-                "task_type": strategy.task_type,
-                "target_command": strategy.target_command,
-                "target_source_dir": strategy.target_source_dir,
-                "target_parameter_kind": strategy.target_parameter_kind,
-                "should_skip_llm": strategy.should_skip_llm,
-                "should_relax_thresholds": strategy.should_relax_thresholds,
-                "threshold_rationale": thresholds.adjustment_reason,
-                "discouraged_targets": list(strategy.discouraged_targets),
-            },
+            "_planning_meta": planning_meta,
         }
 
     # ------------------------------------------------------------------
@@ -215,9 +215,9 @@ class PlanningEngine:
             if evidence.all_deltas_zero:
                 parts.append(
                     "ALL benchmarks had ZERO AND-node change — the patch "
-                    "did NOT execute at runtime. Check: was the changed code "
-                    "guarded by a condition that is never true? Was the "
-                    "changed constant overridden before use?"
+                    "did not affect reached synthesis behavior. Check: was "
+                    "the changed code guarded by a condition that is never "
+                    "true? Was the changed constant overridden before use?"
                 )
         else:
             parts.append(
@@ -262,6 +262,25 @@ class PlanningEngine:
         parts.append(strategy.hypothesis_template)
 
         return "\n".join(parts)
+
+
+def planning_meta_from_result(result: PlanningResult) -> dict[str, object]:
+    """Return the persisted planning metadata for cross-cycle history."""
+
+    strategy = result.strategy
+    thresholds = result.thresholds
+    return {
+        "engine": "deterministic",
+        "task_type": strategy.task_type,
+        "target_command": strategy.target_command,
+        "target_source_dir": strategy.target_source_dir,
+        "target_parameter_kind": strategy.target_parameter_kind,
+        "should_skip_llm": strategy.should_skip_llm,
+        "should_relax_thresholds": strategy.should_relax_thresholds,
+        "threshold_rationale": thresholds.adjustment_reason,
+        "strategy_rationale": strategy.rationale,
+        "discouraged_targets": list(strategy.discouraged_targets),
+    }
 
 
 # ------------------------------------------------------------------

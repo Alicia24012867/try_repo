@@ -190,8 +190,8 @@ check(
     hasattr(Strategy, "should_skip_llm"),
 )
 check(
-    "Compliance: default_strategy skips LLM in early cycles",
-    select_strategy(None, cycle_number=1, benchmark_count=30).should_skip_llm,
+    "Compliance: first planned cycle is executable",
+    not select_strategy(None, cycle_number=1, benchmark_count=30).should_skip_llm,
 )
 
 
@@ -324,7 +324,7 @@ section("2. STRATEGY SELECTION — every routing branch")
 s = select_strategy(None, cycle_number=1, benchmark_count=30)
 check("2a: default task_type", s.task_type == "optimization")
 check("2a: default command", s.target_command == "csweep")
-check("2a: default skip_llm", s.should_skip_llm)
+check("2a: default does not skip LLM", not s.should_skip_llm)
 
 # 2b: Build failure → repair
 ev_build = CycleEvidence(
@@ -477,8 +477,8 @@ check("3g: gap mentions improved", "improved" in gap.lower())
 # _source_dir_for_command edge cases
 check("3h: unknown command → opt fallback",
       _source_dir_for_command("nonexistent") == "third_party/FlowTune/src/src/opt")
-check("3i: rewrite maps to opt",
-      _source_dir_for_command("rewrite") == "third_party/FlowTune/src/src/opt")
+check("3i: rewrite maps to opt/rwr",
+      _source_dir_for_command("rewrite") == "third_party/FlowTune/src/src/opt/rwr")
 
 # _default_parameter_kind edge cases
 check("3j: unknown command → numeric_parameter",
@@ -541,7 +541,7 @@ with tempfile.TemporaryDirectory() as tmp:
     check("5a: plan without evidence returns result", result is not None)
     check("5a: next_cycle_id", result is not None and result.next_cycle_id == "cycle_002")
     check("5a: default strategy csweep", result is not None and result.strategy.target_command == "csweep")
-    check("5a: skip_llm=True", result is not None and result.strategy.should_skip_llm)
+    check("5a: skip_llm=False", result is not None and not result.strategy.should_skip_llm)
 
     if result:
         # 5b: next_assignment_updates

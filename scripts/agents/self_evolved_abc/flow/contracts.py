@@ -54,7 +54,6 @@ FLOW_SOURCE_PATCH_DIFF_ALLOWED_ROOTS = (
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
     FLOWTUNE_ABCI_SCOPE,
     "third_party/FlowTune/src/src/map/mapper",
-    *FLOW_INFRA_ALLOWED_ROOTS,
 )
 FLOW_SOURCE_PATCH_TODO_ALLOWED_ROOTS = FLOW_INFRA_ALLOWED_ROOTS
 
@@ -83,15 +82,31 @@ DEFAULT_EVAL_FLOW_COMMANDS = (
 FLOW_SOURCE_TOUCHPOINTS = {
     "fx": [
         "third_party/FlowTune/src/src/opt/fxu",
+        "third_party/FlowTune/src/src/base/abci/abcFx.c",
         "third_party/FlowTune/src/src/base/abci/abcFxu.c",
     ],
-    "rewrite/refactor/resub/dc2": [
-        "third_party/FlowTune/src/src/opt",
-        "third_party/FlowTune/src/src/base/abci",
+    "rewrite": [
+        "third_party/FlowTune/src/src/opt/rwr",
+        "third_party/FlowTune/src/src/base/abci/abcRewrite.c",
+    ],
+    "resub": [
+        "third_party/FlowTune/src/src/opt/res",
+        "third_party/FlowTune/src/src/base/abci/abcResub.c",
+    ],
+    "dc2": [
+        "third_party/FlowTune/src/src/opt/dar",
+        "third_party/FlowTune/src/src/base/abci/abcDar.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
+    ],
+    "refactor": [
+        "third_party/FlowTune/src/src/base/abci/abcRefactor.c",
+        "third_party/FlowTune/src/src/opt/dar",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
     ],
     "csweep": [
         "third_party/FlowTune/src/src/opt/csw",
-        "third_party/FlowTune/src/src/base/abci/abcSweep.c",
+        "third_party/FlowTune/src/src/base/abci/abcDar.c",
+        "third_party/FlowTune/src/src/base/abci/abc.c",
     ],
 }
 

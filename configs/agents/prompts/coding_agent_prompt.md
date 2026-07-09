@@ -78,8 +78,8 @@ path for the paper's autonomous feedback iteration over source code.
      Patching` and under the assignment's source-patch roots.
    - Use `nwk/` files for network-level FlowTune behavior, structural metrics,
      and local flow bookkeeping.
-   - Use `fxu/` files only for factoring/extraction behavior that the planner
-     explicitly frames as FlowTune-local.
+   - Use `csw/`, `fxu/`, `rwr/`, `res/`, or `dar/` only when the planner's
+     target command and `FLOW_TOUCHPOINTS` explicitly identify that family.
    - Use `fsim/` files for simulation-driven sampling or switching feedback.
    - Use `ret/` files only when the planner explicitly authorizes retiming or
      flow-related behavior in that directory.
@@ -229,8 +229,11 @@ in your `rationale`:
 - hard-coding design names or benchmark paths
 - changes targeting a file NOT listed in `{{FLOW_TOUCHPOINTS}}`
 
-Keep FlowTune as an ABC command.  Do not alter core rewrite, resubstitution,
-refactor, or mapper internals.  Use the real source code shown in
+Keep FlowTune as an ABC command.  Do not alter mapper internals.  If the
+planner explicitly targets `rewrite`, `resub`, `dc2`, or `refactor` in this
+Flow Agent reproduction, keep the edit to a command wrapper/default parameter
+or a narrow heuristic shown in `FLOW_TOUCHPOINTS`; broader algorithmic rewrites
+belong to the Logic Minimization Agent.  Use the real source code shown in
 `{{SOURCE_FILES}}` — match function names and line context exactly.
 
 ### If You Are `logic_minimization_agent`

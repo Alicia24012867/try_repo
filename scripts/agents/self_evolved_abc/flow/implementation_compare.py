@@ -204,7 +204,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 output_root=output_root,
                 baseline=baseline,
                 candidate=candidate,
-                abc_bin=candidate_abc_bin,
+                abc_bin=baseline_abc_bin,
                 timeout_seconds=args.cec_timeout_seconds,
                 from_existing_logs=args.from_existing_logs,
             )

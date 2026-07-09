@@ -15,16 +15,22 @@ the next iteration — all without human intervention.
 - **Benchmark scope expanded** from 3 EPFL to 30 designs (EPFL + ISCAS85 + ISCAS89).
 - **Planning Agent implemented** — deterministic planning engine selects strategy,
   target command, source directory, and adaptive thresholds for each cycle.
+- **Planning Agent wired into execution** — `init_cycle.py`, `cycle_loop
+  --auto-resume`, and `next_cycle.py` now seed assignments with deterministic
+  planning metadata before the Flow Agent is called.
 - The Flow Agent source-patch feedback loop is wired and locally smoke-tested:
   - Model proposes `source_patch_diff` targeting real FlowTune C source.
   - Patch is applied in an isolated workspace, binary built, CEC run.
   - Review decision is generated, and evidence feeds into the next cycle.
   - Planning Engine generates `planner_hypothesis` with adaptive thresholds.
+  - Prompt source context follows the planner-selected command and includes
+    targeted source excerpts around reachable command functions.
   - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
     cycle — no manual trigger needed.
 - Assignment scope is normalized through `flow/assignment.py`, so
   `source_patch_diff` cycles consistently allow FlowTune `opt/`, the relevant
-  `base/abci/` command wrappers, and active-cycle artifact directories.
+  `base/abci/` command wrappers, and active-cycle artifact directories while
+  blocking model-written changes to prompts or evaluation harness code.
 - `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
   starts the full autonomous loop.
 - Validation failures are retried with diagnostic feedback, and review
@@ -37,6 +43,27 @@ the next iteration — all without human intervention.
 Local macOS development is used for editing, prompt/schema validation, and
 Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
 QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
+
+## Why No Champion Happens
+
+The paper's system gets dense reward feedback: many benchmark suites, multiple
+synthesis flows, compile and CEC before QoR, and auxiliary structural, mapping,
+STA, and runtime metrics. This reproduction is intentionally smaller, so one
+LLM patch plus one flow recipe can easily produce zero deltas or a one-row
+improvement. A candidate that improves only one benchmark by a few AND nodes is
+weak evidence and should not become a champion.
+
+Recent implementation issues also made the signal weaker than necessary:
+
+- `cycle_001` was not planner-seeded, so the Flow Agent received a generic
+  task instead of a concrete command/source target.
+- Command touchpoints were too coarse, making it easy to patch code that the
+  evaluated flow did not reach.
+- Prompt source context was static and biased toward a few `fxu`/`csw` files.
+- CEC used the candidate binary; it now uses the baseline/champion binary to
+  keep the correctness checker independent of candidate edits.
+- Legacy source-patch scope allowed framework/prompt edits; source diffs are
+  now restricted to ABC/FlowTune source plus active-cycle artifacts.
 
 ## Project Structure
 
@@ -82,7 +109,20 @@ python3 -B -m py_compile \
   scripts/agents/self_evolved_abc/flow/review.py \
   scripts/agents/self_evolved_abc/flow/next_cycle.py \
   scripts/agents/self_evolved_abc/flow/batch_search.py \
+  scripts/agents/self_evolved_abc/flow/implementation_compare.py \
+  scripts/agents/self_evolved_abc/flow/cycle_loop.py \
+  scripts/agents/self_evolved_abc/planning/engine.py \
+  scripts/agents/self_evolved_abc/planning/strategy.py \
+  scripts/agents/self_evolved_abc/planning_agent.py \
   scripts/agents/self_evolved_abc/coding_agents/flow_agent.py
+```
+
+Planning and fixture smoke checks:
+
+```bash
+PYTHONPATH=. python3 -B scripts/test_planning_agent.py
+
+PYTHONPATH=. python3 -B -c "from pathlib import Path; from scripts.agents.self_evolved_abc.cycle_context import CycleContext; from scripts.agents.self_evolved_abc.flow.source_patch_runner import run_validation_fixture_smoke; ctx=CycleContext.from_assignment_file(Path('.').resolve(), Path('experiments/cycle_001/agents/assignments/candidate_001.json')); lines=[]; code=run_validation_fixture_smoke(ctx, lines); print('\n'.join(lines)); raise SystemExit(code)"
 ```
 
 The checked-in FlowTune binary is a Linux executable. On macOS it may fail with
@@ -110,6 +150,11 @@ bash run.sh
 
 `run.sh` wraps `cycle_loop.py --auto-resume`, so running it again continues
 from the last completed cycle without overwriting any data.
+
+When a completed cycle produces zero deltas or repeated weak evidence, the
+planner may recommend batch search before another LLM call. The loop prints
+that recommendation; pass `--honor-planner-skip-llm` to `cycle_loop.py` if you
+want the remote run to stop before spending the next model call.
 
 Recommended workflow:
 
@@ -238,18 +283,21 @@ experiments/cycle_NNN/
 `cycle_000` is the baseline evidence cycle. All subsequent cycles are generated
 automatically by `next_cycle.py` at the end of each iteration.
 
-`cycle_001` starts in `source_patch_diff` mode. Its assignment targets
-`third_party/FlowTune/src/src/opt` plus `third_party/FlowTune/src/src/base/abci`
-and uses a small EPFL benchmark scope (`epfl_adder`, `epfl_bar`, `epfl_sqrt`)
-for the first source-level feedback loop. The default evaluation flow includes
-`fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor` so source patches have
-a better chance to be exercised before CEC-backed QoR review.
+`cycle_001` starts in `source_patch_diff` mode. Its assignment is seeded by the
+deterministic Planning Engine, targets `csweep` first, and evaluates the 30
+design EPFL + ISCAS85 + ISCAS89 scope. Source edits are limited to
+`third_party/FlowTune/src/src/opt` plus the relevant
+`third_party/FlowTune/src/src/base/abci` command wrappers. The default
+evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and
+`refactor` so source patches have a better chance to be exercised before
+CEC-backed QoR review.
 
 ## Planning Agent
 
 The Planning Agent drives Flow Agent self-evolution through a deterministic
-rule-based engine. It is wired into `next_cycle.py` and runs automatically at
-the end of every cycle.
+rule-based engine. It is wired into `init_cycle.py`, `cycle_loop --auto-resume`,
+and `next_cycle.py`, so both first-cycle and follow-up assignments carry the
+same planner contract.
 
 ### Architecture
 
@@ -268,11 +316,14 @@ PlanningEngine.plan()
 next_cycle assignment  (planner_hypothesis, thresholds, discouraged_targets, _planning_meta)
 ```
 
+Auto-resume also backfills this metadata for older checked-in assignments, so
+`cycle_001` no longer starts from a generic, unplanned Flow Agent task.
+
 ### Strategy Routing
 
 | Evidence | Strategy | Action |
 |----------|----------|--------|
-| No prior cycles | `optimization` | Default: csweep, recommend batch_search |
+| No prior cycles | `optimization` | Default: csweep, execute first planned LLM cycle |
 | Build/CEC failure | `repair` | Fix the gate, carry discouraged targets |
 | Champion promoted | `optimization` | Exploit same command, vary parameter |
 | REPAIR_QOR + zero delta | `optimization` | Switch to untried command, batch first |
@@ -309,7 +360,8 @@ F1  cycle_driver      model proposes source_patch_diff (with retry on failure)
 S4d source_patch_runner  apply diff to isolated workspace (git apply --recount)
 S4c source_patch_runner  Python smoke gate (py_compile + fixture validation)
 S4e source_patch_runner  compile candidate ABC binary in workspace
-S5/F7 impl_compare    CEC verification + QoR delta (correctness-backed)
+S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
+                      (correctness-backed)
      review.py         classify: REPAIR_VALIDATION | PATCH | SMOKE | COMPILE
                        | REJECT_CEC | REPAIR_QOR | ACCEPT_FOR_NEXT_CYCLE
      next_cycle.py     generate next-cycle assignment with evidence chain

@@ -86,6 +86,7 @@ def build_flow_allowed_to_edit(
 ) -> tuple[str, ...]:
     """Build an ordered, de-duplicated edit scope for Flow Agent work."""
 
+    existing_paths = tuple(existing)
     roots: list[object] = [
         *flow_cycle_write_roots(cycle_id),
         "configs/flows",
@@ -95,8 +96,14 @@ def build_flow_allowed_to_edit(
         roots.extend(
             default_source_patch_allowed_roots(mode, source_patch_allowed_roots)
         )
-    roots.extend(FLOW_INFRA_ALLOWED_ROOTS)
-    roots.extend(existing)
+        existing_paths = tuple(
+            path
+            for path in existing_paths
+            if str(path).strip() not in FLOW_INFRA_ALLOWED_ROOTS
+        )
+    else:
+        roots.extend(FLOW_INFRA_ALLOWED_ROOTS)
+    roots.extend(existing_paths)
     return _clean_paths(roots)
 
 
