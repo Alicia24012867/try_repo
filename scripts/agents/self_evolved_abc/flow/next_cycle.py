@@ -1,4 +1,9 @@
-"""Generate the next Flow Agent assignment from reviewed cycle feedback."""
+"""Generate the next Flow Agent assignment from reviewed cycle feedback.
+
+Uses the deterministic PlanningEngine to select strategy, target command,
+and adaptive thresholds.  The engine overrides hard-coded planner logic
+when cycle evidence is available.
+"""
 
 from __future__ import annotations
 
@@ -25,6 +30,7 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
 from scripts.agents.self_evolved_abc.flow.promotion import (
     normalize_promotion_thresholds,
 )
+from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
 
 
 CYCLE_RE = re.compile(r"^cycle_(?P<number>\d{3,})$")
@@ -87,6 +93,40 @@ def build_next_assignment(
         f"{previous_base}/agents/feedback/{context.candidate_id}.md",
         f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
     ]
+
+    # --- Planning engine integration ---
+    engine = PlanningEngine(context.repo_root)
+    plan_result = engine.plan(context.cycle_id)
+    if plan_result is not None:
+        planner_hypothesis = plan_result.hypothesis
+        promotion_thresholds = plan_result.thresholds.as_dict()
+        discouraged = list(plan_result.strategy.discouraged_targets)
+        planning_meta: dict[str, object] = {
+            "engine": "deterministic",
+            "task_type": plan_result.strategy.task_type,
+            "target_command": plan_result.strategy.target_command,
+            "target_source_dir": plan_result.strategy.target_source_dir,
+            "target_parameter_kind": plan_result.strategy.target_parameter_kind,
+            "should_skip_llm": plan_result.strategy.should_skip_llm,
+            "should_relax_thresholds": plan_result.strategy.should_relax_thresholds,
+            "threshold_rationale": plan_result.thresholds.adjustment_reason,
+            "strategy_rationale": plan_result.strategy.rationale,
+        }
+        if plan_result.strategy.should_skip_llm:
+            print(
+                f"\n*** PLANNING ENGINE: recommend skipping LLM cycle {next_cycle}. "
+                f"Run batch_search targeting `{plan_result.strategy.target_command}` "
+                f"instead.\n"
+            )
+    else:
+        # No previous cycle evidence — use legacy hard-coded logic
+        planner_hypothesis = _build_planner_hypothesis(context, review)
+        promotion_thresholds = normalize_promotion_thresholds(
+            current.get("promotion_thresholds")
+        ).as_dict()
+        discouraged = discouraged_targets
+        planning_meta = {"engine": "legacy", "reason": "no_previous_evidence"}
+
     assignment = {
         "agent_name": current.get("agent_name", "flow_agent"),
         "paper_role": current.get("paper_role", "Flow Agent"),
@@ -95,14 +135,12 @@ def build_next_assignment(
         "candidate_id": candidate_id,
         "subsystem": FLOWTUNE_SOURCE_SCOPE_PRIMARY,
         "previous_review_decision": review.get("decision", "missing"),
-        "planner_hypothesis": _build_planner_hypothesis(context, review),
+        "planner_hypothesis": planner_hypothesis,
         "target_metric": current.get("target_metric", "and_count"),
         "secondary_metrics": current.get(
             "secondary_metrics", ["depth", "runtime", "stability"]
         ),
-        "promotion_thresholds": normalize_promotion_thresholds(
-            current.get("promotion_thresholds")
-        ).as_dict(),
+        "promotion_thresholds": promotion_thresholds,
         "benchmark_scope": current.get("benchmark_scope", ()),
         "allowed_to_read": evidence,
         "recent_evidence": evidence,
@@ -113,7 +151,8 @@ def build_next_assignment(
         ],
         "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
-        "discouraged_patch_targets": discouraged_targets,
+        "discouraged_patch_targets": discouraged,
+        "_planning_meta": planning_meta,
         **champion,
     }
     return normalize_flow_assignment_scope(assignment)
