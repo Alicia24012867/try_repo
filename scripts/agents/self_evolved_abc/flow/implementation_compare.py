@@ -800,7 +800,7 @@ def write_impl_compare_summary(
     )
     backed_rows = [row for row in delta_rows if row["correctness_backed"]]
     avg_and_improve = average_float(row["and_improve_pct"] for row in backed_rows)
-    promotion_allowed = (
+    comparison_reviewable = (
         build_status in CANDIDATE_BUILD_READY_STATUSES
         and cec_pass == len(cec_results)
         and len(cec_results) > 0
@@ -815,7 +815,8 @@ def write_impl_compare_summary(
         f"- CEC pass: {cec_pass}/{len(cec_results)}",
         f"- Correctness-backed delta rows: {len(backed_rows)}/{len(delta_rows)}",
         f"- Average AND improvement pct: `{format_float(avg_and_improve)}`",
-        f"- Promotion allowed: `{str(promotion_allowed).lower()}`",
+        f"- Comparison reviewable: `{str(comparison_reviewable).lower()}`",
+        "- Champion promotion: decided only by `review_decision.json` thresholds",
         "",
         "## Artifacts",
         "",

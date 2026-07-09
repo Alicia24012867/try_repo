@@ -114,21 +114,40 @@ compact winner report.
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --base-assignment experiments/cycle_005/agents/assignments/candidate_001.json \
   --start-cycle cycle_020 \
-  --batch-id flow_seed_cycle_020 \
+  --batch-id flow_wide_cycle_020 \
+  --variant-set flow_wide \
   --force
 
 # Run the generated candidates on the remote Linux/ABC host.
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
-  --manifest experiments/batches/flow_seed_cycle_020/manifest.json \
+  --manifest experiments/batches/flow_wide_cycle_020/manifest.json \
   --run \
   --build-candidate-binary \
   --build-jobs 8
 
 # Rebuild summary.csv and winner.json without rerunning ABC.
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
-  --manifest experiments/batches/flow_seed_cycle_020/manifest.json \
+  --manifest experiments/batches/flow_wide_cycle_020/manifest.json \
   --summarize-only
 ```
+
+After a full `flow_wide` batch, retest only the nonzero candidates on all EPFL
+benchmarks before spending another model call:
+
+```bash
+python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
+  --base-assignment experiments/cycle_005/agents/assignments/candidate_001.json \
+  --start-cycle cycle_050 \
+  --batch-id csweep_retest_cycle_050 \
+  --variant-set flow_wide \
+  --include-variants csweep_floor_c12_lkeep,csweep_floor_c16_lkeep,csweep_default_c6_l5,csweep_default_c12_l6,csweep_default_c16_l6 \
+  --benchmark-glob 'benchmarks/epfl/*.blif' \
+  --force
+```
+
+If that EPFL retest shows improvements on multiple benchmarks, repeat with an
+additional `--benchmark-glob 'benchmarks/iscas85/*.blif'` to check whether the
+signal generalizes beyond EPFL.
 
 Outputs live in `experiments/batches/<batch-id>/summary.csv` and
 `experiments/batches/<batch-id>/winner.json`. Generated cycles use normal

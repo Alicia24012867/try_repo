@@ -77,6 +77,7 @@ def build_next_assignment(
     current = dict(context.assignment)
     review = _read_previous_review(context)
     champion = _build_champion_payload(context, review)
+    discouraged_targets = _build_discouraged_targets(context, review)
     evidence = [
         f"{previous_base}/impl_compare/comparison/impl_compare_summary.md",
         f"{previous_base}/impl_compare/comparison/review_decision.json",
@@ -112,6 +113,7 @@ def build_next_assignment(
         ],
         "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
+        "discouraged_patch_targets": discouraged_targets,
         **champion,
     }
     return normalize_flow_assignment_scope(assignment)
@@ -178,18 +180,56 @@ def _read_previous_qor_delta(context: CycleContext) -> dict[str, Any]:
         import csv as _csv
 
         max_delta = 0
+        total_delta = 0
+        improved_count = 0
+        regressed_count = 0
+        unchanged_count = 0
         with path.open("r", encoding="utf-8", newline="") as stream:
             for row in _csv.DictReader(stream):
                 val = row.get("and_delta_candidate_minus_baseline", "")
                 if val in ("", None):
                     continue
                 try:
-                    max_delta = max(max_delta, abs(int(val)))
+                    delta = int(float(val))
                 except (ValueError, TypeError):
-                    pass
-        return {"max_abs_and_delta": max_delta}
+                    continue
+                max_delta = max(max_delta, abs(delta))
+                total_delta += delta
+                if delta < 0:
+                    improved_count += 1
+                elif delta > 0:
+                    regressed_count += 1
+                else:
+                    unchanged_count += 1
+        return {
+            "max_abs_and_delta": max_delta,
+            "total_delta": total_delta,
+            "improved_count": improved_count,
+            "regressed_count": regressed_count,
+            "unchanged_count": unchanged_count,
+        }
     except Exception:
         return {"max_abs_and_delta": 0}
+
+
+def _build_discouraged_targets(
+    context: CycleContext,
+    review: dict[str, Any],
+) -> list[str]:
+    """Carry targets that produced weak/zero QoR so the next agent avoids loops."""
+
+    existing = [
+        str(item).strip()
+        for item in context.assignment.get("discouraged_patch_targets", ())
+        if str(item).strip()
+    ]
+    decision = str(review.get("decision", "")).strip()
+    if decision != "REPAIR_QOR":
+        return _unique(existing)
+    previous = _read_previous_patch_target(context)
+    if not previous:
+        return _unique(existing)
+    return _unique([*existing, previous])
 
 
 def _read_previous_patch_target(context: CycleContext) -> str:
@@ -263,10 +303,19 @@ def _build_planner_hypothesis(
         qor = _read_previous_qor_delta(context)
         zero_delta = qor.get("max_abs_and_delta", 0) == 0
         prev_touched = _read_previous_patch_target(context)
+        discouraged = _build_discouraged_targets(context, review)
         lines.append(
             "The previous candidate passed build and CEC but did not improve "
             "the target QoR metric."
         )
+        if discouraged:
+            lines.append(
+                "Discouraged patch targets for the next attempt: "
+                + ", ".join(discouraged)
+                + ". These targets produced weak or zero QoR and should not be "
+                "edited again unless the new patch changes a different function "
+                "or an explicitly different mechanism."
+            )
         if zero_delta:
             lines.extend(
                 (
@@ -300,8 +349,9 @@ def _build_planner_hypothesis(
                 (
                     "QoR changed but did not improve enough.  Look at the "
                     "qor_delta.csv to understand which benchmarks regressed.  "
-                    "Propose a refinement: enlarge the magnitude of the change, "
-                    "or combine it with a second small tweak.",
+                    "Do not repeat the same file/threshold. Pick a different "
+                    "evaluation-flow command or a different source-level "
+                    "mechanism with a chance to affect more than one benchmark.",
                 )
             )
     elif decision == "REJECT_CEC":
@@ -351,6 +401,17 @@ def _format_optional_float(value: object) -> str:
         return f"{float(value):.6f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        result.append(value)
+    return result
 
 
 def write_next_assignment(

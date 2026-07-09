@@ -147,6 +147,15 @@ If a needed edit is outside the scope, stop and return:
 NEEDS_PLANNER_APPROVAL: <path and reason>
 ```
 
+## Discouraged Targets From Recent Feedback
+
+Avoid these source targets unless the assignment gives a clearly different
+mechanism in a different function or parameter:
+
+```text
+{{DISCOURAGED_PATCH_TARGETS}}
+```
+
 ## Paper-Aligned Agent Instructions
 
 ### If You Are `flow_agent`

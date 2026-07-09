@@ -44,6 +44,8 @@ from scripts.agents.self_evolved_abc.flow.source_patch import (
 CANDIDATE_ID = "candidate_001"
 CSW_CORE = Path("third_party/FlowTune/src/src/opt/csw/cswCore.c")
 ABC_FXU = Path("third_party/FlowTune/src/src/base/abci/abcFxu.c")
+ABC_COMMANDS = Path("third_party/FlowTune/src/src/base/abci/abc.c")
+FXU_SELECT = Path("third_party/FlowTune/src/src/opt/fxu/fxuSelect.c")
 SUMMARY_FIELDS = (
     "batch_id",
     "cycle_id",
@@ -108,9 +110,26 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--variant-set",
-        choices=("flow_seed",),
+        choices=("flow_seed", "flow_wide"),
         default="flow_seed",
-        help="Built-in deterministic search space.",
+        help="Built-in deterministic search space. Use flow_wide after no champion.",
+    )
+    parser.add_argument(
+        "--include-variants",
+        default="",
+        help=(
+            "Comma-separated variant ids to generate. Leave empty to generate "
+            "the full variant set."
+        ),
+    )
+    parser.add_argument(
+        "--benchmark-glob",
+        action="append",
+        default=None,
+        help=(
+            "Repo-relative benchmark glob overriding the base assignment's "
+            "benchmark_scope. Can be repeated."
+        ),
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
@@ -154,11 +173,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             repo_root,
             repo_path(repo_root, args.base_assignment),
         )
+        if args.benchmark_glob:
+            context = CycleContext(
+                repo_root,
+                apply_benchmark_globs(
+                    repo_root,
+                    context.assignment,
+                    args.benchmark_glob,
+                ),
+            )
         manifest = generate_batch(
             context=context,
             start_cycle=args.start_cycle,
             batch_id=args.batch_id or f"{args.start_cycle}_flow_batch",
             variant_set=args.variant_set,
+            include_variants=parse_variant_filter(args.include_variants),
             force=args.force,
         )
         manifest_path = repo_root / manifest["manifest_path"]
@@ -186,9 +215,14 @@ def generate_batch(
     start_cycle: str,
     batch_id: str,
     variant_set: str,
+    include_variants: set[str],
     force: bool,
 ) -> dict[str, Any]:
     variants = build_variants(context, variant_set)
+    if include_variants:
+        variants = [
+            variant for variant in variants if variant.variant_id in include_variants
+        ]
     if not variants:
         raise ValueError("no batch variants were generated for the current base source")
 
@@ -240,6 +274,7 @@ def generate_batch(
     manifest = {
         "batch_id": batch_id,
         "variant_set": variant_set,
+        "include_variants": sorted(include_variants),
         "base_assignment": str(
             context.repo_root
             / "experiments"
@@ -249,6 +284,7 @@ def generate_batch(
             / f"{context.candidate_id}.json"
         ),
         "base_cycle_id": context.cycle_id,
+        "benchmark_scope": list(context.assignment.get("benchmark_scope", ())),
         "manifest_path": str(
             (batch_dir / "manifest.json").relative_to(context.repo_root)
         ),
@@ -259,11 +295,14 @@ def generate_batch(
 
 
 def build_variants(context: CycleContext, variant_set: str) -> list[PatchVariant]:
-    if variant_set != "flow_seed":
+    if variant_set not in ("flow_seed", "flow_wide"):
         raise ValueError(f"unsupported variant set: {variant_set}")
     variants: list[PatchVariant] = []
     variants.extend(build_csw_variants(context))
-    variants.extend(build_fxu_variants(context))
+    variants.extend(build_fxu_variants(context, wide=variant_set == "flow_wide"))
+    if variant_set == "flow_wide":
+        variants.extend(build_abc_csweep_default_variants(context))
+        variants.extend(build_fxu_select_variants(context))
     return variants
 
 
@@ -271,30 +310,43 @@ def build_csw_variants(context: CycleContext) -> list[PatchVariant]:
     source = source_text(context, CSW_CORE)
     cut_floor = max_int_match(source, r"nCutsMax\s*<\s*(\d+)")
     leaf_floor = max_int_match(source, r"nLeafMax\s*<\s*(\d+)")
-    candidates = (
-        (8, 6),
+    candidates: tuple[tuple[int | None, int | None], ...] = (
+        (10, None),
+        (12, None),
+        (16, None),
+        (None, 8),
         (12, 8),
-        (16, 10),
-        (20, 12),
+        (16, 8),
+        (20, 10),
     )
     variants: list[PatchVariant] = []
     for cuts, leaves in candidates:
-        if cuts <= cut_floor and leaves <= leaf_floor:
+        if cuts is not None and cuts <= cut_floor:
             continue
-        new_source = insert_after_clock(
-            source,
-            (
+        if leaves is not None and leaves <= leaf_floor:
+            continue
+        insertion = []
+        if cuts is not None:
+            insertion.append(
                 f"    if ( nCutsMax < {cuts} )\n"
                 f"        nCutsMax = {cuts};\n"
+            )
+        if leaves is not None:
+            insertion.append(
                 f"    if ( nLeafMax < {leaves} )\n"
                 f"        nLeafMax = {leaves};\n"
-            ),
+            )
+        new_source = insert_after_clock(
+            source,
+            "".join(insertion),
         )
+        cut_label = str(cuts) if cuts is not None else "keep"
+        leaf_label = str(leaves) if leaves is not None else "keep"
         variants.append(
             PatchVariant(
-                variant_id=f"csweep_c{cuts}_l{leaves}",
+                variant_id=f"csweep_floor_c{cut_label}_l{leaf_label}",
                 description=(
-                    f"Raise csweep cut/leaf floors to {cuts}/{leaves} "
+                    f"Raise csweep cut/leaf floors to {cut_label}/{leaf_label} "
                     "before Csw_ManStart."
                 ),
                 target_file=str(CSW_CORE),
@@ -308,9 +360,15 @@ def build_csw_variants(context: CycleContext) -> list[PatchVariant]:
     return variants
 
 
-def build_fxu_variants(context: CycleContext) -> list[PatchVariant]:
+def build_fxu_variants(context: CycleContext, *, wide: bool) -> list[PatchVariant]:
     source = source_text(context, ABC_FXU)
-    specs: tuple[tuple[str, str, str, str], ...] = (
+    specs: list[tuple[str, str, str, str]] = [
+        (
+            "fx_litcount3",
+            "Decrease fx LitCountMax from 4 to 3 to prefer smaller divisors.",
+            "p->LitCountMax=      4;",
+            "p->LitCountMax=      3;",
+        ),
         (
             "fx_litcount6",
             "Increase fx LitCountMax from 4 to 6.",
@@ -329,7 +387,30 @@ def build_fxu_variants(context: CycleContext) -> list[PatchVariant]:
             "p->fUse0      =      0;",
             "p->fUse0      =      1;",
         ),
-    )
+    ]
+    if wide:
+        specs.extend(
+            (
+                (
+                    "fx_only_single",
+                    "Restrict fx to single-cube divisors.",
+                    "p->fOnlyS     =      0;",
+                    "p->fOnlyS     =      1;",
+                ),
+                (
+                    "fx_only_double",
+                    "Restrict fx to double-cube divisors.",
+                    "p->fOnlyD     =      0;",
+                    "p->fOnlyD     =      1;",
+                ),
+                (
+                    "fx_no_complement",
+                    "Disable fx complement-pair selection.",
+                    "p->fUseCompl  =      1;",
+                    "p->fUseCompl  =      0;",
+                ),
+            )
+        )
     variants: list[PatchVariant] = []
     for variant_id, description, old, new in specs:
         if old not in source:
@@ -347,6 +428,69 @@ def build_fxu_variants(context: CycleContext) -> list[PatchVariant]:
                     "at the start of the evaluation flow."
                 ),
                 patch_text=unified_diff(ABC_FXU, source, new_source),
+            )
+        )
+    return variants
+
+
+def build_abc_csweep_default_variants(context: CycleContext) -> list[PatchVariant]:
+    source = source_text(context, ABC_COMMANDS)
+    old = "    nCutsMax  =  8;\n    nLeafMax  =  6;"
+    candidates = (
+        (6, 5),
+        (10, 6),
+        (12, 6),
+        (12, 8),
+        (16, 6),
+        (16, 8),
+    )
+    variants: list[PatchVariant] = []
+    if old not in source:
+        return variants
+    for cuts, leaves in candidates:
+        new = f"    nCutsMax  = {cuts:2d};\n    nLeafMax  = {leaves:2d};"
+        new_source = source.replace(old, new, 1)
+        variants.append(
+            PatchVariant(
+                variant_id=f"csweep_default_c{cuts}_l{leaves}",
+                description=(
+                    f"Change the csweep command default cut/leaf limits to "
+                    f"{cuts}/{leaves}."
+                ),
+                target_file=str(ABC_COMMANDS),
+                rationale=(
+                    "Tests the command-level default used by the evaluation "
+                    "flow's bare `csweep` command, including less-aggressive "
+                    "settings that can preserve structure for later passes."
+                ),
+                patch_text=unified_diff(ABC_COMMANDS, source, new_source),
+            )
+        )
+    return variants
+
+
+def build_fxu_select_variants(context: CycleContext) -> list[PatchVariant]:
+    source = source_text(context, FXU_SELECT)
+    old = "#define MAX_SIZE_LOOKAHEAD      20"
+    variants: list[PatchVariant] = []
+    if old not in source:
+        return variants
+    for value in (5, 10, 40, 80):
+        new = f"#define MAX_SIZE_LOOKAHEAD      {value}"
+        variants.append(
+            PatchVariant(
+                variant_id=f"fx_lookahead{value}",
+                description=f"Set fx complement lookahead window to {value}.",
+                target_file=str(FXU_SELECT),
+                rationale=(
+                    "Sweeps the fx selector breadth in both smaller and larger "
+                    "directions; prior larger-only probing produced zero delta."
+                ),
+                patch_text=unified_diff(
+                    FXU_SELECT,
+                    source,
+                    source.replace(old, new, 1),
+                ),
             )
         )
     return variants
@@ -664,6 +808,36 @@ def repo_path(repo_root: Path, path: Path) -> Path:
     except ValueError as exc:
         raise ValueError(f"path escapes repository: {path}") from exc
     return resolved
+
+
+def parse_variant_filter(text: str) -> set[str]:
+    return {item.strip() for item in text.split(",") if item.strip()}
+
+
+def apply_benchmark_globs(
+    repo_root: Path,
+    assignment: dict[str, Any],
+    patterns: Sequence[str],
+) -> dict[str, Any]:
+    matches: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        if not pattern.strip():
+            continue
+        for path in sorted(repo_root.glob(pattern)):
+            if not path.is_file():
+                continue
+            relative = str(repo_path(repo_root, path).relative_to(repo_root))
+            if relative in seen:
+                continue
+            seen.add(relative)
+            matches.append(relative)
+    if not matches:
+        joined = ", ".join(patterns)
+        raise ValueError(f"benchmark glob matched no files: {joined}")
+    updated = dict(assignment)
+    updated["benchmark_scope"] = matches
+    return normalize_flow_assignment_scope(updated)
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:

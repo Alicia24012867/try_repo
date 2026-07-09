@@ -37,17 +37,17 @@ from scripts.agents.self_evolved_abc.flow.validation import (
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 
 
-FLOW_SOURCE_CONTEXT_KEY_PATTERNS = (
-    "abcFxu",
-    "abcSweep",
-    "nwkFlow",
-    "retFlow",
-    "fsimCore",
-    "cswCore",
-    "fxu",
-    "nwkCheck",
-    "nwkMerge",
+FLOW_SOURCE_CONTEXT_KEY_SUFFIXES = (
+    "third_party/FlowTune/src/src/base/abci/abcFxu.c",
+    "third_party/FlowTune/src/src/opt/csw/cswCore.c",
+    "third_party/FlowTune/src/src/opt/fxu/fxuSelect.c",
+    "third_party/FlowTune/src/src/opt/fxu/fxu.c",
+    "third_party/FlowTune/src/src/opt/fxu/fxu.h",
+    "third_party/FlowTune/src/src/opt/fxu/fxuCreate.c",
 )
+SOURCE_INDEX_LIMIT = 120
+KEY_SOURCE_LIMIT = 5
+KEY_SOURCE_CHAR_LIMIT = 2500
 
 
 class FlowAgent(CodingAgent):
@@ -163,6 +163,9 @@ class FlowAgent(CodingAgent):
                 "flow_source_touchpoints",
                 dict(FLOW_SOURCE_TOUCHPOINTS),
             ),
+            "DISCOURAGED_PATCH_TARGETS": self._format_discouraged_targets(
+                assignment
+            ),
             "FLOW_SCOPE": (
                 "For abc_flow: ABC commands only. Do not include shell commands, "
                 "benchmark-name branches, redirection, pipes, or previous-cycle "
@@ -260,9 +263,9 @@ class FlowAgent(CodingAgent):
         lines.append("")
         lines.append(
             "To change the behaviour of a specific command, target a file inside "
-            "the corresponding directory.  The full source of every file listed "
-            "above is provided further down in this prompt under "
-            "## Source Files Available for Patching."
+            "the corresponding directory.  A bounded index and selected key "
+            "source snippets are provided under ## Source Files Available for "
+            "Patching."
         )
         return "\n".join(lines)
 
@@ -321,6 +324,16 @@ class FlowAgent(CodingAgent):
             f"{threshold_prompt_text(thresholds)}"
         )
 
+    def _format_discouraged_targets(self, assignment: Mapping[str, Any]) -> str:
+        targets = [
+            str(item).strip()
+            for item in assignment.get("discouraged_patch_targets", ())
+            if str(item).strip()
+        ]
+        if not targets:
+            return "(none)"
+        return "\n".join(f"- {target}" for target in targets)
+
     def _source_file_context(self) -> str:
         """Read source files from the assignment's source_patch_allowed_roots."""
         allowed_roots = self.context.assignment.get("source_patch_allowed_roots", ())
@@ -335,8 +348,12 @@ class FlowAgent(CodingAgent):
         ]
         all_files = self._collect_source_files(allowed_roots)
 
-        for rel, size in all_files:
+        for rel, size in all_files[:SOURCE_INDEX_LIMIT]:
             chunks.append(f"- {rel}  ({size} bytes)")
+        if len(all_files) > SOURCE_INDEX_LIMIT:
+            chunks.append(
+                f"- ... {len(all_files) - SOURCE_INDEX_LIMIT} additional files omitted"
+            )
 
         # Full content for key files most relevant to Flow Agent
         key_files = self._select_key_source_files(all_files)
@@ -351,11 +368,11 @@ class FlowAgent(CodingAgent):
                 except Exception:
                     chunks.append(f"#### {rel}\n[could not read]\n")
                     continue
-                if len(content) > 12000:
-                    half = 12000 // 2
+                if len(content) > KEY_SOURCE_CHAR_LIMIT:
+                    half = KEY_SOURCE_CHAR_LIMIT // 2
                     content = (
                         content[:half].rstrip()
-                        + f"\n\n... [{len(content) - 12000} chars omitted] ...\n\n"
+                        + f"\n\n... [{len(content) - KEY_SOURCE_CHAR_LIMIT} chars omitted] ...\n\n"
                         + content[-half:].lstrip()
                     )
                 chunks.append(f"#### {rel} ({size} bytes)")
@@ -409,11 +426,13 @@ class FlowAgent(CodingAgent):
         self,
         all_files: list[tuple[str, int]],
     ) -> list[tuple[str, int]]:
-        return [
-            (rel, size)
-            for rel, size in all_files
-            if any(pattern in rel for pattern in FLOW_SOURCE_CONTEXT_KEY_PATTERNS)
-        ]
+        by_path = {rel: (rel, size) for rel, size in all_files}
+        selected: list[tuple[str, int]] = []
+        for suffix in FLOW_SOURCE_CONTEXT_KEY_SUFFIXES:
+            item = by_path.get(suffix)
+            if item is not None:
+                selected.append(item)
+        return selected[:KEY_SOURCE_LIMIT]
 
     def _read_optional_block(self, label: str, path: Path, max_chars: int) -> str:
         if not path.exists():
