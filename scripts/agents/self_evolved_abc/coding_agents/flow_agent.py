@@ -237,9 +237,18 @@ class FlowAgent(CodingAgent):
 
     def _previous_flow_context(self, previous_cycle: str) -> str:
         outputs = self.context.repo_root / "experiments" / previous_cycle / "outputs"
-        preferred = ("epfl_adder", "epfl_bar", "epfl_sqrt")
+        preferred = self._preferred_design_names()
         paths = tuple(outputs / f"{name}.flowtune.script" for name in preferred)
         return summarize_flow_scripts(paths, max_files=3, max_chars=6000)
+
+    def _preferred_design_names(self) -> tuple[str, ...]:
+        """Return up to 3 benchmark stem names from the assignment scope."""
+        names: list[str] = []
+        for benchmark in self.context.benchmark_scope:
+            stem = Path(str(benchmark)).stem
+            if stem:
+                names.append(stem)
+        return tuple(names[:3])
 
     def _runtime_context(self, evidence: Mapping[str, str]) -> str:
         lines = [
@@ -288,6 +297,12 @@ class FlowAgent(CodingAgent):
         import csv
 
         benchmarks = set(str(b) for b in assignment.get("benchmark_scope", ()))
+        # Build stem → full benchmark path lookup for efficient matching.
+        stem_to_benchmark: dict[str, str] = {}
+        for bm in benchmarks:
+            stem = Path(str(bm)).stem
+            if stem:
+                stem_to_benchmark[stem] = bm
         lines = [
             (
                 "BASELINE QoR — these are the numbers your patch must improve.  "
@@ -301,7 +316,7 @@ class FlowAgent(CodingAgent):
             reader = csv.DictReader(summary_path.open("r", encoding="utf-8", newline=""))
             for row in reader:
                 design = row.get("design", "")
-                if f"benchmarks/epfl/{design}.blif" in benchmarks:
+                if design in stem_to_benchmark:
                     lines.append(
                         f"- {design}:  vanilla={row.get('vanilla_and','?')}  "
                         f"flowtune={row.get('flowtune_and','?')}  "
@@ -445,12 +460,19 @@ class FlowAgent(CodingAgent):
 
     def _smoke_command(self) -> str:
         flow_path = self.candidate_flow_path()
+        smoke_benchmark = self._smoke_benchmark()
         return (
             'abc -c "source third_party/FlowTune/abc.rc; '
-            "read benchmarks/epfl/epfl_adder.blif; "
+            f"read {smoke_benchmark}; "
             f"source {flow_path.relative_to(self.context.repo_root)}; "
             'strash; ps"'
         )
+
+    def _smoke_benchmark(self) -> str:
+        """Return the first benchmark in scope for the smoke test."""
+        for bm in self.context.benchmark_scope:
+            return str(bm)
+        return "benchmarks/epfl/epfl_adder.blif"
 
     def _qor_command(self) -> str:
         flow_path = self.candidate_flow_path().relative_to(self.context.repo_root)

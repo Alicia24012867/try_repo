@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Initialize one experiment cycle skeleton.
 
-Example:
-    python3 -B scripts/init_cycle.py cycle_001 \
-        --previous-cycle cycle_000 \
-        --candidate-id candidate_001 \
-        --agent-name flow_agent \
-        --benchmark benchmarks/epfl/epfl_adder.blif \
-        --benchmark benchmarks/epfl/epfl_bar.blif \
-        --benchmark benchmarks/epfl/epfl_sqrt.blif
+Without --benchmark flags, the assignment expands to all .blif designs
+under benchmarks/epfl/, benchmarks/iscas85/, and benchmarks/iscas89/
+(30 designs total).
+
+Example with explicit scope:
+    python3 -B scripts/init_cycle.py cycle_001 \\
+        --previous-cycle cycle_000 \\
+        --candidate-id candidate_001 \\
+        --agent-name flow_agent \\
+        --benchmark benchmarks/epfl/epfl_adder.blif \\
+        --benchmark benchmarks/epfl/epfl_bar.blif
 """
 
 from __future__ import annotations
@@ -77,11 +80,26 @@ def create_cycle_dirs(cycle_dir: Path) -> None:
         
 def build_assignment(args: argparse.Namespace) -> dict[str, object]:
     previous = f"experiments/{args.previous_cycle}"
-    benchmarks = list(args.benchmark) or [
-        "benchmarks/epfl/epfl_adder.blif",
-        "benchmarks/epfl/epfl_bar.blif",
-        "benchmarks/epfl/epfl_sqrt.blif",
-    ]
+    benchmarks = list(args.benchmark) or _default_benchmarks(args.repo_root)
+
+
+def _default_benchmarks(repo_root: Path) -> list[str]:
+    """Expand EPFL + ISCAS85 + ISCAS89 .blif globs into a sorted scope."""
+    patterns = (
+        "benchmarks/epfl/*.blif",
+        "benchmarks/iscas85/*.blif",
+        "benchmarks/iscas89/*.blif",
+    )
+    result: list[str] = []
+    for pattern in patterns:
+        for path in sorted(repo_root.glob(pattern)):
+            result.append(str(path.relative_to(repo_root)))
+    return result
+
+
+def build_assignment(args: argparse.Namespace) -> dict[str, object]:
+    previous = f"experiments/{args.previous_cycle}"
+    benchmarks = list(args.benchmark) or _default_benchmarks(args.repo_root)
     source_patch_roots = list(args.source_patch_allowed_roots) or [
         FLOWTUNE_SOURCE_SCOPE_PRIMARY,
         FLOWTUNE_ABCI_SCOPE,
