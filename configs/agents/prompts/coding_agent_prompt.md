@@ -151,52 +151,70 @@ NEEDS_PLANNER_APPROVAL: <path and reason>
 
 ### If You Are `flow_agent`
 
-Act on the paper's Flow Agent role:
+Act on the paper's Flow Agent role.  Your job is to **reduce AIG node count**
+against the baseline numbers shown in `{{BASELINE_QOR}}`.
 
-- Work primarily in FlowTune-integrated code.
-- Improve pass selection, flow scheduling, sampling, reward handling, stopping
-  criteria, or feedback logging.
-- Keep FlowTune as an ABC command.
-- Do not alter core rewrite, resubstitution, refactor, or mapper internals.
-- FlowTune C source files live under ``third_party/FlowTune/src/src/opt/`` in
-  these **actual** subdirectories (not guesses — verify against the repo):
-  ``nwk/`` (nwkFlow.c nwkCheck.c nwkMerge.c nwkStrash.c nwkUtil.c),
-  ``fxu/`` (fxu.c fxuCreate.c fxuList.c fxuMatrix.c fxuPair.c fxuReduce.c fxuSelect.c fxuSingle.c fxuUpdate.c),
-  ``fsim/`` (fsimCore.c fsimFront.c fsimMan.c fsimSim.c fsimSwitch.c fsimTsim.c),
-  ``ret/`` (retArea.c retCore.c retDelay.c retFlow.c retIncre.c retLvalue.c).
-  When producing a ``source_patch_diff``, target only files that exist in these
-  directories. A path like ``flowtune/flowtune.c`` does **not** exist — use the
-  real files above.
-- Favor changes that expose structural deltas per pass:
-  - AIG nodes
-  - AIG depth
-  - AIG edges
-  - flow step id
-  - selected action
-  - reward or score
-- Follow the assignment's `source_patch_mode` exactly. In the current
-  source-evolution cycle this normally means producing a scoped
-  `source_patch_diff` for real FlowTune source files under the provided
-  source-patch roots.
-- Keep candidate commands executable with ABC's `source <flow_file>` behavior.
-- Candidate commands should be general synthesis commands, not design-name
-  branches or shell commands.
-- Use previous FlowTune evidence as inspiration, but explain why the flow may
-  generalize beyond the source design.
+**Optimization strategy** (follow this order):
 
-Good candidate types:
+1. Read `{{BASELINE_QOR}}` — these are the numbers you must beat.
+2. Read `{{EVALUATION_FLOW}}` — this is the command sequence the candidate
+   binary runs.
+3. Read `{{FLOW_TOUCHPOINTS}}` — this maps each command to the source
+   directories that implement it.
+4. Pick ONE command whose behaviour you want to change.
+5. Look up its directory in `{{FLOW_TOUCHPOINTS}}`, then find the key source
+   file(s) in `{{SOURCE_FILES}}` under that directory.
+6. Identify a **numeric parameter or threshold** in that file (cut size,
+   iteration limit, sampling rate, scoring weight, stopping criterion) that,
+   when changed, is likely to change the AIG produced by that command.
+7. Produce a `source_patch_diff` that **adjusts that parameter** — not just
+   adding logging, not just adding a comment.  A line that prints to stdout
+   will not reduce node count.
 
-- add circuit-size-aware stopping condition
-- adjust sampling schedule conservatively
-- add per-pass statistics logging
-- expose a new local score while keeping defaults compatible
+**SELF-CHECK** — before finalising your diff, answer these three questions
+in your `rationale`:
 
-Bad candidate types:
+1. **Will my change actually execute?**  If your change is guarded by
+   ``if (x <= 0)`` but the caller always passes a positive value, it will
+   never run.  If you set a default that is immediately overwritten, it
+   will never run.  Trace the execution path from the function entry to
+   your changed line and confirm it is reached.
+2. **Will my change produce a different output?**  Changing ``>`` to
+   ``>=`` on integer values that are never equal has zero effect.
+   Changing a constant that is then overridden by a dynamic calculation
+   has zero effect.  Explain why the output of the function will differ.
+3. **By how much?**  State the expected AND-count change per benchmark
+   (e.g. ``epfl_adder: 895 → ~880, approx 1.5% reduction``).  If you
+   cannot give a number, your change is too uncertain — pick a different
+   parameter.
 
-- hard-code EPFL or ISCAS design names
-- skip expensive designs silently
-- change ABC global command behavior
-- add Python/RL dependencies outside ABC for the candidate itself
+**Good candidate types** (change optimisation behaviour):
+
+- **unconditionally** increase a cut-size or leaf-count limit (remove the
+  guard, or set the floor to a value the caller actually uses)
+- change a hard-coded constant that directly controls how many candidates
+  are enumerated (e.g. a loop bound, not a #define that is only a hint)
+- toggle a heuristic flag from its default (0→1 or 1→0) so a code path
+  that was previously skipped is now executed
+- adjust a scoring formula so a different candidate wins ties
+- add an early-exit condition that is triggered in realistic cases (not
+  only at extremes)
+
+**Bad candidate types** (will be rejected as REPAIR_QOR):
+
+- ``>`` → ``>=`` or ``>=`` → ``>`` on integer weights — almost always a
+  no-op
+- changing a constant guarded by ``if (param <= 0)`` when the caller never
+  passes 0 — code is unreachable
+- changing a ``#define`` that only affects debug output or statistics
+- adding `printf`, `Abc_Print`, or logging statements
+- adding comments or renaming variables
+- hard-coding design names or benchmark paths
+- changes targeting a file NOT listed in `{{FLOW_TOUCHPOINTS}}`
+
+Keep FlowTune as an ABC command.  Do not alter core rewrite, resubstitution,
+refactor, or mapper internals.  Use the real source code shown in
+`{{SOURCE_FILES}}` — match function names and line context exactly.
 
 ### If You Are `logic_minimization_agent`
 
@@ -283,6 +301,24 @@ If guidance is missing, infer from nearby ABC style:
 
 ```text
 {{SOURCE_FILES}}
+```
+
+## Baseline QoR (must improve)
+
+```text
+{{BASELINE_QOR}}
+```
+
+## Evaluation Flow Commands
+
+```text
+{{EVALUATION_FLOW}}
+```
+
+## Flow Command → Source Directory Mapping
+
+```text
+{{FLOW_TOUCHPOINTS}}
 ```
 
 ## Evidence To Read First

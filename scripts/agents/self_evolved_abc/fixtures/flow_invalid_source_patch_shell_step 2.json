@@ -1,0 +1,36 @@
+{
+  "rationale": "This source patch proposal is invalid because candidate_steps contains shell execution and benchmark-specific specialization.",
+  "candidate_kind": "source_patch_todo",
+  "candidate_steps": [
+    "python3 scripts/apply_patch.py",
+    "Specialize Flow Agent behavior for epfl_adder"
+  ],
+  "source_design": "scripts/agents/self_evolved_abc/flow/validation.py",
+  "expected_effect": "No safe effect because the patch plan is not a general source-level proposal.",
+  "entry_points": [
+    "scripts/agents/self_evolved_abc/flow/validation.py"
+  ],
+  "invariants": [
+    "Do not run shell commands from candidate_steps",
+    "Do not specialize to one benchmark name"
+  ],
+  "risk_hotspots": [
+    "shell execution",
+    "benchmark overfitting"
+  ],
+  "files_to_write": [
+    "scripts/agents/self_evolved_abc/flow/source_patch.py"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged"
+  },
+  "validation_plan": [
+    "not_run because source patch step validation should reject this response"
+  ],
+  "risks": [
+    "unsafe source patch proposal"
+  ],
+  "rollback_plan": "No source patch should be accepted.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

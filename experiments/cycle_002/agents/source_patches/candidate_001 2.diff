@@ -1,0 +1,10 @@
+--- a/third_party/FlowTune/src/src/opt/csw/cswCore.c
++++ b/third_party/FlowTune/src/src/opt/csw/cswCore.c
+@@ -45,6 +45,7 @@ Aig_Man_t * Csw_Sweep( Aig_Man_t * pAig, int nCutsMax, int nLeafMax, int fVerbose
+     abctime clk;
+ clk = Abc_Clock();
+     // start the manager
++    nCutsMax = (nCutsMax >= 16) ? nCutsMax : 16;   // enforce floor for deeper exploration
+     p = Csw_ManStart( pAig, nCutsMax, nLeafMax, fVerbose );
+     // set elementary cuts at the PIs
+     Aig_ManForEachCi( p->pManRes, pObj, i )

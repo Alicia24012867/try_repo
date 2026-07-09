@@ -1,0 +1,48 @@
+{
+  "rationale": "Test a minimal FlowTune source-level patch path while preserving ABC command compatibility.",
+  "candidate_kind": "source_patch_diff",
+  "candidate_steps": [
+    "Add a scoped FlowTune source patch artifact",
+    "Apply the patch only in an isolated candidate workspace",
+    "Run build/smoke and CEC-first implementation comparison before QoR review"
+  ],
+  "source_design": "FlowTune source patch smoke fixture",
+  "expected_effect": "Exercise the source-code evolution path without changing benchmark semantics.",
+  "entry_points": [
+    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"
+  ],
+  "invariants": [
+    "Patch stays inside Flow Agent source scope",
+    "ABC command interface remains unchanged",
+    "QoR is ignored unless CEC passes"
+  ],
+  "risk_hotspots": [
+    "Patch may fail to apply if source context drifts"
+  ],
+  "files_to_write": [
+    "third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged",
+    "build_system": "unchanged",
+    "defaults": "unchanged"
+  },
+  "source_patch": {
+    "patch_format": "unified_diff",
+    "target_scope": "flowtune_c_source",
+    "apply_strategy": "isolated_workspace",
+    "diff": "diff --git a/third_party/FlowTune/src/src/opt/nwk/nwkFlow.c b/third_party/FlowTune/src/src/opt/nwk/nwkFlow.c\n--- a/third_party/FlowTune/src/src/opt/nwk/nwkFlow.c\n+++ b/third_party/FlowTune/src/src/opt/nwk/nwkFlow.c\n@@ -1,4 +1,4 @@\n-/**CFile****************************************************************\n+/**CFile****************************************************************\n \n   FileName    [nwkFlow.c]\n"
+  },
+  "validation_plan": [
+    "python3 -B -m scripts.agents.self_evolved_abc.flow.source_patch_runner --assignment experiments/cycle_001/agents/assignments/candidate_001.json --apply-candidate-patch --record-build-gate",
+    "python3 -B -m scripts.agents.self_evolved_abc.flow.implementation_compare --assignment experiments/cycle_001/agents/assignments/candidate_001.json --baseline-abc-bin third_party/FlowTune/FlowTune-OpenFPGA/abc --candidate-abc-bin third_party/FlowTune/FlowTune-OpenFPGA/abc"
+  ],
+  "risks": [
+    "A no-op fixture does not prove QoR improvement"
+  ],
+  "rollback_plan": "Delete the source patch artifact and regenerate the candidate workspace from baseline sources.",
+  "rule_updates": [
+    "Flow Agent source diffs must apply in an isolated workspace before any build or QoR comparison."
+  ],
+  "decision": "PROPOSE_CANDIDATE"
+}

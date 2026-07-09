@@ -1,0 +1,52 @@
+{
+  "agent_name": "flow_agent",
+  "allowed_to_edit": [
+    "experiments/cycle_002/agents",
+    "experiments/cycle_002/logs",
+    "experiments/cycle_002/outputs",
+    "experiments/cycle_002/results",
+    "experiments/cycle_002/impl_compare",
+    "configs/flows",
+    "third_party/FlowTune/src/src/opt",
+    "scripts/agents/self_evolved_abc/flow"
+  ],
+  "allowed_to_read": [
+    "experiments/cycle_001/impl_compare/comparison/impl_compare_summary.md",
+    "experiments/cycle_001/impl_compare/comparison/review_decision.json",
+    "experiments/cycle_001/impl_compare/comparison/cec_summary.csv",
+    "experiments/cycle_001/impl_compare/comparison/qor_delta.csv",
+    "experiments/cycle_001/impl_compare/candidate_modified/patch.diff",
+    "experiments/cycle_001/agents/feedback/candidate_001.md",
+    "experiments/cycle_001/agents/rule_updates/candidate_001.md"
+  ],
+  "benchmark_scope": [
+    "benchmarks/epfl/epfl_adder.blif",
+    "benchmarks/epfl/epfl_bar.blif",
+    "benchmarks/epfl/epfl_sqrt.blif"
+  ],
+  "candidate_id": "candidate_001",
+  "cycle_id": "cycle_002",
+  "paper_role": "Flow Agent",
+  "planner_hypothesis": "Use prior build, CEC, QoR delta, and patch feedback to propose a small FlowTune source-level improvement or a conservative repair.",
+  "previous_cycle_id": "cycle_001",
+  "recent_evidence": [
+    "experiments/cycle_001/impl_compare/comparison/impl_compare_summary.md",
+    "experiments/cycle_001/impl_compare/comparison/review_decision.json",
+    "experiments/cycle_001/impl_compare/comparison/cec_summary.csv",
+    "experiments/cycle_001/impl_compare/comparison/qor_delta.csv",
+    "experiments/cycle_001/impl_compare/candidate_modified/patch.diff",
+    "experiments/cycle_001/agents/feedback/candidate_001.md",
+    "experiments/cycle_001/agents/rule_updates/candidate_001.md"
+  ],
+  "secondary_metrics": [
+    "depth",
+    "runtime",
+    "stability"
+  ],
+  "source_patch_allowed_roots": [
+    "third_party/FlowTune/src/src/opt"
+  ],
+  "source_patch_mode": "source_patch_diff",
+  "subsystem": "third_party/FlowTune/src/src/opt",
+  "target_metric": "and_count"
+}

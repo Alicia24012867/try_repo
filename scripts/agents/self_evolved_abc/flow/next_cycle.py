@@ -109,6 +109,66 @@ def build_next_assignment(
     return normalize_flow_assignment_scope(assignment)
 
 
+def _read_previous_qor_delta(context: CycleContext) -> dict[str, Any]:
+    """Return summary stats from the previous cycle's qor_delta.csv."""
+    path = (
+        context.repo_root
+        / "experiments"
+        / context.cycle_id
+        / "impl_compare"
+        / "comparison"
+        / "qor_delta.csv"
+    )
+    if not path.is_file():
+        return {"max_abs_and_delta": 0}
+    try:
+        import csv as _csv
+
+        max_delta = 0
+        with path.open("r", encoding="utf-8", newline="") as stream:
+            for row in _csv.DictReader(stream):
+                val = row.get("and_delta_candidate_minus_baseline", "")
+                if val in ("", None):
+                    continue
+                try:
+                    max_delta = max(max_delta, abs(int(val)))
+                except (ValueError, TypeError):
+                    pass
+        return {"max_abs_and_delta": max_delta}
+    except Exception:
+        return {"max_abs_and_delta": 0}
+
+
+def _read_previous_patch_target(context: CycleContext) -> str:
+    """Extract the target file from the previous cycle's patch diff."""
+    path = (
+        context.repo_root
+        / "experiments"
+        / context.cycle_id
+        / "impl_compare"
+        / IMPL_CANDIDATE_LABEL
+        / "patch.diff"
+    )
+    if not path.is_file():
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("--- a/") or stripped.startswith("+++ b/"):
+            target = stripped[6:].split("\t", 1)[0].strip()
+            if target and target != "/dev/null":
+                return target
+        if stripped.startswith("diff --git "):
+            parts = stripped.split()
+            if len(parts) >= 4:
+                target = parts[3]
+                if target.startswith("b/"):
+                    target = target[2:]
+                if target != "/dev/null":
+                    return target
+    return ""
+
+
 def _read_previous_review(context: CycleContext) -> dict[str, Any]:
     path = (
         context.repo_root
@@ -147,20 +207,50 @@ def _build_planner_hypothesis(
         lines.append(f"Review next action: {next_action}")
 
     if decision == "REPAIR_QOR":
-        lines.extend(
-            (
-                "The previous candidate passed build and CEC but did not improve "
-                "the target QoR metric, so this is a targeted QoR repair cycle.",
-                "Read the previous qor_delta.csv and patch.diff first. Do not "
-                "repeat the same patch verbatim. Propose a smaller or alternative "
-                "FlowTune source_patch_diff that preserves correctness while "
-                "addressing the measured AND/depth/runtime deltas.",
-                "If all AND/depth deltas were zero, treat it as a reachability "
-                "signal: prefer a source target or strategy that is likely to be "
-                "exercised by the evaluation flow, but do not force a subsystem "
-                "switch solely because one exploratory patch had no effect.",
-            )
+        qor = _read_previous_qor_delta(context)
+        zero_delta = qor.get("max_abs_and_delta", 0) == 0
+        prev_touched = _read_previous_patch_target(context)
+        lines.append(
+            "The previous candidate passed build and CEC but did not improve "
+            "the target QoR metric."
         )
+        if zero_delta:
+            lines.extend(
+                (
+                    "ALL benchmarks had ZERO AND-node change — the patch had "
+                    "no measurable effect on the AIG.  The most likely cause "
+                    "is that your change did NOT actually execute at runtime.  "
+                    "Check: was your new code guarded by a condition that is "
+                    "never true (e.g. if (x <= 0) when the caller always "
+                    "passes x > 0)?  Was your constant overridden before use?  "
+                    "Trace the execution from function entry to your line.",
+                )
+            )
+            if prev_touched:
+                lines.append(
+                    f"Previous patch touched: {prev_touched}.  "
+                    "This file or strategy produced zero improvement; "
+                    "pick a DIFFERENT command from evaluation_flow_commands, "
+                    "follow its mapping in flow_source_touchpoints, and "
+                    "adjust a numeric parameter in the corresponding source "
+                    "file.  Do NOT tweak the same file again unless you are "
+                    "changing a different parameter or function."
+                )
+            else:
+                lines.append(
+                    "Pick a command from evaluation_flow_commands, follow its "
+                    "mapping in flow_source_touchpoints, find a numeric "
+                    "parameter in that directory's source files, and adjust it."
+                )
+        else:
+            lines.extend(
+                (
+                    "QoR changed but did not improve enough.  Look at the "
+                    "qor_delta.csv to understand which benchmarks regressed.  "
+                    "Propose a refinement: enlarge the magnitude of the change, "
+                    "or combine it with a second small tweak.",
+                )
+            )
     elif decision == "REJECT_CEC":
         lines.extend(
             (

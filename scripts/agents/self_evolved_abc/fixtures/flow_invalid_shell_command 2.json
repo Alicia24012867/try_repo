@@ -1,0 +1,34 @@
+{
+  "rationale": "This response is invalid because candidate_steps contains shell syntax.",
+  "candidate_kind": "abc_flow",
+  "candidate_steps": [
+    "strash && rm -rf outputs",
+    "rewrite -z"
+  ],
+  "source_design": "cycle_000 epfl_bar",
+  "expected_effect": "No safe effect because shell commands are forbidden.",
+  "entry_points": [
+    "configs/flows/cycle_001_candidate_001.abc"
+  ],
+  "invariants": [
+    "Use only existing ABC commands"
+  ],
+  "risk_hotspots": [
+    "shell command injection"
+  ],
+  "files_to_write": [
+    "configs/flows/cycle_001_candidate_001.abc"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged"
+  },
+  "validation_plan": [
+    "not_run"
+  ],
+  "risks": [
+    "unsafe command execution"
+  ],
+  "rollback_plan": "No flow should be written.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

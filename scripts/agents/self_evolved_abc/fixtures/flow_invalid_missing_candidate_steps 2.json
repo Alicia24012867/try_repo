@@ -1,0 +1,30 @@
+{
+  "rationale": "This response is invalid because an abc_flow candidate does not provide commands.",
+  "candidate_kind": "abc_flow",
+  "source_design": "cycle_000 epfl_adder",
+  "expected_effect": "No materializable effect.",
+  "entry_points": [
+    "configs/flows/cycle_001_candidate_001.abc"
+  ],
+  "invariants": [
+    "Use only existing ABC commands"
+  ],
+  "risk_hotspots": [
+    "missing command list"
+  ],
+  "files_to_write": [
+    "configs/flows/cycle_001_candidate_001.abc"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged"
+  },
+  "validation_plan": [
+    "not_run"
+  ],
+  "risks": [
+    "cannot run"
+  ],
+  "rollback_plan": "No flow should be written.",
+  "rule_updates": [],
+  "decision": "PROPOSE_CANDIDATE"
+}

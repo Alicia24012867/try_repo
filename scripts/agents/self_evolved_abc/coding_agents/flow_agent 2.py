@@ -9,10 +9,6 @@ from scripts.agents.self_evolved_abc.coding_agents.base_coding_agent import Codi
 from scripts.agents.self_evolved_abc.flow.artifacts import (
     render_flow_validation_failure_artifacts,
 )
-from scripts.agents.self_evolved_abc.flow.contracts import (
-    DEFAULT_EVAL_FLOW_COMMANDS,
-    FLOW_SOURCE_TOUCHPOINTS,
-)
 from scripts.agents.self_evolved_abc.flow.materialization import (
     materialize_validated_flow_response,
 )
@@ -32,24 +28,13 @@ from scripts.agents.self_evolved_abc.flow.validation import (
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 
 
-FLOW_SOURCE_CONTEXT_KEY_PATTERNS = (
-    "nwkFlow",
-    "retFlow",
-    "fsimCore",
-    "cswCore",
-    "fxu",
-    "nwkCheck",
-    "nwkMerge",
-)
-
-
 class FlowAgent(CodingAgent):
     """Flow Agent for flow scheduling and FlowTune-related candidates."""
 
     agent_name = "flow_agent"
     paper_role = "Flow Agent"
     prompt_template = "configs/agents/prompts/coding_agent_prompt.md"
-    allowed_subsystems = ("configs/flows", "third_party/FlowTune/src/src/opt")
+    allowed_subsystems = ("configs/flows", "third_party/FlowTune/src/opt/flowtune")
     candidate_kind = "abc_flow"
 
     def response_schema(self) -> Mapping[str, Any]:
@@ -135,9 +120,6 @@ class FlowAgent(CodingAgent):
                     self._read_optional_block("run_notes", run_notes_path, 6000),
                 )
             ),
-            "FLOW_TOUCHPOINTS": self._format_flow_touchpoints(assignment),
-            "EVALUATION_FLOW": self._format_evaluation_flow(assignment),
-            "BASELINE_QOR": self._format_baseline_qor(summary_path, assignment),
             "PREVIOUS_CANDIDATES": self._previous_flow_context(previous_cycle),
             "PRIMARY_METRIC": assignment.get(
                 "target_metric", "AIG node count / depth provisional"
@@ -151,14 +133,6 @@ class FlowAgent(CodingAgent):
             ),
             "RUNTIME_BUDGET": "small EPFL subset; keep flow length conservative",
             "BENCHMARK_SCOPE": assignment.get("benchmark_scope", ()),
-            "EVALUATION_FLOW_COMMANDS": assignment.get(
-                "evaluation_flow_commands",
-                list(DEFAULT_EVAL_FLOW_COMMANDS),
-            ),
-            "FLOW_SOURCE_TOUCHPOINTS": assignment.get(
-                "flow_source_touchpoints",
-                dict(FLOW_SOURCE_TOUCHPOINTS),
-            ),
             "FLOW_SCOPE": (
                 "For abc_flow: ABC commands only. Do not include shell commands, "
                 "benchmark-name branches, redirection, pipes, or previous-cycle "
@@ -242,71 +216,6 @@ class FlowAgent(CodingAgent):
         ]
         return compact_text_block("compile_or_runtime_context", "\n".join(lines), 4000)
 
-    def _format_flow_touchpoints(self, assignment: Mapping[str, Any]) -> str:
-        """Render the flow-command → source-directory mapping from the assignment."""
-        touchpoints = assignment.get("flow_source_touchpoints", {})
-        if not touchpoints:
-            return "No flow_source_touchpoints in assignment."
-        lines = [
-            "Each ABC command in the evaluation flow maps to these source directories:",
-            "",
-        ]
-        for command, paths in sorted(touchpoints.items()):
-            lines.append(f"- `{command}` → {', '.join(paths)}")
-        lines.append("")
-        lines.append(
-            "To change the behaviour of a specific command, target a file inside "
-            "the corresponding directory.  The full source of every file listed "
-            "above is provided further down in this prompt under "
-            "## Source Files Available for Patching."
-        )
-        return "\n".join(lines)
-
-    def _format_evaluation_flow(self, assignment: Mapping[str, Any]) -> str:
-        """Render the evaluation flow recipe for context."""
-        commands = assignment.get("evaluation_flow_commands", ())
-        if not commands:
-            return "No evaluation_flow_commands in assignment."
-        return (
-            "The candidate binary runs this command sequence for every benchmark: "
-            + " → ".join(str(c) for c in commands)
-        )
-
-    def _format_baseline_qor(
-        self, summary_path: Path, assignment: Mapping[str, Any]
-    ) -> str:
-        """Extract baseline QoR numbers that the model must try to beat."""
-        if not summary_path.is_file():
-            return "Baseline summary.csv not available."
-        import csv
-
-        benchmarks = set(str(b) for b in assignment.get("benchmark_scope", ()))
-        lines = [
-            (
-                "BASELINE QoR — these are the numbers your patch must improve.  "
-                "Target the `flowtune_and` column (post-FlowTune AIG nodes).  "
-                "A change that leaves these unchanged is automatically rejected "
-                "as REPAIR_QOR."
-            ),
-            "",
-        ]
-        try:
-            reader = csv.DictReader(summary_path.open("r", encoding="utf-8", newline=""))
-            for row in reader:
-                design = row.get("design", "")
-                if f"benchmarks/epfl/{design}.blif" in benchmarks:
-                    lines.append(
-                        f"- {design}:  vanilla={row.get('vanilla_and','?')}  "
-                        f"flowtune={row.get('flowtune_and','?')}  "
-                        f"(improvement={row.get('and_improve_pct','?')}%)  "
-                        f"depth={row.get('flowtune_lev','?')}"
-                    )
-        except Exception:
-            return "Failed to parse baseline summary.csv."
-        if len(lines) == 2:
-            lines.append("(no matching benchmarks found in summary.csv)")
-        return "\n".join(lines)
-
     def _source_file_context(self) -> str:
         """Read source files from the assignment's source_patch_allowed_roots."""
         allowed_roots = self.context.assignment.get("source_patch_allowed_roots", ())
@@ -320,13 +229,32 @@ class FlowAgent(CodingAgent):
             "### File Index (all source files under allowed scope)",
             "",
         ]
-        all_files = self._collect_source_files(allowed_roots)
+        all_files: list[tuple[str, int]] = []
+        for root in allowed_roots:
+            root_path = repo_root / root
+            if not root_path.is_dir():
+                continue
+            for src_file in sorted(root_path.rglob("*.c")):
+                rel = str(src_file.relative_to(repo_root))
+                size = src_file.stat().st_size
+                all_files.append((rel, size))
+            for src_file in sorted(root_path.rglob("*.h")):
+                rel = str(src_file.relative_to(repo_root))
+                size = src_file.stat().st_size
+                all_files.append((rel, size))
 
         for rel, size in all_files:
             chunks.append(f"- {rel}  ({size} bytes)")
 
         # Full content for key files most relevant to Flow Agent
-        key_files = self._select_key_source_files(all_files)
+        key_patterns = (
+            "nwkFlow", "retFlow", "fsimCore", "cswCore",
+            "fxu", "nwkCheck", "nwkMerge",
+        )
+        key_files = [
+            (rel, size) for rel, size in all_files
+            if any(pattern in rel for pattern in key_patterns)
+        ]
         if key_files:
             chunks.append("")
             chunks.append("### Key File Contents (full source)")
@@ -352,49 +280,6 @@ class FlowAgent(CodingAgent):
                 chunks.append("")
 
         return "\n".join(chunks)
-
-    def _collect_source_files(
-        self,
-        allowed_roots: object,
-    ) -> list[tuple[str, int]]:
-        repo_root = self.context.repo_root
-        files: list[tuple[str, int]] = []
-        for root in self._as_root_tuple(allowed_roots):
-            root_path = repo_root / str(root)
-            if not root_path.is_dir():
-                continue
-            for src_file in sorted(
-                path
-                for pattern in ("*.c", "*.h")
-                for path in root_path.rglob(pattern)
-            ):
-                files.append(
-                    (
-                        str(src_file.relative_to(repo_root)),
-                        src_file.stat().st_size,
-                    )
-                )
-        return files
-
-    def _as_root_tuple(self, value: object) -> tuple[object, ...]:
-        if value is None:
-            return ()
-        if isinstance(value, str):
-            return (value,)
-        try:
-            return tuple(value)  # type: ignore[arg-type]
-        except TypeError:
-            return (value,)
-
-    def _select_key_source_files(
-        self,
-        all_files: list[tuple[str, int]],
-    ) -> list[tuple[str, int]]:
-        return [
-            (rel, size)
-            for rel, size in all_files
-            if any(pattern in rel for pattern in FLOW_SOURCE_CONTEXT_KEY_PATTERNS)
-        ]
 
     def _read_optional_block(self, label: str, path: Path, max_chars: int) -> str:
         if not path.exists():

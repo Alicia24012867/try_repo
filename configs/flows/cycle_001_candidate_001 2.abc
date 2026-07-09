@@ -1,0 +1,7 @@
+strash;
+rewrite -z;
+resub -K 8;
+dc2;
+refactor -z;
+strash;
+print_stats;

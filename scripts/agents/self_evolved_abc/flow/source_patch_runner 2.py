@@ -794,65 +794,26 @@ def apply_candidate_patch_to_workspace(
     log_lines.append(f"check_return_code: {check_result.returncode}")
     if check_result.stdout:
         log_lines.extend(check_result.stdout.rstrip().splitlines())
-
-    # Try git-apply first; fall back to GNU patch with fuzz for LLM diffs.
-    apply_tool: str
-    if check_result.returncode == 0:
-        apply_tool = "git"
-        log_lines.append(f"apply_command: {shlex.join(apply_command)}")
-        apply_result = subprocess.run(
-            apply_command,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    else:
-        patch_abs = str(patch_path.resolve())
-        fallback_check = (
-            "patch", "--dry-run", "-p1", "-F5",
-            "-d", str(workspace_relative),
-            "-i", patch_abs,
-        )
-        log_lines.append(f"git-apply failed, trying: {shlex.join(fallback_check)}")
-        fb_check = subprocess.run(
-            fallback_check,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        log_lines.append(f"patch_check_return_code: {fb_check.returncode}")
-        if fb_check.stdout:
-            log_lines.extend(fb_check.stdout.rstrip().splitlines())
-        if fb_check.returncode != 0:
-            return PatchApplyResult(
-                patch_path=patch_path,
-                workspace_root=workspace_root,
-                target_paths=target_paths,
-                exit_code=fb_check.returncode or 1,
-                status="patch_check_failed",
-                log_lines=tuple(log_lines),
-            )
-        apply_tool = "patch"
-        fallback_apply = (
-            "patch", "-p1", "-F5", "-N",
-            "-d", str(workspace_relative),
-            "-i", patch_abs,
-        )
-        log_lines.append(f"apply_command: {shlex.join(fallback_apply)}")
-        apply_result = subprocess.run(
-            fallback_apply,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
+    if check_result.returncode != 0:
+        return PatchApplyResult(
+            patch_path=patch_path,
+            workspace_root=workspace_root,
+            target_paths=target_paths,
+            exit_code=check_result.returncode,
+            status="patch_check_failed",
+            log_lines=tuple(log_lines),
         )
 
-    log_lines.append(f"apply_return_code ({apply_tool}): {apply_result.returncode}")
+    log_lines.append(f"apply_command: {shlex.join(apply_command)}")
+    apply_result = subprocess.run(
+        apply_command,
+        cwd=context.repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    log_lines.append(f"apply_return_code: {apply_result.returncode}")
     if apply_result.stdout:
         log_lines.extend(apply_result.stdout.rstrip().splitlines())
     status = "patch_applied_to_workspace" if apply_result.returncode == 0 else "patch_apply_failed"
@@ -1162,12 +1123,7 @@ def run_validation_fixture_smoke(
     context: CycleContext,
     log_lines: list[str],
 ) -> int:
-    """Run valid/invalid response fixtures through the Flow validator.
-
-    Fixtures are validated against a permissive context so that
-    cycle-agnostic fixture paths (e.g. ``scripts/…``) never fail due
-    to the current assignment's ``allowed_to_edit`` scope.
-    """
+    """Run valid/invalid response fixtures through the Flow validator."""
 
     fixture_root = (
         context.repo_root / "scripts" / "agents" / "self_evolved_abc" / "fixtures"
@@ -1193,8 +1149,7 @@ def run_validation_fixture_smoke(
             failures += 1
             continue
 
-        fixture_context = build_fixture_validation_context(context, payload)
-        result = validate_flow_agent_response(payload, fixture_context)
+        result = validate_flow_agent_response(payload, context)
         if result.ok != expected_ok:
             log_lines.append(
                 f"FAIL {fixture_name}: expected_ok={expected_ok} actual_ok={result.ok}"
@@ -1208,36 +1163,6 @@ def run_validation_fixture_smoke(
 
     log_lines.append(f"fixture_failures: {failures}")
     return 1 if failures else 0
-
-
-def build_fixture_validation_context(
-    context: CycleContext,
-    payload: Mapping[str, object],
-) -> CycleContext:
-    """Create a permissive context for cycle-agnostic validation fixtures."""
-
-    fixture_assignment = dict(context.assignment)
-    candidate_kind = str(payload.get("candidate_kind", "")).strip()
-    if candidate_kind in ("abc_flow", "source_patch_todo", "source_patch_diff"):
-        fixture_assignment["source_patch_mode"] = candidate_kind
-
-    permissive_allowed = list(fixture_assignment.get("allowed_to_edit", ()))
-    for entry in (
-        "scripts/agents/self_evolved_abc/flow",
-        "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
-        "configs/agents/prompts",
-        "configs/flows",
-        "third_party/FlowTune/src/src/opt",
-        "third_party/FlowTune/src/src/opt/nwk",
-        "third_party/FlowTune/src/src/base/abci",
-    ):
-        if entry not in permissive_allowed:
-            permissive_allowed.append(entry)
-    fixture_assignment["allowed_to_edit"] = permissive_allowed
-    return CycleContext(
-        repo_root=context.repo_root,
-        assignment=fixture_assignment,
-    )
 
 
 def sha256_file(path: Path) -> str | None:

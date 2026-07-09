@@ -1,0 +1,47 @@
+{
+  "rationale": "Prepare a reviewable Flow Agent source-patch proposal path without applying source edits in S1/S2.",
+  "candidate_kind": "source_patch_todo",
+  "candidate_steps": [
+    "Add proposal-only source patch contract handling for Flow Agent candidates",
+    "Record target files, invariants, validation gates, and rollback guidance",
+    "Keep source patch application disabled until a later materialization gate exists"
+  ],
+  "source_design": "scripts/agents/self_evolved_abc/flow/validation.py",
+  "expected_effect": "Allows the Flow Agent to propose scoped source-level changes while preserving existing abc_flow behavior.",
+  "entry_points": [
+    "scripts/agents/self_evolved_abc/flow/validation.py",
+    "scripts/agents/self_evolved_abc/flow/materialization.py",
+    "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py"
+  ],
+  "invariants": [
+    "abc_flow candidates still use ABC command validation",
+    "source_patch_todo does not write or apply source edits in S1/S2",
+    "All proposed files stay within assignment allowed_to_edit"
+  ],
+  "risk_hotspots": [
+    "Accidentally applying a source patch before compile gates exist",
+    "Weakening abc_flow validation while adding source-patch support"
+  ],
+  "files_to_write": [
+    "scripts/agents/self_evolved_abc/flow/source_patch_runner.py"
+  ],
+  "compatibility_notes": {
+    "command_interface": "unchanged",
+    "build_system": "unchanged",
+    "defaults": "unchanged",
+    "source_patch_application": "disabled"
+  },
+  "validation_plan": [
+    "python3 -B -m py_compile scripts/agents/self_evolved_abc/flow/validation.py scripts/agents/self_evolved_abc/flow/materialization.py scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+    "Run existing abc_flow fixtures and confirm behavior is unchanged",
+    "Run source_patch_todo fixture validation and confirm no source file is written"
+  ],
+  "risks": [
+    "The source patch proposal may still be too broad if S2 scope validation is bypassed"
+  ],
+  "rollback_plan": "Remove source_patch_todo from Flow candidate kinds and reject source patch proposal fixtures.",
+  "rule_updates": [
+    "Flow Agent source patches begin as proposal-only source_patch_todo candidates until compile and review gates exist."
+  ],
+  "decision": "PROPOSE_CANDIDATE"
+}
