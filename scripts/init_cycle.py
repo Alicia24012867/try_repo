@@ -4,7 +4,9 @@
 Without --benchmark flags, the assignment expands the selected benchmark
 suite.  The default suite is standard_30 (EPFL + ISCAS85 + ISCAS89, 30
 BLIF designs).  Use --benchmark-suite large_70 to include the Verilog slices
-under ISCAS99/ITC99/VTR/arithmetic as well.
+under ISCAS99/ITC99/VTR/arithmetic as tracked benchmark scope as well.  The
+current direct-ABC evaluator records those Verilog paths as frontend-pending
+and uses the ABC-native subset for CEC-backed promotion.
 
 Example with explicit scope:
     python3 -B scripts/init_cycle.py cycle_001 \\
@@ -32,6 +34,8 @@ from scripts.agents.self_evolved_abc.benchmarks import (
     apply_benchmark_suite,
     benchmark_suite_names,
     expand_benchmark_suite,
+    promotion_benchmark_count,
+    with_abc_native_evaluation_scope,
 )
 from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
@@ -149,6 +153,8 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
             assignment,
             args.benchmark_suite,
         )
+    else:
+        assignment = with_abc_native_evaluation_scope(assignment)
     assignment = normalize_flow_assignment_scope(assignment)
     return _apply_initial_planning(args.repo_root, args.previous_cycle, assignment)
 
@@ -165,7 +171,7 @@ def _apply_initial_planning(
     engine = PlanningEngine(repo_root)
     result = engine.plan(
         previous_cycle_id,
-        benchmark_count=len(assignment.get("benchmark_scope", ())) or None,
+        benchmark_count=promotion_benchmark_count(assignment) or None,
     )
     if result is None:
         return assignment

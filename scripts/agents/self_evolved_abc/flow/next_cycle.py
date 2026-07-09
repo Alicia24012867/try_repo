@@ -18,6 +18,8 @@ from scripts.agents.self_evolved_abc.benchmarks import (
     apply_benchmark_suite,
     benchmark_suite_names,
     expand_benchmark_suite,
+    promotion_benchmark_count,
+    with_abc_native_evaluation_scope,
 )
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.assignment import (
@@ -97,7 +99,7 @@ def build_next_assignment(
         f"{previous_base}/agents/feedback/{context.candidate_id}.md",
         f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
     ]
-    benchmark_scope, benchmark_suite_name = _next_benchmark_scope(
+    benchmark_payload = _next_benchmark_payload(
         context,
         current,
         benchmark_suite,
@@ -107,7 +109,7 @@ def build_next_assignment(
     engine = PlanningEngine(context.repo_root)
     plan_result = engine.plan(
         context.cycle_id,
-        benchmark_count=len(benchmark_scope) or None,
+        benchmark_count=promotion_benchmark_count(benchmark_payload) or None,
     )
     # Engine always returns a result — uses default strategy when no evidence.
     assert plan_result is not None, "PlanningEngine.plan() must not return None"
@@ -131,8 +133,7 @@ def build_next_assignment(
         "secondary_metrics": current.get(
             "secondary_metrics", ["depth", "runtime", "stability"]
         ),
-        "benchmark_suite": benchmark_suite_name,
-        "benchmark_scope": benchmark_scope,
+        **benchmark_payload,
         "allowed_to_read": evidence,
         "recent_evidence": evidence,
         "source_patch_mode": FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
@@ -142,18 +143,58 @@ def build_next_assignment(
     return normalize_flow_assignment_scope(assignment)
 
 
-def _next_benchmark_scope(
+def _next_benchmark_payload(
     context: CycleContext,
     current: dict[str, Any],
     benchmark_suite: str | None,
-) -> tuple[list[str], str]:
+) -> dict[str, object]:
     suite = benchmark_suite or str(current.get("benchmark_suite", "")).strip()
     if suite and suite not in ("custom", "explicit"):
         scoped = apply_benchmark_suite(context.repo_root, current, suite)
-        return list(scoped.get("benchmark_scope", ())), suite
+        return {
+            "benchmark_suite": suite,
+            "benchmark_scope": list(scoped.get("benchmark_scope", ())),
+            "evaluation_benchmark_scope": list(
+                scoped.get("evaluation_benchmark_scope", ())
+            ),
+            "unsupported_benchmark_scope": list(
+                scoped.get("unsupported_benchmark_scope", ())
+            ),
+            "benchmark_frontend": scoped.get("benchmark_frontend", "abc_native"),
+        }
     if benchmark_suite:
-        return expand_benchmark_suite(context.repo_root, benchmark_suite), benchmark_suite
-    return list(current.get("benchmark_scope", ())), suite or "custom"
+        scoped = with_abc_native_evaluation_scope(
+            {
+                "benchmark_suite": benchmark_suite,
+                "benchmark_scope": expand_benchmark_suite(
+                    context.repo_root,
+                    benchmark_suite,
+                ),
+            }
+        )
+        return {
+            "benchmark_suite": benchmark_suite,
+            "benchmark_scope": list(scoped.get("benchmark_scope", ())),
+            "evaluation_benchmark_scope": list(
+                scoped.get("evaluation_benchmark_scope", ())
+            ),
+            "unsupported_benchmark_scope": list(
+                scoped.get("unsupported_benchmark_scope", ())
+            ),
+            "benchmark_frontend": scoped.get("benchmark_frontend", "abc_native"),
+        }
+    scoped = with_abc_native_evaluation_scope(current)
+    return {
+        "benchmark_suite": suite or "custom",
+        "benchmark_scope": list(scoped.get("benchmark_scope", ())),
+        "evaluation_benchmark_scope": list(
+            scoped.get("evaluation_benchmark_scope", ())
+        ),
+        "unsupported_benchmark_scope": list(
+            scoped.get("unsupported_benchmark_scope", ())
+        ),
+        "benchmark_frontend": scoped.get("benchmark_frontend", "abc_native"),
+    }
 
 
 def _build_champion_payload(

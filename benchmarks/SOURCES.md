@@ -27,6 +27,15 @@ benchmark families discussed in the paper.
 - `standard_30`: `epfl/`, `iscas85/`, and `iscas89/` BLIF designs.
 - `large_70`: all seven local 10-design suites, including the Verilog suites.
 
+## Current Evaluation Frontend
+
+The active S5/F7 implementation comparison uses ABC directly (`abc_native`).
+That frontend currently evaluates ABC-native files (`.blif`, `.bench`, `.aig`)
+for CEC-backed promotion. Therefore `large_70` is tracked as 70 benchmark
+families, but its current promotion/evaluation scope is the 30 BLIF designs in
+`standard_30`; the 40 Verilog designs are recorded in
+`unsupported_benchmark_scope` until a Verilog-to-BLIF/AIG frontend is wired.
+
 ## Temporary Download Sources
 
 The source repositories were cloned only into `/private/tmp` during setup:

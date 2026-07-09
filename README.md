@@ -12,7 +12,10 @@ the next iteration — all without human intervention.
 ## Current Status
 
 - `cycle_000` is the parsed baseline cycle (10 EPFL designs, 9 complete).
-- **Benchmark scope expanded** from 3 EPFL to 30 designs (EPFL + ISCAS85 + ISCAS89).
+- **Benchmark scope expanded** to `large_70`: 70 sampled designs are tracked
+  across EPFL, ISCAS, ITC/VTR, and arithmetic families. The current ABC-native
+  S5/F7 runner evaluates the 30 BLIF designs for CEC-backed promotion and
+  records the 40 Verilog designs as frontend-pending.
 - **Planning Agent implemented** — deterministic planning engine selects strategy,
   target command, source directory, and adaptive thresholds for each cycle.
 - **Planning Agent wired into execution** — `init_cycle.py`, `cycle_loop
@@ -51,7 +54,24 @@ synthesis flows, compile and CEC before QoR, and auxiliary structural, mapping,
 STA, and runtime metrics. This reproduction is intentionally smaller, so one
 LLM patch plus one flow recipe can easily produce zero deltas or a one-row
 improvement. A candidate that improves only one benchmark by a few AND nodes is
-weak evidence and should not become a champion.
+weak evidence for replacing an existing champion, even though the first
+correctness-backed positive, no-regression candidate may bootstrap the initial
+champion lineage.
+
+The recent `CEC 30/70` diagnostic was a harness-front-end issue, not evidence
+that the candidate failed 40 extra equivalence checks. `large_70` includes 40
+Verilog files, while the current implementation-comparison script invokes ABC
+directly and reliably supports only ABC-native `.blif/.bench/.aig` inputs. The
+assignment now keeps:
+
+- `benchmark_scope`: all 70 tracked paper-family samples.
+- `evaluation_benchmark_scope`: the 30 ABC-native designs used for current
+  CEC-backed promotion.
+- `unsupported_benchmark_scope`: the 40 Verilog designs waiting for a
+  Verilog/Yosys frontend.
+
+This means a valid remote run should report CEC coverage such as `30/30`, not
+`30/70`, until the Verilog frontend is implemented.
 
 Recent implementation issues also made the signal weaker than necessary:
 
@@ -64,6 +84,9 @@ Recent implementation issues also made the signal weaker than necessary:
   keep the correctness checker independent of candidate edits.
 - Legacy source-patch scope allowed framework/prompt edits; source diffs are
   now restricted to ABC/FlowTune source plus active-cycle artifacts.
+- The first correctness-backed positive, no-regression candidate can bootstrap
+  the champion lineage. Later candidates are compared against that champion and
+  must satisfy the configured promotion thresholds.
 
 ## Project Structure
 
@@ -72,7 +95,7 @@ try_repo/
   README.md                   project entry point and quickstart
   run.sh                      one-command autonomous loop launcher
   requirements.txt            Python dependencies
-  benchmarks/                 sampled benchmark suites (30 .blif designs)
+  benchmarks/                 sampled benchmark suites (70 tracked, 30 ABC-native evaluated)
   configs/                    prompts, rules, checklists, flows, evaluation config
   docs/                       structure notes and local paper copy
   experiments/                per-cycle logs, outputs, results, and agent artifacts
@@ -99,6 +122,7 @@ Use local commands for small checks only:
 
 ```bash
 python3 -B -m py_compile \
+  scripts/agents/self_evolved_abc/benchmarks.py \
   scripts/agents/self_evolved_abc/cycle_context.py \
   scripts/init_cycle.py \
   scripts/agents/self_evolved_abc/flow/assignment.py \
@@ -150,6 +174,16 @@ bash run.sh
 
 `run.sh` wraps `cycle_loop.py --auto-resume`, so running it again continues
 from the last completed cycle without overwriting any data.
+
+After syncing a fresh tree, this quick sanity check should print `70 30 40`:
+
+```bash
+python3 - <<'PY'
+import json
+a = json.load(open("experiments/cycle_001/agents/assignments/candidate_001.json"))
+print(len(a["benchmark_scope"]), len(a["evaluation_benchmark_scope"]), len(a["unsupported_benchmark_scope"]))
+PY
+```
 
 When a completed cycle produces zero deltas or repeated weak evidence, the
 planner may recommend batch search before another LLM call. The loop prints
@@ -356,7 +390,10 @@ Auto-resume also backfills this metadata for older checked-in assignments, so
 
 ### Adaptive Thresholds
 
-Thresholds scale with benchmark scope and tighten as champions accumulate:
+Thresholds scale with the evaluated benchmark scope and tighten as champions
+accumulate. With today's `abc_native` frontend, `large_70` still uses the
+30-design row because only those 30 designs are CEC-backed; the 70-design row is
+for a future Verilog-capable frontend.
 
 | Scope | Cycle | avg≥ | total≥ | improved≥ |
 |-------|-------|------|--------|-----------|
@@ -364,8 +401,8 @@ Thresholds scale with benchmark scope and tighten as champions accumulate:
 | 30 designs | early | 1.8% | 15 | 3 |
 | 30 designs | normal | 3.0% | 15 | 3 |
 | 30 designs | 3+ champs | 3.6% | 15 | 3 |
-| 70 designs | early | 1.2% | 20 | 5 |
-| 70 designs | normal | 2.0% | 20 | 5 |
+| 70 evaluated designs | early | 1.2% | 20 | 5 |
+| 70 evaluated designs | normal | 2.0% | 20 | 5 |
 
 ### Local Validation
 
@@ -403,7 +440,7 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 | `REPAIR_COMPILE` | C compilation failed |
 | `REJECT_CEC` | CEC equivalence check failed |
 | `REPAIR_QOR` | CEC passed but QoR didn't improve |
-| `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — champion |
+| `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — bootstrap or replacement champion |
 
 For `REPAIR_SMOKE`, inspect
 `experiments/<cycle>/impl_compare/candidate_modified/build.log` first. This is

@@ -174,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     baseline_results: list[ImplRunResult] = []
     candidate_results: list[ImplRunResult] = []
     cec_results: list[CecResult] = []
-    for benchmark_text in context.benchmark_scope:
+    for benchmark_text in context.evaluation_benchmark_scope:
         benchmark = repo_relative_existing_path(context, Path(benchmark_text))
         baseline = collect_impl_result(
             context=context,
@@ -831,6 +831,7 @@ def write_impl_compare_summary(
         "",
         "- QoR deltas are reviewable only when `correctness_backed` is true.",
         "- Any CEC fail, timeout, crash, skip, or unparseable result blocks promotion.",
+        "- Benchmarks outside `evaluation_benchmark_scope` are tracked as frontend-pending and do not count as CEC failures.",
         "- This runner does not update the active rulebase.",
         "",
     ]

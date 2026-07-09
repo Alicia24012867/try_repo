@@ -13,6 +13,10 @@ an improvement unless it is semantically valid.
 
 - Compilation and CEC are mandatory gates.
 - QoR gains from failed, skipped, or invalid designs do not count.
+- Distinguish evaluated designs from frontend-pending designs. A skip inside
+  `evaluation_benchmark_scope` is a hard correctness/evaluation failure; a
+  design listed only in `unsupported_benchmark_scope` is a planned frontend
+  limitation and must not be counted as a candidate CEC failure.
 - Normalize against the correct baseline or current champion.
 - Report both average improvement and per-design regressions.
 - Prefer a slightly smaller reliable improvement over a larger unstable one.
@@ -40,10 +44,17 @@ not yet correctness-backed QoR improvements.
 - A champion update requires passing compile and correctness gates.
 - If CEC is missing, set `champion_update: false` unless this is explicitly a
   process-only acceptance.
+- If no previous champion is recorded, the first candidate with full CEC pass on
+  the evaluated scope, positive total primary-metric improvement, at least one
+  improved design, and zero regressions may bootstrap the champion lineage even
+  when the normal multi-cycle promotion thresholds have not yet been met.
+- After a champion exists, compare against that champion and use the configured
+  promotion thresholds; do not repeatedly accept tiny neutral follow-ups.
 - Compute reward from the declared primary metric, but report auxiliary metric
   movement and regressions.
 - Treat skipped, timed-out, crashed, and assertion-failing designs as negative
-  evidence unless a documented exclusion was planned before evaluation.
+  evidence inside the evaluated scope unless a documented exclusion was planned
+  before evaluation.
 - A candidate may be held if it improves one subsystem metric but needs broader
   suite coverage to show generalization.
 - Rulebase updates must cite the gate or QoR evidence that motivates them.
@@ -64,6 +75,8 @@ QoR discussion:
 - CEC rows compare baseline and candidate outputs for the same designs and
   flows.
 - QoR rows are marked correctness-backed only when the matching CEC row passed.
+- Benchmark coverage must report `benchmark_scope`, `evaluation_benchmark_scope`,
+  `unsupported_benchmark_scope`, and `benchmark_frontend` when present.
 - Any missing remote evidence is called out as `missing` or `skipped`, not
   silently treated as neutral.
 
@@ -82,7 +95,7 @@ on the dominant failure:
 - `REPAIR_EVALUATION`: build/CEC/QoR artifacts are missing, incomplete, or
   unparseable.
 - `REJECT_CEC`: CEC failed, timed out, crashed, was skipped, or has mismatched
-  coverage.
+  coverage inside the evaluated benchmark scope.
 - `REPAIR_QOR`: CEC passed, but the target QoR did not improve or regressions
   exceed the acceptance policy.
 - `ACCEPT_FOR_NEXT_CYCLE`: build, smoke, full CEC, and correctness-backed QoR
@@ -228,7 +241,8 @@ Follow this exact procedure:
    - if fail or missing, decision is `repair` or `rollback`.
    - if a source patch did not apply before compile, use `REPAIR_PATCH`.
 2. Check CEC:
-   - if fail or missing, decision is `repair` or `rollback`.
+   - if fail or missing inside `evaluation_benchmark_scope`, decision is
+     `repair` or `rollback`.
    - set QoR status to invalid.
 3. Check scope:
    - if invalid, decision is `rollback` unless planner approved scope.

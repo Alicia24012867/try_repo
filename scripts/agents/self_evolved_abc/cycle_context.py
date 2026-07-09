@@ -48,6 +48,13 @@ class CycleContext:
         return tuple(str(item) for item in self.assignment.get("benchmark_scope", ()))
 
     @property
+    def evaluation_benchmark_scope(self) -> tuple[str, ...]:
+        scope = self.assignment.get("evaluation_benchmark_scope", ())
+        if scope:
+            return tuple(str(item) for item in scope)
+        return self.benchmark_scope
+
+    @property
     def recent_evidence(self) -> tuple[str, ...]:
         return tuple(str(item) for item in self.assignment.get("recent_evidence", ()))
 

@@ -71,6 +71,9 @@ The executable scaffold follows the paper's agent naming:
   assignment normalization, validation, materialization, isolated source-patch
   application, candidate workspace ABC build, CEC-first implementation
   comparison, review feedback, and next-cycle handoff.
+  Current implementation comparison uses the assignment's
+  `evaluation_benchmark_scope` for CEC-backed promotion and keeps unsupported
+  frontend samples visible in `unsupported_benchmark_scope`.
 
 Per-cycle agent artifacts live under `experiments/<cycle>/agents/`.
 

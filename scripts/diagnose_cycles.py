@@ -42,6 +42,10 @@ class CycleDiag:
     regressed_benchmark_count: int
     unchanged_benchmark_count: int
     correctness_backed_rows: int
+    benchmark_count: int
+    evaluation_benchmark_count: int
+    unsupported_benchmark_count: int
+    benchmark_frontend: str
     review_reason: str
     review_next_action: str
     previous_patch_target: str
@@ -181,6 +185,14 @@ def _read_cycle(
     patch_target = _read_patch_target(
         impl / "candidate_modified" / "patch.diff"
     )
+    assignment = _read_json(
+        repo
+        / "experiments"
+        / cycle_id
+        / "agents"
+        / "assignments"
+        / f"{str(review.get('candidate_id', 'candidate_001'))}.json"
+    ) or {}
 
     nonzero_count = sum(
         1
@@ -215,6 +227,14 @@ def _read_cycle(
         correctness_backed_rows=int(
             review.get("correctness_backed_rows", 0)
         ),
+        benchmark_count=_count_scope(assignment.get("benchmark_scope", ())),
+        evaluation_benchmark_count=_count_scope(
+            assignment.get("evaluation_benchmark_scope", ())
+        ),
+        unsupported_benchmark_count=_count_scope(
+            assignment.get("unsupported_benchmark_scope", ())
+        ),
+        benchmark_frontend=str(assignment.get("benchmark_frontend", "")),
         review_reason=str(review.get("reason", "")),
         review_next_action=str(review.get("next_action", "")),
         previous_patch_target=patch_target,
@@ -333,11 +353,16 @@ def _print_human_summary(
         print("  No cycles with review_decision.json found.", file=sys.stderr)
         return
 
-    print(f"\n  {'Cycle':<14} {'Decision':<28} {'CEC':<8} {'ΔAND':>6} {'Avg%':>8} {'I/R/U':>10}  Target", file=sys.stderr)
-    print(f"  {'-'*14} {'-'*28} {'-'*8} {'-'*6} {'-'*8} {'-'*10}  {'-'*40}", file=sys.stderr)
+    print(f"\n  {'Cycle':<14} {'Decision':<28} {'CEC':<8} {'Scope':<9} {'ΔAND':>6} {'Avg%':>8} {'I/R/U':>10}  Target", file=sys.stderr)
+    print(f"  {'-'*14} {'-'*28} {'-'*8} {'-'*9} {'-'*6} {'-'*8} {'-'*10}  {'-'*40}", file=sys.stderr)
 
     for c in cycles:
         cec_str = f"{c.cec_pass_count}/{c.cec_total_count}"
+        scope_str = (
+            f"{c.benchmark_count}/"
+            f"{c.evaluation_benchmark_count}/"
+            f"{c.unsupported_benchmark_count}"
+        )
         delta_str = str(c.total_and_delta) if c.total_and_delta is not None else "N/A"
         avg_str = f"{c.average_and_improve_pct:.2f}%" if c.average_and_improve_pct is not None else "N/A"
         i_r_u = f"{c.improved_benchmark_count}/{c.regressed_benchmark_count}/{c.unchanged_benchmark_count}"
@@ -346,7 +371,7 @@ def _print_human_summary(
             target = "..." + target[-37:]
 
         print(
-            f"  {c.cycle_id:<14} {c.review_decision:<28} {cec_str:<8} {delta_str:>6} {avg_str:>8} {i_r_u:>10}  {target}",
+            f"  {c.cycle_id:<14} {c.review_decision:<28} {cec_str:<8} {scope_str:<9} {delta_str:>6} {avg_str:>8} {i_r_u:>10}  {target}",
             file=sys.stderr,
         )
 
@@ -393,6 +418,15 @@ def _read_json(path: Path) -> dict[str, Any] | None:
     except (json.JSONDecodeError, OSError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def _count_scope(value: object) -> int:
+    if isinstance(value, (str, bytes)):
+        return 1 if value else 0
+    try:
+        return len(value)  # type: ignore[arg-type]
+    except TypeError:
+        return 0
 
 
 def _read_csv_dicts(path: Path) -> list[dict[str, str]]:

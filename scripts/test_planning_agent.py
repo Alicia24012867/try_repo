@@ -20,6 +20,12 @@ from typing import Any
 # ---------------------------------------------------------------------------
 from scripts.agents.self_evolved_abc.benchmarks import (
     expand_benchmark_suite,
+    promotion_benchmark_count,
+    with_abc_native_evaluation_scope,
+)
+from scripts.agents.self_evolved_abc.flow.promotion import AndDeltaStats
+from scripts.agents.self_evolved_abc.flow.review import (
+    _meets_bootstrap_champion_policy,
 )
 from scripts.agents.self_evolved_abc.planning.evidence import (
     BenchmarkDelta,
@@ -890,6 +896,15 @@ check("10a: standard_30 has 30 designs", len(standard_30) == 30)
 check("10b: large_70 has 70 designs", len(large_70) == 70)
 check("10c: large_70 includes Verilog", any(path.endswith(".v") for path in large_70))
 check("10d: large_70 includes standard_30", set(standard_30).issubset(large_70))
+large_70_payload = with_abc_native_evaluation_scope(
+    {"benchmark_suite": "large_70", "benchmark_scope": large_70}
+)
+check("10e: large_70 ABC-native evaluation scope has 30 designs",
+      len(large_70_payload.get("evaluation_benchmark_scope", ())) == 30)
+check("10f: large_70 unsupported frontend scope has 40 designs",
+      len(large_70_payload.get("unsupported_benchmark_scope", ())) == 40)
+check("10g: promotion benchmark count uses evaluation scope",
+      promotion_benchmark_count(large_70_payload) == 30)
 
 
 # ===================================================================
@@ -916,9 +931,63 @@ smoke_ctx = SmokeContext.from_assignment_file(
     repo_root,
     repo_root / "experiments/cycle_001/agents/assignments/candidate_001.json",
 )
+check("11d: checked-in benchmark_scope tracks all 70 designs",
+      len(smoke_ctx.benchmark_scope) == 70)
+check("11e: checked-in evaluation_benchmark_scope has 30 designs",
+      len(smoke_ctx.evaluation_benchmark_scope) == 30)
 smoke_result = run_python_smoke_gate(smoke_ctx)
-check("11d: Python smoke passes with large_70 assignment",
+check("11f: Python smoke passes with large_70 assignment",
       smoke_result.exit_code == 0)
+
+
+# ===================================================================
+# SECTION 12: Review bootstrap champion policy
+# ===================================================================
+section("12. REVIEW BOOTSTRAP CHAMPION POLICY")
+
+bootstrap_ctx = SmokeContext(
+    repo_root,
+    {
+        "cycle_id": "cycle_001",
+        "candidate_id": "candidate_001",
+        "agent_name": "flow_agent",
+        "paper_role": "Flow Agent",
+        "baseline_kind": "vanilla",
+    },
+)
+bootstrap_stats = AndDeltaStats(
+    total_delta=-6,
+    improved_count=3,
+    regressed_count=0,
+    unchanged_count=27,
+)
+check("12a: first positive no-regression candidate can bootstrap champion",
+      _meets_bootstrap_champion_policy(bootstrap_ctx, 0.0004, bootstrap_stats))
+
+existing_champion_ctx = SmokeContext(
+    repo_root,
+    {
+        "cycle_id": "cycle_002",
+        "candidate_id": "candidate_001",
+        "agent_name": "flow_agent",
+        "paper_role": "Flow Agent",
+        "baseline_kind": "champion",
+        "champion_cycle_id": "cycle_001",
+    },
+)
+check("12b: bootstrap policy is disabled after champion exists",
+      not _meets_bootstrap_champion_policy(
+          existing_champion_ctx, 0.0004, bootstrap_stats
+      ))
+
+regressed_stats = AndDeltaStats(
+    total_delta=-6,
+    improved_count=4,
+    regressed_count=1,
+    unchanged_count=25,
+)
+check("12c: bootstrap policy rejects regressions",
+      not _meets_bootstrap_champion_policy(bootstrap_ctx, 0.5, regressed_stats))
 
 
 # ===================================================================

@@ -114,6 +114,22 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         decision = "REPAIR_EVALUATION"
         reason = "No correctness-backed QoR rows are available"
         next_action = "Re-run S5/F7 and ensure qor_delta rows are CEC-backed."
+    elif _meets_bootstrap_champion_policy(context, avg_and, delta_stats):
+        decision = "ACCEPT_FOR_NEXT_CYCLE"
+        reason = (
+            "All CEC rows passed and this is the first positive champion "
+            "candidate: no existing champion is recorded, total AND delta "
+            f"{delta_stats.total_delta}, improved rows "
+            f"{delta_stats.improved_count}, regressed rows "
+            f"{delta_stats.regressed_count}. Bootstrap champion promotion "
+            "keeps the best known correctness-backed implementation as the "
+            "incumbent for later cycles."
+        )
+        next_action = (
+            "Promote this candidate as the bootstrap champion; later cycles "
+            "must beat the champion under the configured QoR thresholds."
+        )
+        promotion = True
     elif meets_promotion_thresholds(
         avg_and=avg_and,
         delta_stats=delta_stats,
@@ -376,6 +392,36 @@ def _classify_build_failure(build_status: str | None) -> tuple[str, str, str]:
         "REPAIR_BUILD",
         f"candidate build gate is {build_status or 'missing'}",
         "Return build/smoke logs to Flow Agent and request a repair patch.",
+    )
+
+
+def _meets_bootstrap_champion_policy(
+    context: CycleContext,
+    avg_and: float | None,
+    delta_stats: object,
+) -> bool:
+    """Allow the first champion to be the first correctness-backed improvement."""
+
+    if _has_existing_champion(context):
+        return False
+    total_delta = getattr(delta_stats, "total_delta", None)
+    improved_count = int(getattr(delta_stats, "improved_count", 0))
+    regressed_count = int(getattr(delta_stats, "regressed_count", 0))
+    return (
+        avg_and is not None
+        and avg_and > 0.0
+        and total_delta is not None
+        and total_delta < 0
+        and improved_count > 0
+        and regressed_count == 0
+    )
+
+
+def _has_existing_champion(context: CycleContext) -> bool:
+    assignment = context.assignment
+    return bool(
+        assignment.get("champion_cycle_id")
+        or str(assignment.get("baseline_kind", "")).strip() == "champion"
     )
 
 

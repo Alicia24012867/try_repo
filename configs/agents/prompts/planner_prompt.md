@@ -351,6 +351,10 @@ source-level feedback loop:
 - Require the validation evidence to separate local checks from remote checks:
   local schema/patch/smoke checks are allowed; candidate ABC build, CEC, and
   benchmark QoR normally run on the remote Linux host.
+- If `benchmark_scope` is larger than `evaluation_benchmark_scope`, use the
+  evaluated scope for current promotion thresholds and CEC coverage. Keep the
+  unsupported scope visible as a frontend-integration TODO instead of treating
+  those designs as candidate CEC failures.
 - Acceptance criteria must be CEC-first: a source patch can be promoted only
   after isolated patch application, candidate binary build, full correctness
   pass, and correctness-backed QoR improvement or an explicitly approved

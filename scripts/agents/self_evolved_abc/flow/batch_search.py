@@ -23,6 +23,7 @@ from scripts.agents.self_evolved_abc.benchmarks import (
     apply_benchmark_patterns as apply_benchmark_patterns_to_assignment,
     apply_benchmark_suite,
     benchmark_suite_names,
+    with_abc_native_evaluation_scope,
 )
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.assignment import (
@@ -315,6 +316,13 @@ def generate_batch(
         ),
         "base_cycle_id": context.cycle_id,
         "benchmark_scope": list(context.assignment.get("benchmark_scope", ())),
+        "evaluation_benchmark_scope": list(
+            context.assignment.get("evaluation_benchmark_scope", ())
+        ),
+        "unsupported_benchmark_scope": list(
+            context.assignment.get("unsupported_benchmark_scope", ())
+        ),
+        "benchmark_frontend": context.assignment.get("benchmark_frontend", ""),
         "manifest_path": str(
             (batch_dir / "manifest.json").relative_to(context.repo_root)
         ),
@@ -568,7 +576,7 @@ def build_variant_assignment(
             "rationale": variant.rationale,
         },
     }
-    return normalize_flow_assignment_scope(assignment)
+    return normalize_flow_assignment_scope(with_abc_native_evaluation_scope(assignment))
 
 
 def run_batch(

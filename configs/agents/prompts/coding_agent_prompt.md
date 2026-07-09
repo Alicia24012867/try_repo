@@ -404,6 +404,12 @@ flow strategy that is more likely to be touched by the evaluation flow. Do not
 immediately force a subsystem switch solely because one small patch had zero
 effect.
 
+When the assignment contains both `benchmark_scope` and
+`evaluation_benchmark_scope`, optimize only against correctness-backed rows from
+the evaluated scope. Designs listed in `unsupported_benchmark_scope` are a
+frontend-integration TODO for the harness; do not add benchmark-specific source
+branches, parser changes, or artificial skips to make them disappear.
+
 ## Required Work Procedure
 
 Follow this exact procedure:
@@ -476,7 +482,7 @@ hypothesis and repair only the failing gate:
   incomplete, or unparseable. Do not invent results; request the exact missing
   remote gate or repair the artifact producer if it is inside scope.
 - `REJECT_CEC`: treat the QoR table as invalid. Revert or repair the semantic
-  risk; do not weaken, skip, or replace CEC.
+  risk inside the evaluated scope; do not weaken, skip, or replace CEC.
 - `REPAIR_QOR`: CEC passed but the metric did not improve. Prefer a smaller
   adjustment, a narrower condition, or rollback. Do not create benchmark-name
   branches to rescue the average. The patch must change a FlowTune decision,

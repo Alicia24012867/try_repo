@@ -43,6 +43,11 @@ binary build is required before implementation comparison.
 - Standard suite: `standard_30` (EPFL + ISCAS85 + ISCAS89 BLIF designs).
 - Large suite: `large_70` (all seven 10-design sampled suites under
   `benchmarks/`, including Verilog designs).
+- Current frontend: `abc_native`. S5/F7 invokes ABC directly, so the current
+  promotion gate evaluates only ABC-native inputs (`.blif`, `.bench`, `.aig`).
+  Verilog entries from `large_70` remain in `benchmark_scope` for paper-family
+  coverage tracking but are listed in `unsupported_benchmark_scope` until a
+  Verilog/Yosys frontend is connected.
 - Every benchmark run must record design name, input path, flow path, log path,
   output path, exit status, runtime, AND count, depth, and skip reason.
 
@@ -58,11 +63,15 @@ binary build is required before implementation comparison.
 ## Acceptance Policy
 
 - `ACCEPT_FOR_NEXT_CYCLE`: candidate build/smoke/CEC pass and correctness-backed
-  QoR improves on the target metric.
+  QoR improves on the target metric. When no previous champion is recorded, a
+  full-CEC, positive-total, no-regression evaluated candidate may bootstrap the
+  first champion; later candidates must beat the current champion under the
+  configured promotion thresholds.
 - `REPAIR_VALIDATION`: model JSON, mode, or path scope validation failed.
 - `REPAIR_PATCH`: unified diff did not apply in the isolated workspace.
 - `REPAIR_SMOKE` or `REPAIR_COMPILE`: local Python smoke or candidate C build
   failed.
-- `REJECT_CEC`: CEC failed, skipped, timed out, crashed, or was unparseable.
+- `REJECT_CEC`: CEC failed, skipped, timed out, crashed, or was unparseable
+  inside the evaluated benchmark scope.
 - `REPAIR_QOR`: CEC passed but target QoR did not improve.
 - `DEFER`: insufficient evidence or missing evaluation gate.

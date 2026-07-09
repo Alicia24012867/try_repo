@@ -40,6 +40,13 @@ on the Linux server.
   Agent source-diff loop.
 - CEC is run with the baseline/champion ABC binary so the equivalence checker
   is independent of candidate source edits.
+- `large_70` now separates tracked benchmark coverage from current
+  ABC-native evaluation coverage: 70 designs remain in `benchmark_scope`, 30
+  BLIF designs form `evaluation_benchmark_scope`, and 40 Verilog designs are
+  listed in `unsupported_benchmark_scope` until a frontend is connected.
+- The first correctness-backed positive candidate with no regressions may
+  bootstrap the champion lineage; subsequent accepted candidates must beat the
+  recorded champion under the promotion thresholds.
 
 ## Local Compliance Pass: Planning Agent Integration
 
@@ -52,8 +59,19 @@ on the Linux server.
 - Flow Agent source context now follows the planner target and extracts nearby
   source windows around command functions, reducing behavior-neutral edits from
   missing context.
-- Review still refuses weak one-row improvements unless they meet the configured
-  correctness-backed promotion thresholds.
+- Review still refuses weak follow-up improvements unless they meet the
+  configured correctness-backed promotion thresholds after a champion exists.
+
+## Local Compliance Pass: `large_70` Frontend Split
+
+- The remote `30/70` CEC summaries came from counting Verilog samples that the
+  current direct-ABC runner cannot read, not from true candidate equivalence
+  failures on those designs.
+- S5/F7 now iterates over `evaluation_benchmark_scope`, so unsupported frontend
+  rows no longer create false `REJECT_CEC` decisions.
+- Promotion thresholds are computed from the evaluated scope. For current
+  `large_70` assignments this is 30 designs; the 70-design threshold tier should
+  be used only after Verilog conversion/read support is added.
 
 ## Remote Diagnosis: No Champion After Cycle 004
 

@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Sequence
 
+from scripts.agents.self_evolved_abc.benchmarks import promotion_benchmark_count
 from scripts.agents.self_evolved_abc.flow.assignment import (
     normalize_flow_assignment_scope,
 )
@@ -483,13 +484,7 @@ def _ensure_planning_fields(
 
 
 def _benchmark_count(assignment: dict[str, object]) -> int | None:
-    scope = assignment.get("benchmark_scope", ())
-    if isinstance(scope, (str, bytes)):
-        return 1 if scope else None
-    try:
-        count = len(scope)  # type: ignore[arg-type]
-    except TypeError:
-        return None
+    count = promotion_benchmark_count(assignment)
     return count or None
 
 
