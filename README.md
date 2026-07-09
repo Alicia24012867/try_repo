@@ -55,10 +55,16 @@ Use local commands for small checks only:
 
 ```bash
 python3 -B -m py_compile \
+  scripts/agents/self_evolved_abc/cycle_context.py \
   scripts/init_cycle.py \
   scripts/agents/self_evolved_abc/flow/assignment.py \
+  scripts/agents/self_evolved_abc/flow/lineage.py \
+  scripts/agents/self_evolved_abc/flow/promotion.py \
   scripts/agents/self_evolved_abc/flow/validation.py \
   scripts/agents/self_evolved_abc/flow/source_patch_runner.py \
+  scripts/agents/self_evolved_abc/flow/review.py \
+  scripts/agents/self_evolved_abc/flow/next_cycle.py \
+  scripts/agents/self_evolved_abc/flow/batch_search.py \
   scripts/agents/self_evolved_abc/coding_agents/flow_agent.py
 ```
 
@@ -96,6 +102,39 @@ Recommended workflow:
 4. Rsync `experiments/<cycle>/` artifacts back locally for review and the next
    implementation step.
 
+## Low-API Batch Search
+
+For expensive remote runs, use the deterministic batch search before spending
+another model call. It expands one assignment into several source-patch
+candidates, evaluates them with the existing S4/S5/review gates, and writes a
+compact winner report.
+
+```bash
+# Generate several model-free candidate cycles from the current assignment.
+python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
+  --base-assignment experiments/cycle_005/agents/assignments/candidate_001.json \
+  --start-cycle cycle_020 \
+  --batch-id flow_seed_cycle_020 \
+  --force
+
+# Run the generated candidates on the remote Linux/ABC host.
+python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
+  --manifest experiments/batches/flow_seed_cycle_020/manifest.json \
+  --run \
+  --build-candidate-binary \
+  --build-jobs 8
+
+# Rebuild summary.csv and winner.json without rerunning ABC.
+python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
+  --manifest experiments/batches/flow_seed_cycle_020/manifest.json \
+  --summarize-only
+```
+
+Outputs live in `experiments/batches/<batch-id>/summary.csv` and
+`experiments/batches/<batch-id>/winner.json`. Generated cycles use normal
+`experiments/cycle_NNN/` artifacts, so they can be inspected with the same
+review and implementation-compare tooling as LLM-generated cycles.
+
 ## Benchmarks
 
 `benchmarks/` contains 10-design sampled suites for the small reproduction:
@@ -126,10 +165,13 @@ scripts/agents/self_evolved_abc/
     materialization.py         artifact writing (.abc / .diff)
     source_patch_runner.py     S4: isolated workspace, git-apply, smoke, make
     implementation_compare.py  S5/F7: CEC-first baseline vs candidate
-    review.py                  structured review (5 decision types)
+    review.py                  structured review and promotion gate
     next_cycle.py              evidence-chain handoff to next cycle
     iteration_loop.py          one-cycle pipeline orchestrator
     cycle_loop.py              multi-cycle autonomous driver (--auto-resume)
+    batch_search.py            deterministic low-API source-patch batches
+    lineage.py                 champion source/binary path resolution
+    promotion.py               shared QoR promotion threshold logic
     contracts.py / paths.py    shared labels, paths, scope constants
   fixtures/                    valid/invalid JSON fixtures for smoke tests
 ```

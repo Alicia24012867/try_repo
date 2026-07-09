@@ -13,8 +13,13 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     DEFAULT_EVAL_FLOW_COMMANDS,
     FLOW_SOURCE_TOUCHPOINTS,
 )
+from scripts.agents.self_evolved_abc.flow.lineage import source_context_path
 from scripts.agents.self_evolved_abc.flow.materialization import (
     materialize_validated_flow_response,
+)
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    normalize_promotion_thresholds,
+    threshold_prompt_text,
 )
 from scripts.agents.self_evolved_abc.model_client import ModelInvocation, ModelReply
 from scripts.agents.self_evolved_abc.prompt_rendering import (
@@ -33,6 +38,8 @@ from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 
 
 FLOW_SOURCE_CONTEXT_KEY_PATTERNS = (
+    "abcFxu",
+    "abcSweep",
     "nwkFlow",
     "retFlow",
     "fsimCore",
@@ -145,10 +152,7 @@ class FlowAgent(CodingAgent):
             "SECONDARY_METRICS": assignment.get(
                 "secondary_metrics", ["depth", "runtime", "stability"]
             ),
-            "REGRESSION_THRESHOLD": (
-                "No hidden skipped designs; depth/runtime regressions must be "
-                "reported per benchmark."
-            ),
+            "REGRESSION_THRESHOLD": self._format_regression_threshold(assignment),
             "RUNTIME_BUDGET": "small EPFL subset; keep flow length conservative",
             "BENCHMARK_SCOPE": assignment.get("benchmark_scope", ()),
             "EVALUATION_FLOW_COMMANDS": assignment.get(
@@ -307,13 +311,22 @@ class FlowAgent(CodingAgent):
             lines.append("(no matching benchmarks found in summary.csv)")
         return "\n".join(lines)
 
+    def _format_regression_threshold(self, assignment: Mapping[str, Any]) -> str:
+        thresholds = normalize_promotion_thresholds(
+            assignment.get("promotion_thresholds")
+        )
+        return (
+            "No hidden skipped designs; depth/runtime regressions must be "
+            "reported per benchmark. "
+            f"{threshold_prompt_text(thresholds)}"
+        )
+
     def _source_file_context(self) -> str:
         """Read source files from the assignment's source_patch_allowed_roots."""
         allowed_roots = self.context.assignment.get("source_patch_allowed_roots", ())
         if not allowed_roots:
             return "No source_patch_allowed_roots in assignment."
 
-        repo_root = self.context.repo_root
         chunks: list[str] = [
             "## Source Files Available for Patching",
             "",
@@ -332,7 +345,7 @@ class FlowAgent(CodingAgent):
             chunks.append("### Key File Contents (full source)")
             chunks.append("")
             for rel, size in key_files:
-                path = repo_root / rel
+                path = self._source_context_file(Path(rel))
                 try:
                     content = path.read_text(encoding="utf-8", errors="replace")
                 except Exception:
@@ -357,10 +370,10 @@ class FlowAgent(CodingAgent):
         self,
         allowed_roots: object,
     ) -> list[tuple[str, int]]:
-        repo_root = self.context.repo_root
         files: list[tuple[str, int]] = []
         for root in self._as_root_tuple(allowed_roots):
-            root_path = repo_root / str(root)
+            root_rel = Path(str(root))
+            root_path = self._source_context_file(root_rel)
             if not root_path.is_dir():
                 continue
             for src_file in sorted(
@@ -368,13 +381,19 @@ class FlowAgent(CodingAgent):
                 for pattern in ("*.c", "*.h")
                 for path in root_path.rglob(pattern)
             ):
+                display_path = root_rel / src_file.relative_to(root_path)
                 files.append(
                     (
-                        str(src_file.relative_to(repo_root)),
+                        str(display_path),
                         src_file.stat().st_size,
                     )
                 )
         return files
+
+    def _source_context_file(self, repo_relative: Path) -> Path:
+        """Return source content path, using the champion source tree when present."""
+
+        return source_context_path(self.context, repo_relative)
 
     def _as_root_tuple(self, value: object) -> tuple[object, ...]:
         if value is None:

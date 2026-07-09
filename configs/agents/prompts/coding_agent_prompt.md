@@ -190,10 +190,14 @@ in your `rationale`:
 
 **Good candidate types** (change optimisation behaviour):
 
-- **unconditionally** increase a cut-size or leaf-count limit (remove the
-  guard, or set the floor to a value the caller actually uses)
-- change a hard-coded constant that directly controls how many candidates
-  are enumerated (e.g. a loop bound, not a #define that is only a hint)
+- **unconditionally** increase a cut-size or leaf-count limit inside the
+  top-level flow function (e.g. ``if (nCutsMax < 16) nCutsMax = 16``
+  placed BEFORE the call to the worker).  Do NOT change the ``?:``
+  fallback inside a helper like ``Csw_ManStart`` — that fallback only
+  fires when the caller passes 0, which the top-level function never does.
+- change a hard-coded numerical constant that directly controls a loop
+  bound — use ``sed -n 'line1,line2p'`` in your head to verify the
+  constant appears exactly once in the file
 - toggle a heuristic flag from its default (0→1 or 1→0) so a code path
   that was previously skipped is now executed
 - adjust a scoring formula so a different candidate wins ties
@@ -204,9 +208,13 @@ in your `rationale`:
 
 - ``>`` → ``>=`` or ``>=`` → ``>`` on integer weights — almost always a
   no-op
-- changing a constant guarded by ``if (param <= 0)`` when the caller never
-  passes 0 — code is unreachable
-- changing a ``#define`` that only affects debug output or statistics
+- changing the ``?:`` fallback value in a helper function like
+  ``Xxx_ManStart`` — the caller always passes a real value, so the
+  fallback is unreachable.  Instead, add an unconditional floor in the
+  top-level function (``Csw_Sweep``, ``Fxu_FastExtract``, etc.) BEFORE
+  the call to the helper.
+- changing a ``#define`` constant that only controls debug output, array
+  sizing hints, or statistics — these do not affect the AIG
 - adding `printf`, `Abc_Print`, or logging statements
 - adding comments or renaming variables
 - hard-coding design names or benchmark paths

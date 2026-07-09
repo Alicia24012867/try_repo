@@ -17,13 +17,15 @@ class CycleContext:
     repo_root: Path
     assignment: Mapping[str, Any]
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "repo_root", self.repo_root.resolve())
+
     @classmethod
     def from_assignment_file(
         cls, repo_root: Path, assignment_path: Path
     ) -> "CycleContext":
-        resolved_root = repo_root.resolve()
         payload = json.loads(assignment_path.read_text(encoding="utf-8"))
-        return cls(repo_root=resolved_root, assignment=payload)
+        return cls(repo_root=repo_root, assignment=payload)
 
     @property
     def cycle_id(self) -> str:
@@ -80,4 +82,3 @@ class CycleContext:
             else:
                 evidence[relative] = "TODO_MISSING_EVIDENCE"
         return evidence
-

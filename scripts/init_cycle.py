@@ -22,6 +22,9 @@ from scripts.agents.self_evolved_abc.flow.assignment import (
     FLOW_CYCLE_DIRS,
     normalize_flow_assignment_scope,
 )
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    DEFAULT_PROMOTION_THRESHOLDS,
+)
 from scripts.agents.self_evolved_abc.flow.contracts import (
     DEFAULT_EVAL_FLOW_COMMANDS,
     FLOW_SOURCE_TOUCHPOINTS,
@@ -96,6 +99,7 @@ def build_assignment(args: argparse.Namespace) -> dict[str, object]:
         ),
         "target_metric": args.target_metric,
         "secondary_metrics": ["depth", "runtime", "stability"],
+        "promotion_thresholds": DEFAULT_PROMOTION_THRESHOLDS.as_dict(),
         "benchmark_scope": benchmarks,
         "allowed_to_read": [
             f"{previous}/results/summary.csv",

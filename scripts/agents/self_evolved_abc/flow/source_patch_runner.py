@@ -21,7 +21,6 @@ from pathlib import Path
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.contracts import (
     CANDIDATE_BINARY_BUILD_COMMAND_LABEL,
-    DEFAULT_ABC_BIN,
     FLOW_INFRA_ALLOWED_ROOTS,
     FLOW_SOURCE_PATCH_DIFF_ALLOWED_ROOTS,
     FLOWTUNE_SOURCE_ABC_BIN,
@@ -33,6 +32,10 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     SMOKE_GATE_COMMAND_LABEL,
     SOURCE_PATCH_TARGET_SECTION,
     VALIDATION_FIXTURE_EXPECTATIONS,
+)
+from scripts.agents.self_evolved_abc.flow.lineage import (
+    resolve_base_source_root,
+    resolve_baseline_abc_bin,
 )
 from scripts.agents.self_evolved_abc.flow.paths import (
     candidate_workspace_root,
@@ -126,13 +129,16 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--baseline-abc-bin",
         type=Path,
-        default=DEFAULT_ABC_BIN,
-        help="Baseline ABC binary path for later implementation comparison.",
+        default=None,
+        help=(
+            "Baseline ABC binary path for later implementation comparison. "
+            "Defaults to assignment baseline/champion, then the vanilla binary."
+        ),
     )
     parser.add_argument(
         "--candidate-abc-bin",
         type=Path,
-        default=DEFAULT_ABC_BIN,
+        default=None,
         help="Candidate ABC binary path for later implementation comparison.",
     )
     parser.add_argument(
@@ -226,10 +232,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         context,
         args.workspace_root or candidate_workspace_root(context),
     )
+    baseline_abc_bin = resolve_baseline_abc_bin(
+        context,
+        explicit=args.baseline_abc_bin,
+    )
+    candidate_abc_bin = args.candidate_abc_bin or baseline_abc_bin
     candidate_binary_path = (
         workspace_root / FLOWTUNE_SOURCE_ABC_BIN
         if args.build_candidate_binary
-        else args.candidate_abc_bin
+        else candidate_abc_bin
     )
     baseline_status = "manifest_only"
     baseline_build_command = "not_run"
@@ -389,7 +400,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         context=context,
         label=IMPL_BASELINE_LABEL,
         patch_plan=patch_plan,
-        binary_path=args.baseline_abc_bin,
+        binary_path=baseline_abc_bin,
         git_commit=git_commit,
         git_dirty=git_dirty,
         git_status_short=git_status_lines,
@@ -754,7 +765,13 @@ def apply_candidate_patch_to_workspace(
     target_paths = extract_unified_diff_targets(patch_text)
     validate_source_patch_diff_targets(context, target_paths)
     validate_workspace_root(context, workspace_root)
-    reset_patch_workspace(context, workspace_root, target_paths)
+    base_source_root = resolve_base_source_root(context)
+    reset_patch_workspace(
+        context,
+        workspace_root,
+        target_paths,
+        base_source_root=base_source_root,
+    )
 
     workspace_relative = workspace_root.relative_to(context.repo_root)
     patch_rel = str(patch_path.relative_to(context.repo_root))
@@ -944,6 +961,8 @@ def reset_patch_workspace(
     context: CycleContext,
     workspace_root: Path,
     target_paths: tuple[str, ...],
+    *,
+    base_source_root: Path | None = None,
 ) -> None:
     """Recreate the isolated workspace with source needed by the patch."""
 
@@ -954,7 +973,11 @@ def reset_patch_workspace(
 
     copied_flowtune_source = False
     if any(_path_text_is_under(target, FLOWTUNE_SOURCE_ROOT) for target in target_paths):
-        copy_flowtune_source_tree(context, workspace_root)
+        copy_flowtune_source_tree(
+            context,
+            workspace_root,
+            source_root=base_source_root,
+        )
         copied_flowtune_source = True
 
     for target in target_paths:
@@ -967,10 +990,15 @@ def reset_patch_workspace(
             shutil.copy2(source, destination)
 
 
-def copy_flowtune_source_tree(context: CycleContext, workspace_root: Path) -> None:
+def copy_flowtune_source_tree(
+    context: CycleContext,
+    workspace_root: Path,
+    *,
+    source_root: Path | None = None,
+) -> None:
     """Copy the FlowTune ABC source tree for an isolated candidate build."""
 
-    source_root = context.repo_root / FLOWTUNE_SOURCE_ROOT
+    source_root = source_root or context.repo_root / FLOWTUNE_SOURCE_ROOT
     destination = workspace_root / FLOWTUNE_SOURCE_ROOT
     if not source_root.is_dir():
         raise FileNotFoundError(f"missing FlowTune source root: {FLOWTUNE_SOURCE_ROOT}")

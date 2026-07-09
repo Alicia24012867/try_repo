@@ -22,6 +22,9 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
     IMPL_CANDIDATE_LABEL,
 )
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    normalize_promotion_thresholds,
+)
 
 
 CYCLE_RE = re.compile(r"^cycle_(?P<number>\d{3,})$")
@@ -73,6 +76,7 @@ def build_next_assignment(
     previous_base = f"experiments/{context.cycle_id}"
     current = dict(context.assignment)
     review = _read_previous_review(context)
+    champion = _build_champion_payload(context, review)
     evidence = [
         f"{previous_base}/impl_compare/comparison/impl_compare_summary.md",
         f"{previous_base}/impl_compare/comparison/review_decision.json",
@@ -95,6 +99,9 @@ def build_next_assignment(
         "secondary_metrics": current.get(
             "secondary_metrics", ["depth", "runtime", "stability"]
         ),
+        "promotion_thresholds": normalize_promotion_thresholds(
+            current.get("promotion_thresholds")
+        ).as_dict(),
         "benchmark_scope": current.get("benchmark_scope", ()),
         "allowed_to_read": evidence,
         "recent_evidence": evidence,
@@ -105,8 +112,54 @@ def build_next_assignment(
         ],
         "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
+        **champion,
     }
     return normalize_flow_assignment_scope(assignment)
+
+
+def _build_champion_payload(
+    context: CycleContext,
+    review: dict[str, Any],
+) -> dict[str, object]:
+    """Return next-cycle baseline/champion fields.
+
+    Accepted candidates become the next cycle's source and binary baseline.
+    Non-promoted cycles keep the incoming champion, if one already exists.
+    """
+
+    if str(review.get("decision", "")).strip() == "ACCEPT_FOR_NEXT_CYCLE":
+        workspace = (
+            f"experiments/{context.cycle_id}/impl_compare/"
+            f"{IMPL_CANDIDATE_LABEL}/workspace"
+        )
+        source_root = f"{workspace}/third_party/FlowTune/src"
+        abc_bin = f"{source_root}/abc"
+        return {
+            "baseline_kind": "champion",
+            "champion_cycle_id": context.cycle_id,
+            "champion_candidate_id": context.candidate_id,
+            "champion_source_root": source_root,
+            "base_source_root": source_root,
+            "champion_abc_bin": abc_bin,
+            "baseline_abc_bin": abc_bin,
+        }
+
+    carried: dict[str, object] = {}
+    for key in (
+        "baseline_kind",
+        "champion_cycle_id",
+        "champion_candidate_id",
+        "champion_source_root",
+        "base_source_root",
+        "champion_abc_bin",
+        "baseline_abc_bin",
+    ):
+        value = context.assignment.get(key)
+        if value not in ("", None):
+            carried[key] = value
+    if not carried:
+        carried["baseline_kind"] = "vanilla"
+    return carried
 
 
 def _read_previous_qor_delta(context: CycleContext) -> dict[str, Any]:
@@ -270,8 +323,13 @@ def _build_planner_hypothesis(
     elif decision == "ACCEPT_FOR_NEXT_CYCLE":
         lines.extend(
             (
-                "Use the accepted candidate as positive evidence, but keep the "
-                "next change small and independently attributable.",
+                "The accepted candidate is now the champion baseline for the "
+                "next cycle. Apply the next source patch on top of that "
+                "champion source tree, and compare the new candidate against "
+                "the champion binary rather than the original vanilla binary.",
+                "Keep the next change independently attributable, but avoid "
+                "repeating the exact same threshold/file unless the evidence "
+                "shows a clear additional mechanism.",
             )
         )
     else:

@@ -15,6 +15,9 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOWTUNE_ABCI_SCOPE,
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
 )
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    DEFAULT_PROMOTION_THRESHOLDS,
+)
 
 
 FLOW_CYCLE_DIRS = (
@@ -120,6 +123,7 @@ def normalize_flow_assignment_scope(
         payload["source_patch_allowed_roots"] = list(source_roots)
     payload.setdefault("evaluation_flow_commands", list(DEFAULT_EVAL_FLOW_COMMANDS))
     payload.setdefault("flow_source_touchpoints", dict(FLOW_SOURCE_TOUCHPOINTS))
+    payload.setdefault("promotion_thresholds", DEFAULT_PROMOTION_THRESHOLDS.as_dict())
 
     if cycle_id:
         payload["allowed_to_edit"] = list(

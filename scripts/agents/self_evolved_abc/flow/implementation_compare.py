@@ -801,7 +801,7 @@ def write_impl_compare_summary(
     backed_rows = [row for row in delta_rows if row["correctness_backed"]]
     avg_and_improve = average_float(row["and_improve_pct"] for row in backed_rows)
     promotion_allowed = (
-        build_status == "build_smoke_passed"
+        build_status in CANDIDATE_BUILD_READY_STATUSES
         and cec_pass == len(cec_results)
         and len(cec_results) > 0
     )
@@ -854,7 +854,8 @@ def write_blocked_summary(
                 f"- Candidate build status: `{build_status or 'missing'}`",
                 "- Promotion allowed: `false`",
                 "",
-                "S5/F7 did not run because S4c has not produced `build_smoke_passed`.",
+                "S5/F7 did not run because S4 has not produced a build-ready "
+                "candidate status.",
                 "",
             )
         ),

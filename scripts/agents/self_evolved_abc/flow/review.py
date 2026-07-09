@@ -16,6 +16,15 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     IMPL_CANDIDATE_LABEL,
 )
 from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root, repo_path
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    and_delta_stats,
+    average,
+    format_float,
+    format_optional_int,
+    meets_promotion_thresholds,
+    normalize_promotion_thresholds,
+    parse_float,
+)
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,13 @@ class ReviewDecision:
     cec_total_count: int
     correctness_backed_rows: int
     average_and_improve_pct: float | None
+    total_and_delta_candidate_minus_baseline: int | None
+    improved_benchmark_count: int
+    regressed_benchmark_count: int
+    unchanged_benchmark_count: int
+    min_average_and_improve_pct: float
+    min_total_and_reduction: int
+    min_improved_benchmarks: int
     reason: str
     next_action: str
 
@@ -77,6 +93,10 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         for row in backed_rows
         if row.get("and_improve_pct") not in ("", None)
     )
+    delta_stats = and_delta_stats(backed_rows)
+    thresholds = normalize_promotion_thresholds(
+        context.assignment.get("promotion_thresholds")
+    )
     all_structural_deltas_zero = _all_structural_deltas_zero(backed_rows)
 
     promotion = False
@@ -94,9 +114,18 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         decision = "REPAIR_EVALUATION"
         reason = "No correctness-backed QoR rows are available"
         next_action = "Re-run S5/F7 and ensure qor_delta rows are CEC-backed."
-    elif avg_and is not None and avg_and > 0:
+    elif meets_promotion_thresholds(
+        avg_and=avg_and,
+        delta_stats=delta_stats,
+        thresholds=thresholds,
+    ):
         decision = "ACCEPT_FOR_NEXT_CYCLE"
-        reason = f"All CEC rows passed and average AND improvement is {avg_and:.6f}%"
+        reason = (
+            "All CEC rows passed and the QoR improvement exceeded promotion "
+            f"thresholds: average AND improvement {avg_and:.6f}%, "
+            f"total AND delta {delta_stats.total_delta}, "
+            f"improved rows {delta_stats.improved_count}."
+        )
         next_action = "Use this candidate as positive evidence for the next Flow Agent cycle."
         promotion = True
     else:
@@ -112,8 +141,20 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
                 "signal and request a different target file or strategy."
             )
         else:
-            reason = "Correctness passed but QoR did not improve on the target metric"
-            next_action = "Feed QoR deltas back to the Flow Agent and request a smaller repair."
+            reason = (
+                "Correctness passed but QoR did not exceed promotion thresholds "
+                f"(avg AND improvement={format_float(avg_and)}%, "
+                f"total AND delta={format_optional_int(delta_stats.total_delta)}, "
+                f"improved rows={delta_stats.improved_count}, "
+                f"required avg>={thresholds.min_average_and_improve_pct:.6f}%, "
+                f"total reduction>={thresholds.min_total_and_reduction}, "
+                f"improved rows>={thresholds.min_improved_benchmarks})."
+            )
+            next_action = (
+                "Treat this as weak evidence, not a champion. Ask the Flow "
+                "Agent to change strategy or target a different reachable "
+                "decision point with a larger expected effect."
+            )
 
     return ReviewDecision(
         cycle_id=context.cycle_id,
@@ -126,6 +167,13 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         cec_total_count=len(cec_rows),
         correctness_backed_rows=len(backed_rows),
         average_and_improve_pct=avg_and,
+        total_and_delta_candidate_minus_baseline=delta_stats.total_delta,
+        improved_benchmark_count=delta_stats.improved_count,
+        regressed_benchmark_count=delta_stats.regressed_count,
+        unchanged_benchmark_count=delta_stats.unchanged_count,
+        min_average_and_improve_pct=thresholds.min_average_and_improve_pct,
+        min_total_and_reduction=thresholds.min_total_and_reduction,
+        min_improved_benchmarks=thresholds.min_improved_benchmarks,
         reason=reason,
         next_action=next_action,
     )
@@ -217,6 +265,9 @@ def render_feedback(
             f"- CEC pass: {decision.cec_pass_count}/{decision.cec_total_count}",
             f"- Correctness-backed QoR rows: {decision.correctness_backed_rows}",
             f"- Average AND improvement pct: `{format_float(decision.average_and_improve_pct)}`",
+            f"- Total AND delta candidate-minus-baseline: `{format_optional_int(decision.total_and_delta_candidate_minus_baseline)}`",
+            f"- AND improved/regressed/unchanged rows: {decision.improved_benchmark_count}/{decision.regressed_benchmark_count}/{decision.unchanged_benchmark_count}",
+            f"- Promotion thresholds: avg >= `{decision.min_average_and_improve_pct:.6f}%`, total reduction >= `{decision.min_total_and_reduction}`, improved rows >= `{decision.min_improved_benchmarks}`",
             "",
             "## Evidence",
             "",
@@ -246,8 +297,9 @@ def render_rule_update(
         )
     else:
         rule = (
-            "Keep Flow Agent source-patch edits conservative until implementation "
-            "comparison produces correctness-backed QoR improvement."
+            "Keep Flow Agent source-patch edits out of the champion lineage until "
+            "implementation comparison produces correctness-backed QoR improvement "
+            "above the configured promotion thresholds."
         )
     return "\n".join(
         (
@@ -330,22 +382,6 @@ def read_csv(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(stream))
 
 
-def parse_float(value: object) -> float | None:
-    if value in ("", None):
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def average(values: Sequence[float | None]) -> float | None:
-    parsed = [value for value in values if value is not None]
-    if not parsed:
-        return None
-    return sum(parsed) / len(parsed)
-
-
 def _all_structural_deltas_zero(rows: Sequence[dict[str, str]]) -> bool:
     if not rows:
         return False
@@ -355,10 +391,6 @@ def _all_structural_deltas_zero(rows: Sequence[dict[str, str]]) -> bool:
         if and_delta not in (0, 0.0) or depth_delta not in (0, 0.0):
             return False
     return True
-
-
-def format_float(value: float | None) -> str:
-    return "" if value is None else f"{value:.6f}"
 
 
 if __name__ == "__main__":
