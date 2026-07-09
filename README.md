@@ -12,10 +12,14 @@ the next iteration — all without human intervention.
 ## Current Status
 
 - `cycle_000` is the parsed baseline cycle (10 EPFL designs, 9 complete).
+- **Benchmark scope expanded** from 3 EPFL to 30 designs (EPFL + ISCAS85 + ISCAS89).
+- **Planning Agent implemented** — deterministic planning engine selects strategy,
+  target command, source directory, and adaptive thresholds for each cycle.
 - The Flow Agent source-patch feedback loop is wired and locally smoke-tested:
   - Model proposes `source_patch_diff` targeting real FlowTune C source.
   - Patch is applied in an isolated workspace, binary built, CEC run.
   - Review decision is generated, and evidence feeds into the next cycle.
+  - Planning Engine generates `planner_hypothesis` with adaptive thresholds.
   - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
     cycle — no manual trigger needed.
 - Assignment scope is normalized through `flow/assignment.py`, so
@@ -27,6 +31,8 @@ the next iteration — all without human intervention.
   decisions distinguish *why* a build failed (validation, patch, smoke,
   compile) rather than collapsing everything into `REPAIR_BUILD`.
 - Logic Minimization Agent and Mapper Agent are placeholders for later phases.
+- Diagnostic script (`scripts/diagnose_cycles.py`) collects per-cycle
+  evidence (review, CEC, QoR deltas) into a JSON bundle for local analysis.
 
 Local macOS development is used for editing, prompt/schema validation, and
 Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
@@ -39,11 +45,22 @@ try_repo/
   README.md                   project entry point and quickstart
   run.sh                      one-command autonomous loop launcher
   requirements.txt            Python dependencies
-  benchmarks/                 sampled benchmark suites
+  benchmarks/                 sampled benchmark suites (30 .blif designs)
   configs/                    prompts, rules, checklists, flows, evaluation config
   docs/                       structure notes and local paper copy
   experiments/                per-cycle logs, outputs, results, and agent artifacts
-  scripts/                    cycle automation and LLM-agent scaffold
+  scripts/                    cycle automation, LLM-agent scaffold, diagnostics
+    init_cycle.py             bootstrap a new experiment cycle
+    diagnose_cycles.py        collect per-cycle evidence for local analysis
+    agents/self_evolved_abc/
+      planning/               **Planning Agent** (deterministic engine)
+        evidence.py             structured cycle evidence reader
+        strategy.py             command/source targeting + strategy selection
+        thresholds.py           adaptive promotion threshold management
+        engine.py               deterministic planning engine
+      planning_agent.py       LLM-based planner (renders planner_prompt.md)
+      coding_agents/          Flow/Logic/Mapper Agent implementations
+      flow/                   pipeline stages (S4/S5/review/next_cycle)
   third_party/                external source trees (FlowTune)
   .env                        ignored local model-provider environment
   .local/                     ignored local scratch/archive/run dumps
@@ -227,6 +244,62 @@ and uses a small EPFL benchmark scope (`epfl_adder`, `epfl_bar`, `epfl_sqrt`)
 for the first source-level feedback loop. The default evaluation flow includes
 `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor` so source patches have
 a better chance to be exercised before CEC-backed QoR review.
+
+## Planning Agent
+
+The Planning Agent drives Flow Agent self-evolution through a deterministic
+rule-based engine. It is wired into `next_cycle.py` and runs automatically at
+the end of every cycle.
+
+### Architecture
+
+```
+Evidence (review_decision.json, qor_delta.csv, cec_summary.csv)
+    │
+    ▼
+PlanningEngine.plan()
+    ├── read_cycle_evidence()     → CycleEvidence
+    ├── reconstruct history       → prior commands tried, champion count
+    ├── propose_thresholds()      → adaptive (scope-aware, early-cycle lenient)
+    ├── select_strategy()         → Strategy (task_type, target_command, …)
+    └── _build_hypothesis()       → planner_hypothesis text
+    │
+    ▼
+next_cycle assignment  (planner_hypothesis, thresholds, discouraged_targets, _planning_meta)
+```
+
+### Strategy Routing
+
+| Evidence | Strategy | Action |
+|----------|----------|--------|
+| No prior cycles | `optimization` | Default: csweep, recommend batch_search |
+| Build/CEC failure | `repair` | Fix the gate, carry discouraged targets |
+| Champion promoted | `optimization` | Exploit same command, vary parameter |
+| REPAIR_QOR + zero delta | `optimization` | Switch to untried command, batch first |
+| REPAIR_QOR + partial improvement | `optimization` | Amplify same command, may relax thresholds |
+| REPAIR_QOR + regressions | `optimization` | Switch command, force batch_search |
+
+### Adaptive Thresholds
+
+Thresholds scale with benchmark scope and tighten as champions accumulate:
+
+| Scope | Cycle | avg≥ | total≥ | improved≥ |
+|-------|-------|------|--------|-----------|
+| 10 designs | early | 3.0% | 10 | 1 |
+| 30 designs | early | 1.8% | 15 | 3 |
+| 30 designs | normal | 3.0% | 15 | 3 |
+| 30 designs | 3+ champs | 3.6% | 15 | 3 |
+| 70 designs | normal | 2.0% | 20 | 5 |
+
+### Local Validation
+
+```bash
+PYTHONPATH=. python3 -B scripts/test_planning_agent.py
+```
+
+Covers 132 assertions across 9 sections: paper compliance, evidence reading,
+strategy routing (all 7 branches), threshold adaptation (all branches),
+engine operations, next_cycle integration, LLM planner, and edge cases.
 
 ## Pipeline Stages
 

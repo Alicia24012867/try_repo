@@ -94,38 +94,32 @@ def build_next_assignment(
         f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
     ]
 
-    # --- Planning engine integration ---
+    # --- Planning engine integration (always active) ---
     engine = PlanningEngine(context.repo_root)
     plan_result = engine.plan(context.cycle_id)
-    if plan_result is not None:
-        planner_hypothesis = plan_result.hypothesis
-        promotion_thresholds = plan_result.thresholds.as_dict()
-        discouraged = list(plan_result.strategy.discouraged_targets)
-        planning_meta: dict[str, object] = {
-            "engine": "deterministic",
-            "task_type": plan_result.strategy.task_type,
-            "target_command": plan_result.strategy.target_command,
-            "target_source_dir": plan_result.strategy.target_source_dir,
-            "target_parameter_kind": plan_result.strategy.target_parameter_kind,
-            "should_skip_llm": plan_result.strategy.should_skip_llm,
-            "should_relax_thresholds": plan_result.strategy.should_relax_thresholds,
-            "threshold_rationale": plan_result.thresholds.adjustment_reason,
-            "strategy_rationale": plan_result.strategy.rationale,
-        }
-        if plan_result.strategy.should_skip_llm:
-            print(
-                f"\n*** PLANNING ENGINE: recommend skipping LLM cycle {next_cycle}. "
-                f"Run batch_search targeting `{plan_result.strategy.target_command}` "
-                f"instead.\n"
-            )
-    else:
-        # No previous cycle evidence — use legacy hard-coded logic
-        planner_hypothesis = _build_planner_hypothesis(context, review)
-        promotion_thresholds = normalize_promotion_thresholds(
-            current.get("promotion_thresholds")
-        ).as_dict()
-        discouraged = discouraged_targets
-        planning_meta = {"engine": "legacy", "reason": "no_previous_evidence"}
+    # Engine always returns a result — uses default strategy when no evidence.
+    assert plan_result is not None, "PlanningEngine.plan() must not return None"
+    planner_hypothesis = plan_result.hypothesis
+    promotion_thresholds = plan_result.thresholds.as_dict()
+    discouraged = list(plan_result.strategy.discouraged_targets)
+    planning_meta: dict[str, object] = {
+        "engine": "deterministic",
+        "task_type": plan_result.strategy.task_type,
+        "target_command": plan_result.strategy.target_command,
+        "target_source_dir": plan_result.strategy.target_source_dir,
+        "target_parameter_kind": plan_result.strategy.target_parameter_kind,
+        "should_skip_llm": plan_result.strategy.should_skip_llm,
+        "should_relax_thresholds": plan_result.strategy.should_relax_thresholds,
+        "threshold_rationale": plan_result.thresholds.adjustment_reason,
+        "strategy_rationale": plan_result.strategy.rationale,
+        "discouraged_targets": discouraged,
+    }
+    if plan_result.strategy.should_skip_llm:
+        print(
+            f"\n*** PLANNING ENGINE: recommend skipping LLM cycle {next_cycle}. "
+            f"Run batch_search targeting `{plan_result.strategy.target_command}` "
+            f"instead.\n"
+        )
 
     assignment = {
         "agent_name": current.get("agent_name", "flow_agent"),

@@ -1,23 +1,17 @@
 """Deterministic Planning Engine for Flow Agent self-evolution.
 
-Orchestrates: read evidence → select strategy → propose thresholds →
-generate next-cycle assignment updates.  No LLM call required — this is a
-deterministic rule-based engine that can replace the hard-coded logic in
-``next_cycle.py`` when the user chooses to wire it in.
+Orchestrates: read evidence → reconstruct history → select strategy →
+propose thresholds → generate next-cycle assignment updates.
 
-Usage (standalone, not yet wired into the loop)::
-
-    from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
-    from pathlib import Path
-
-    engine = PlanningEngine(Path.cwd())
-    result = engine.plan("cycle_001")
-    print(result.hypothesis)
-    print(result.next_assignment_updates)
+History is reconstructed from previous cycles' ``_planning_meta`` fields
+in their assignment JSONs, so the engine can track which commands were
+tried and how many champions were promoted across multiple ``next_cycle.py``
+invocations (which each create a fresh ``PlanningEngine`` instance).
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
@@ -58,15 +52,13 @@ class PlanningResult:
 class PlanningEngine:
     """Deterministic planning engine for Flow Agent self-evolution.
 
-    Reads completed cycle evidence, selects a strategy, proposes adaptive
-    thresholds, and generates a concrete planner hypothesis that can be
-    injected directly into the Flow Agent's ``planner_hypothesis`` field.
+    Reads completed cycle evidence, reconstructs cross-cycle history from
+    persisted ``_planning_meta``, selects a strategy, proposes adaptive
+    thresholds, and generates a concrete planner hypothesis.
     """
 
     def __init__(self, repo_root: Path) -> None:
         self._repo_root = repo_root.resolve()
-        self._history: list[CycleEvidence] = []
-        self._strategies: list[Strategy] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -75,19 +67,28 @@ class PlanningEngine:
     def plan(self, previous_cycle_id: str) -> PlanningResult | None:
         """Plan the next cycle based on the previous cycle's evidence.
 
-        Returns None when the previous cycle hasn't been evaluated yet.
+        Reconstructs cross-cycle history by scanning earlier cycles'
+        ``_planning_meta`` and review decisions, so repeated zero-delta
+        cycles are correctly detected.
         """
         evidence = read_cycle_evidence(
             self._repo_root, previous_cycle_id
         )
-        if evidence is not None:
-            self._history.append(evidence)
 
-        # Determine which cycle we're planning FOR
         next_cycle_id = _increment_cycle_id(previous_cycle_id)
         cycle_number = _cycle_number(next_cycle_id)
 
-        # Count benchmarks from the evidence or a reasonable default
+        # Reconstruct cross-cycle history from persisted data
+        history = _reconstruct_evidence_history(
+            self._repo_root, previous_cycle_id
+        )
+        if evidence is not None:
+            history.append(evidence)
+
+        strategies = _reconstruct_strategy_history(
+            self._repo_root, previous_cycle_id
+        )
+
         benchmark_count = (
             len(evidence.per_benchmark)
             if evidence is not None and evidence.per_benchmark
@@ -97,18 +98,18 @@ class PlanningEngine:
         # --- Thresholds ---
         thresholds = propose_thresholds(
             benchmark_count=benchmark_count,
-            previous_evidence=tuple(self._history),
+            previous_evidence=tuple(history),
             cycle_number=cycle_number,
         )
 
         # --- Strategy ---
         strategy = select_strategy(
             evidence,
-            previous_strategies=tuple(self._strategies),
+            previous_strategies=tuple(strategies),
             cycle_number=cycle_number,
             benchmark_count=benchmark_count,
         )
-        self._strategies.append(strategy)
+        strategies.append(strategy)
 
         # --- Hypothesis ---
         hypothesis = self._build_hypothesis(
@@ -124,8 +125,8 @@ class PlanningEngine:
             strategy=strategy,
             thresholds=thresholds,
             hypothesis=hypothesis,
-            history=list(self._history),
-            previous_strategies=list(self._strategies),
+            history=history,
+            previous_strategies=strategies,
         )
 
     def plan_multi(
@@ -133,8 +134,8 @@ class PlanningEngine:
     ) -> list[PlanningResult]:
         """Plan across a range of already-completed cycles.
 
-        Reads each cycle's evidence in order, accumulating history so later
-        plans can learn from earlier outcomes.
+        Reads each cycle's evidence in order, reconstructing history so
+        later plans can learn from earlier outcomes.
         """
         results: list[PlanningResult] = []
         current = start_cycle
@@ -151,11 +152,7 @@ class PlanningEngine:
     def next_assignment_updates(
         self, result: PlanningResult
     ) -> dict[str, object]:
-        """Build the fields to merge into a next-cycle assignment.
-
-        These can be passed to ``next_cycle.py`` or used to hand-author
-        an assignment JSON.
-        """
+        """Build the fields to merge into a next-cycle assignment."""
         strategy = result.strategy
         thresholds = result.thresholds
 
@@ -178,6 +175,7 @@ class PlanningEngine:
                 "should_skip_llm": strategy.should_skip_llm,
                 "should_relax_thresholds": strategy.should_relax_thresholds,
                 "threshold_rationale": thresholds.adjustment_reason,
+                "discouraged_targets": list(strategy.discouraged_targets),
             },
         }
 
@@ -264,6 +262,90 @@ class PlanningEngine:
         parts.append(strategy.hypothesis_template)
 
         return "\n".join(parts)
+
+
+# ------------------------------------------------------------------
+# Cross-cycle history reconstruction
+# ------------------------------------------------------------------
+
+
+def _reconstruct_evidence_history(
+    repo_root: Path,
+    up_to_cycle: str,
+) -> list[CycleEvidence]:
+    """Read review decisions from all prior cycles to count champions."""
+    history: list[CycleEvidence] = []
+    cycle_num = _cycle_number(up_to_cycle)
+    # Scan cycles before the current one
+    for num in range(1, cycle_num):
+        prior = _format_cycle_id(up_to_cycle, num)
+        ev = read_cycle_evidence(repo_root, prior)
+        if ev is not None:
+            history.append(ev)
+    return history
+
+
+def _reconstruct_strategy_history(
+    repo_root: Path,
+    up_to_cycle: str,
+) -> list[Strategy]:
+    """Read _planning_meta from all prior cycles to know which commands were tried."""
+    strategies: list[Strategy] = []
+    cycle_num = _cycle_number(up_to_cycle)
+    for num in range(1, cycle_num):
+        prior = _format_cycle_id(up_to_cycle, num)
+        meta = _read_planning_meta(repo_root, prior)
+        if meta:
+            strategies.append(
+                Strategy(
+                    task_type=str(meta.get("task_type", "optimization")),
+                    target_command=str(meta.get("target_command", "")),
+                    target_source_dir=str(meta.get("target_source_dir", "")),
+                    target_parameter_kind=str(
+                        meta.get("target_parameter_kind", "")
+                    ),
+                    hypothesis_template="",
+                    rationale=str(meta.get("strategy_rationale", "")),
+                    should_skip_llm=bool(meta.get("should_skip_llm", False)),
+                    should_relax_thresholds=bool(
+                        meta.get("should_relax_thresholds", False)
+                    ),
+                    discouraged_targets=tuple(
+                        meta.get("discouraged_targets", ())
+                    ),
+                )
+            )
+    return strategies
+
+
+def _read_planning_meta(
+    repo_root: Path, cycle_id: str
+) -> dict[str, Any] | None:
+    """Read _planning_meta from a cycle's assignment JSON."""
+    path = (
+        repo_root
+        / "experiments"
+        / cycle_id
+        / "agents"
+        / "assignments"
+        / "candidate_001.json"
+    )
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    meta = payload.get("_planning_meta")
+    return meta if isinstance(meta, dict) else None
+
+
+def _format_cycle_id(reference_id: str, number: int) -> str:
+    prefix, _sep, ref_num = reference_id.rpartition("_")
+    width = len(ref_num)
+    return f"{prefix}_{number:0{width}d}"
 
 
 # ------------------------------------------------------------------
