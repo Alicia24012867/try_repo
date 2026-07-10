@@ -23,10 +23,31 @@ from scripts.agents.self_evolved_abc.benchmarks import (
     promotion_benchmark_count,
     with_abc_native_evaluation_scope,
 )
-from scripts.agents.self_evolved_abc.flow.promotion import AndDeltaStats
+from scripts.agents.self_evolved_abc.flow.promotion import (
+    AndDeltaStats,
+    PromotionThresholds,
+    meets_promotion_thresholds,
+    scalar_and_reward,
+)
 from scripts.agents.self_evolved_abc.flow.review import (
     _meets_bootstrap_champion_policy,
+    review_impl_compare,
 )
+from scripts.agents.self_evolved_abc.flow.batch_search import (
+    build_variants,
+    current_csw_floors,
+    set_csw_floors,
+    variant_command,
+)
+from scripts.agents.self_evolved_abc.flow.planner_batch import (
+    batch_variant_command,
+    integrate_batch_winner,
+)
+from scripts.agents.self_evolved_abc.flow.cycle_loop import (
+    _assignment_champion_cycle,
+)
+from scripts.agents.self_evolved_abc.coding_agents.flow_agent import FlowAgent
+from scripts.agents.self_evolved_abc.model_client import TodoModelClient
 from scripts.agents.self_evolved_abc.planning.evidence import (
     BenchmarkDelta,
     CycleEvidence,
@@ -419,6 +440,7 @@ prev = [Strategy(task_type="optimization", target_command="fx",
 s = select_strategy(ev_zero, previous_strategies=prev,
                     cycle_number=2, benchmark_count=30)
 check("2e: zero delta → switch command", s.target_command != "fx")
+check("2e: zero delta → batch_search task", s.task_type == "batch_search")
 check("2e: zero delta → skip LLM", s.should_skip_llm)
 check("2e: discouraged has fxuSelect.c", "fxuSelect.c" in s.discouraged_targets)
 
@@ -714,6 +736,14 @@ with tempfile.TemporaryDirectory() as tmp:
         "reason": "zero delta", "next_action": "switch target",
     }))
     (cycle_dir / "impl_compare/candidate_modified").mkdir(parents=True)
+    (impl / "qor_delta.csv").write_text(
+        "benchmark,cec_status,correctness_backed,baseline_aig_nodes,"
+        "candidate_aig_nodes,and_delta_candidate_minus_baseline,"
+        "and_improve_pct,baseline_aig_depth,candidate_aig_depth,"
+        "depth_delta_candidate_minus_baseline\n"
+        "benchmarks/epfl/epfl_adder.blif,cec_pass,True,100,100,0,0,10,10,0\n",
+        encoding="utf-8",
+    )
 
     ctx2 = CycleContext.from_assignment_file(repo, assignment_path)
     assignment2 = build_next_assignment(ctx2, "cycle_002", "candidate_001")
@@ -726,9 +756,12 @@ with tempfile.TemporaryDirectory() as tmp:
           assignment2.get("promotion_thresholds", {}).get("min_improved_benchmarks", 0) > 0)
     check("6h: discouraged targets",
           isinstance(assignment2.get("discouraged_patch_targets"), list))
+    check("6i: evaluated zero-delta lesson enters active evolved rules",
+          any("zero AND/depth" in rule
+              for rule in assignment2.get("evolved_rules", ())))
 
-    # 6i: increment_cycle_id from next_cycle
-    check("6i: next_cycle increment", increment_cycle_id("cycle_001") == "cycle_002")
+    # 6j: increment_cycle_id from next_cycle
+    check("6j: next_cycle increment", increment_cycle_id("cycle_001") == "cycle_002")
 
 
 # ===================================================================
@@ -979,7 +1012,6 @@ check("12b: bootstrap policy is disabled after champion exists",
       not _meets_bootstrap_champion_policy(
           existing_champion_ctx, 0.0004, bootstrap_stats
       ))
-
 regressed_stats = AndDeltaStats(
     total_delta=-6,
     improved_count=4,
@@ -988,6 +1020,201 @@ regressed_stats = AndDeltaStats(
 )
 check("12c: bootstrap policy rejects regressions",
       not _meets_bootstrap_champion_policy(bootstrap_ctx, 0.5, regressed_stats))
+
+
+# ===================================================================
+# SECTION 13: Paper-style scalar reward and Pareto promotion
+# ===================================================================
+section("13. SCALAR REWARD AND PARETO PROMOTION")
+
+meaningful_thresholds = PromotionThresholds(
+    min_average_and_improve_pct=3.0,
+    min_total_and_reduction=15,
+    min_improved_benchmarks=3,
+)
+absolute_gain = AndDeltaStats(-15, 3, 0, 27)
+relative_gain = AndDeltaStats(-6, 3, 0, 27)
+regressing_gain = AndDeltaStats(-20, 4, 1, 25)
+check("13a: scalar reward is net AND reduction",
+      scalar_and_reward(absolute_gain) == 15)
+check("13b: absolute magnitude can promote despite tiny mean pct",
+      meets_promotion_thresholds(
+          avg_and=0.001,
+          delta_stats=absolute_gain,
+          thresholds=meaningful_thresholds,
+      ))
+check("13c: relative magnitude can promote despite smaller total",
+      meets_promotion_thresholds(
+          avg_and=3.1,
+          delta_stats=relative_gain,
+          thresholds=meaningful_thresholds,
+      ))
+check("13d: primary-metric regression blocks promotion",
+      not meets_promotion_thresholds(
+          avg_and=4.0,
+          delta_stats=regressing_gain,
+          thresholds=meaningful_thresholds,
+      ))
+
+with tempfile.TemporaryDirectory() as td:
+    temp_repo = Path(td)
+    impl_root = temp_repo / "experiments/cycle_002/impl_compare"
+    (impl_root / "candidate_modified").mkdir(parents=True)
+    (impl_root / "comparison").mkdir(parents=True)
+    (impl_root / "candidate_modified/build_info.json").write_text(
+        json.dumps({"status": "candidate_binary_build_passed"}),
+        encoding="utf-8",
+    )
+    (impl_root / "comparison/cec_summary.csv").write_text(
+        "benchmark,cec_status\na,cec_pass\nb,cec_pass\nc,cec_pass\n",
+        encoding="utf-8",
+    )
+    (impl_root / "comparison/qor_delta.csv").write_text(
+        "benchmark,correctness_backed,and_improve_pct,"
+        "and_delta_candidate_minus_baseline,depth_delta_candidate_minus_baseline\n"
+        "a,True,0.001,-5,0\nb,True,0.001,-5,0\nc,True,0.001,-5,0\n",
+        encoding="utf-8",
+    )
+    review_ctx = SmokeContext(
+        temp_repo,
+        {
+            "cycle_id": "cycle_002",
+            "candidate_id": "candidate_001",
+            "agent_name": "flow_agent",
+            "paper_role": "Flow Agent",
+            "baseline_kind": "champion",
+            "champion_cycle_id": "cycle_001",
+            "promotion_thresholds": meaningful_thresholds.as_dict(),
+        },
+    )
+    reviewed = review_impl_compare(review_ctx, impl_root)
+    check("13e: review promotes absolute -15 regression-free gain",
+          reviewed.decision == "ACCEPT_FOR_NEXT_CYCLE"
+          and reviewed.scalar_and_reward == 15)
+
+
+# ===================================================================
+# SECTION 14: Batch sensitivity and winner integration
+# ===================================================================
+section("14. BATCH SENSITIVITY AND WINNER INTEGRATION")
+
+csw_source = (
+    "clk = Abc_Clock();\n"
+    "    if ( nCutsMax < 16 )\n"
+    "        nCutsMax = 16;\n"
+    "    if ( nLeafMax < 8 )\n"
+    "        nLeafMax = 8;\n"
+    "    p = Csw_ManStart( pAig, nCutsMax, nLeafMax, fVerbose );\n"
+)
+check("14a: current csweep floors are detected",
+      current_csw_floors(csw_source) == (16, 8))
+replaced_csw = set_csw_floors(csw_source, cuts=12, leaves=6)
+check("14b: csweep floors can move downward for bidirectional search",
+      current_csw_floors(replaced_csw) == (12, 6))
+check("14c: batch variant maps to reached command",
+      batch_variant_command("csweep_floor_c20_l10") == "csweep")
+wrapper_families = {
+    command: build_variants(smoke_ctx, "flow_wide", target_command=command)
+    for command in ("rewrite", "resub", "dc2", "refactor")
+}
+check("14d: every planner wrapper command has deterministic probes",
+      all(wrapper_families.values()))
+check("14e: target-command filtering does not leak other families",
+      all(variant_command(item.variant_id) == command
+          for command, items in wrapper_families.items()
+          for item in items))
+
+with tempfile.TemporaryDirectory() as td:
+    temp_repo = Path(td)
+    assignment_path = (
+        temp_repo
+        / "experiments/cycle_006/agents/assignments/candidate_001.json"
+    )
+    assignment_path.parent.mkdir(parents=True)
+    assignment_path.write_text(
+        json.dumps(
+            {
+                "agent_name": "flow_agent",
+                "paper_role": "Flow Agent",
+                "cycle_id": "cycle_006",
+                "candidate_id": "candidate_001",
+                "benchmark_scope": ["benchmarks/a.blif"],
+                "evaluation_benchmark_scope": ["benchmarks/a.blif"],
+                "_planning_meta": {"should_skip_llm": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    integrated = integrate_batch_winner(
+        assignment_path=assignment_path,
+        batch_id="cycle_006_planner_flow_wide",
+        winner_payload={
+            "promotion_found": True,
+            "winner": {
+                "cycle_id": "probe_003",
+                "variant_id": "csweep_floor_c20_l10",
+                "decision": "ACCEPT_FOR_NEXT_CYCLE",
+                "promotion_allowed": True,
+                "average_and_improve_pct": 0.001,
+                "total_and_delta_candidate_minus_baseline": -20,
+                "improved_benchmark_count": 4,
+                "regressed_benchmark_count": 0,
+            },
+        },
+    )
+    integrated_assignment = json.loads(
+        assignment_path.read_text(encoding="utf-8")
+    )
+    check("14f: promoted batch winner becomes champion", integrated == "probe_003")
+    check("14g: batch champion source is the next base",
+          integrated_assignment.get("champion_cycle_id") == "probe_003"
+          and "probe_003" in integrated_assignment.get("base_source_root", ""))
+    check("14h: LLM resumes only after batch evidence integration",
+          integrated_assignment.get("_planning_meta", {}).get("should_skip_llm") is False
+          and bool(integrated_assignment.get("batch_search_evidence")))
+    check("14i: resumed loop restores incumbent champion from assignment",
+          _assignment_champion_cycle(assignment_path) == "probe_003")
+
+# ===================================================================
+# SECTION 15: Coding Agent receives authoritative champion QoR
+# ===================================================================
+section("15. AUTHORITATIVE CHAMPION QOR CONTEXT")
+
+with tempfile.TemporaryDirectory() as td:
+    temp_repo = Path(td)
+    comparison = (
+        temp_repo
+        / "experiments/cycle_001/impl_compare/comparison"
+    )
+    comparison.mkdir(parents=True)
+    (comparison / "qor_delta.csv").write_text(
+        "benchmark,baseline_aig_nodes,candidate_aig_nodes,"
+        "baseline_aig_depth,candidate_aig_depth\n"
+        "benchmarks/a.blif,100,90,10,9\n",
+        encoding="utf-8",
+    )
+    prompt_ctx = SmokeContext(
+        temp_repo,
+        {
+            "cycle_id": "cycle_002",
+            "candidate_id": "candidate_001",
+            "agent_name": "flow_agent",
+            "paper_role": "Flow Agent",
+            "benchmark_scope": ["benchmarks/a.blif"],
+            "evaluation_benchmark_scope": ["benchmarks/a.blif"],
+            "champion_cycle_id": "cycle_001",
+        },
+    )
+    prompt_agent = FlowAgent(prompt_ctx, TodoModelClient())
+    champion_text = prompt_agent._format_champion_qor(
+        prompt_ctx.assignment,
+        previous_cycle="cycle_001",
+        legacy_summary_path=temp_repo / "missing.csv",
+    )
+    check("15a: prompt reads candidate side of champion qor_delta.csv",
+          "champion_and=90" in champion_text)
+    check("15b: prompt identifies authoritative champion source cycle",
+          "source_cycle: cycle_001" in champion_text)
 
 
 # ===================================================================

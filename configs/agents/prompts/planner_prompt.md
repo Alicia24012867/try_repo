@@ -21,6 +21,10 @@ Use the following principles exactly:
 - Prefer small subsystem-local edits whose effect can be attributed.
 - Treat FlowTune, AIG optimization, and mapping as complementary subsystems.
 - Accumulate only validated improvements into the current champion.
+- Interpret percentage and absolute reduction as alternative magnitude views:
+  after CEC, require zero primary-metric regressions and sufficient benchmark
+  breadth, then accept when either configured magnitude gate is met. Do not
+  require every correlated area statistic to cross an independent hard gate.
 - Roll back candidates that are broad, unstable, benchmark-specific, or
   semantically unsafe.
 - Update the rulebase only when feedback provides evidence that a rule is too
@@ -64,6 +68,10 @@ Read evidence in this order and state the consequence in the JSON plan:
      arbitrary previous run.
    - report average direction and per-design regressions.
    - do not let skipped or timed-out designs disappear from the decision.
+   - distinguish unreachable code from reached-but-behavior-neutral changes;
+     a zero final delta alone does not prove the function was never called.
+   - use deterministic batch sensitivity evidence before requesting another
+     single constant edit after repeated zero/near-zero cycles.
 4. Runtime and resource evidence:
    - if runtime exceeds budget, prefer flow/search-schedule changes or
      instrumentation before algorithmic expansion.

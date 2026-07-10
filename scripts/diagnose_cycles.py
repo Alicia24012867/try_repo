@@ -38,6 +38,7 @@ class CycleDiag:
     cec_total_count: int
     average_and_improve_pct: float | None
     total_and_delta: int | None
+    scalar_and_reward: int | None
     improved_benchmark_count: int
     regressed_benchmark_count: int
     unchanged_benchmark_count: int
@@ -200,6 +201,13 @@ def _read_cycle(
         if r.get("and_delta_candidate_minus_baseline", "") not in ("", "0", "0.0")
     )
 
+    total_and_delta = _parse_optional_int(
+        review.get("total_and_delta_candidate_minus_baseline")
+    )
+    scalar_reward = _parse_optional_int(review.get("scalar_and_reward"))
+    if scalar_reward is None and total_and_delta is not None:
+        scalar_reward = -total_and_delta
+
     return CycleDiag(
         cycle_id=cycle_id,
         candidate_id=str(review.get("candidate_id", "candidate_001")),
@@ -212,9 +220,8 @@ def _read_cycle(
         average_and_improve_pct=_parse_optional_float(
             review.get("average_and_improve_pct")
         ),
-        total_and_delta=_parse_optional_int(
-            review.get("total_and_delta_candidate_minus_baseline")
-        ),
+        total_and_delta=total_and_delta,
+        scalar_and_reward=scalar_reward,
         improved_benchmark_count=int(
             review.get("improved_benchmark_count", 0)
         ),
@@ -331,6 +338,14 @@ def _build_summary(cycles: list[CycleDiag]) -> dict[str, Any]:
         "best_average_and_improve_pct": best_avg,
         "best_average_cycle": best_cycle,
         "best_total_and_delta": best_total,
+        "best_scalar_and_reward": max(
+            (
+                c.scalar_and_reward
+                for c in cycles
+                if c.scalar_and_reward is not None
+            ),
+            default=None,
+        ),
         "all_cec_pass_rate": (
             f"{sum(1 for c in cycles if c.cec_pass_count == c.cec_total_count and c.cec_total_count > 0)}/{len(cycles)}"
         ),
@@ -353,8 +368,8 @@ def _print_human_summary(
         print("  No cycles with review_decision.json found.", file=sys.stderr)
         return
 
-    print(f"\n  {'Cycle':<14} {'Decision':<28} {'CEC':<8} {'Scope':<9} {'ΔAND':>6} {'Avg%':>8} {'I/R/U':>10}  Target", file=sys.stderr)
-    print(f"  {'-'*14} {'-'*28} {'-'*8} {'-'*9} {'-'*6} {'-'*8} {'-'*10}  {'-'*40}", file=sys.stderr)
+    print(f"\n  {'Cycle':<14} {'Decision':<28} {'CEC':<8} {'Scope':<9} {'ΔAND':>6} {'Reward':>7} {'Avg%':>8} {'I/R/U':>10}  Target", file=sys.stderr)
+    print(f"  {'-'*14} {'-'*28} {'-'*8} {'-'*9} {'-'*6} {'-'*7} {'-'*8} {'-'*10}  {'-'*40}", file=sys.stderr)
 
     for c in cycles:
         cec_str = f"{c.cec_pass_count}/{c.cec_total_count}"
@@ -364,6 +379,7 @@ def _print_human_summary(
             f"{c.unsupported_benchmark_count}"
         )
         delta_str = str(c.total_and_delta) if c.total_and_delta is not None else "N/A"
+        reward_str = str(c.scalar_and_reward) if c.scalar_and_reward is not None else "N/A"
         avg_str = f"{c.average_and_improve_pct:.2f}%" if c.average_and_improve_pct is not None else "N/A"
         i_r_u = f"{c.improved_benchmark_count}/{c.regressed_benchmark_count}/{c.unchanged_benchmark_count}"
         target = c.previous_patch_target or "(none)"
@@ -371,7 +387,7 @@ def _print_human_summary(
             target = "..." + target[-37:]
 
         print(
-            f"  {c.cycle_id:<14} {c.review_decision:<28} {cec_str:<8} {scope_str:<9} {delta_str:>6} {avg_str:>8} {i_r_u:>10}  {target}",
+            f"  {c.cycle_id:<14} {c.review_decision:<28} {cec_str:<8} {scope_str:<9} {delta_str:>6} {reward_str:>7} {avg_str:>8} {i_r_u:>10}  {target}",
             file=sys.stderr,
         )
 

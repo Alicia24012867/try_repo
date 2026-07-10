@@ -47,11 +47,17 @@ def propose_thresholds(
     Rules (paper-aligned):
     - ``min_improved_benchmarks``: max(1, min(ceil(benchmark_count * 0.1), 3)).
       For 10 designs → 1; 30 → 3; 70 → 3 (capped).
-    - ``min_average_and_improve_pct``: starts at 5 % for ≤10 designs, drops to
+    - ``min_average_and_improve_pct``: a strong relative-gain alternative to
+      the absolute reduction gate; starts at 5 % for ≤10 designs, drops to
       2 % for 30+, then rises back toward 5 % as champions accumulate.
     - ``min_total_and_reduction``: starts at 10 for ≤10 designs, scales slowly
       with design count (not 1:1 — absolute reduction doesn't grow linearly).
     - Early cycles (1–3): more lenient to avoid blocking all candidates.
+
+    Review combines these as: no primary regressions, breadth met, and either
+    the relative or absolute magnitude gate met. The paper reports a scalar
+    reward plus a detailed vector; it does not prescribe three correlated hard
+    gates that must all pass simultaneously.
     """
     reasons: list[str] = []
 

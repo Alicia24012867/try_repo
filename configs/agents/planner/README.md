@@ -50,6 +50,7 @@ frontend support is wired.
 - Source edits: restricted to FlowTune optimization sources and command
   wrappers declared in the assignment.
 - Acceptance: requires candidate build, CEC pass on every measured design, and
-  correctness-backed QoR above the promotion thresholds. The first
+  correctness-backed QoR with zero AND regressions, sufficient benchmark
+  breadth, and either the relative or absolute magnitude gate. The first
   correctness-backed positive, no-regression candidate may bootstrap the
   champion lineage.

@@ -83,21 +83,47 @@ def meets_promotion_thresholds(
     delta_stats: AndDeltaStats,
     thresholds: PromotionThresholds,
 ) -> bool:
+    """Return whether a candidate is a meaningful Pareto-safe improvement.
+
+    The paper feeds a scalar reward and a detailed QoR vector back to the
+    planner.  Percentage and absolute AND reduction are two views of the same
+    area objective, so requiring both badly over-constrains incremental source
+    evolution.  Breadth and no-regression remain hard safeguards; either
+    magnitude threshold may establish a meaningful gain.
+    """
+
     if avg_and is None or delta_stats.total_delta is None:
         return False
     return (
-        avg_and >= thresholds.min_average_and_improve_pct
-        and -delta_stats.total_delta >= thresholds.min_total_and_reduction
+        delta_stats.total_delta < 0
+        and delta_stats.regressed_count == 0
         and delta_stats.improved_count >= thresholds.min_improved_benchmarks
+        and (
+            avg_and >= thresholds.min_average_and_improve_pct
+            or -delta_stats.total_delta >= thresholds.min_total_and_reduction
+        )
     )
+
+
+def scalar_and_reward(delta_stats: AndDeltaStats) -> int | None:
+    """Return the scalar area reward used for planner feedback.
+
+    Positive values are net AND reductions relative to the incumbent; negative
+    values are regressions.  The full per-design vector remains authoritative
+    for the no-regression and breadth gates.
+    """
+
+    if delta_stats.total_delta is None:
+        return None
+    return -delta_stats.total_delta
 
 
 def threshold_prompt_text(thresholds: PromotionThresholds) -> str:
     return (
-        "Champion promotion requires average AND improvement >= "
-        f"{thresholds.min_average_and_improve_pct}%, total AND reduction >= "
-        f"{thresholds.min_total_and_reduction}, and improved benchmark rows >= "
-        f"{thresholds.min_improved_benchmarks}."
+        "Champion promotion requires zero AND-regressed rows, improved benchmark "
+        f"rows >= {thresholds.min_improved_benchmarks}, and either average AND "
+        f"improvement >= {thresholds.min_average_and_improve_pct}% or total AND "
+        f"reduction >= {thresholds.min_total_and_reduction}."
     )
 
 

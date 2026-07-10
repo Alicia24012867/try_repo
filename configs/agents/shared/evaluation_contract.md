@@ -65,8 +65,10 @@ binary build is required before implementation comparison.
 - `ACCEPT_FOR_NEXT_CYCLE`: candidate build/smoke/CEC pass and correctness-backed
   QoR improves on the target metric. When no previous champion is recorded, a
   full-CEC, positive-total, no-regression evaluated candidate may bootstrap the
-  first champion; later candidates must beat the current champion under the
-  configured promotion thresholds.
+  first champion. Later candidates must have zero AND-regressed rows, meet the
+  improved-benchmark breadth threshold, and meet either the configured average
+  percentage or total AND-reduction magnitude threshold. The scalar reward is
+  net AND reduction; the per-design vector remains the regression safeguard.
 - `REPAIR_VALIDATION`: model JSON, mode, or path scope validation failed.
 - `REPAIR_PATCH`: unified diff did not apply in the isolated workspace.
 - `REPAIR_SMOKE` or `REPAIR_COMPILE`: local Python smoke or candidate C build

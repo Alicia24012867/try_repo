@@ -24,6 +24,7 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
     meets_promotion_thresholds,
     normalize_promotion_thresholds,
     parse_float,
+    scalar_and_reward,
 )
 
 
@@ -40,6 +41,7 @@ class ReviewDecision:
     correctness_backed_rows: int
     average_and_improve_pct: float | None
     total_and_delta_candidate_minus_baseline: int | None
+    scalar_and_reward: int | None
     improved_benchmark_count: int
     regressed_benchmark_count: int
     unchanged_benchmark_count: int
@@ -94,6 +96,7 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         if row.get("and_improve_pct") not in ("", None)
     )
     delta_stats = and_delta_stats(backed_rows)
+    scalar_reward = scalar_and_reward(delta_stats)
     thresholds = normalize_promotion_thresholds(
         context.assignment.get("promotion_thresholds")
     )
@@ -137,10 +140,12 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
     ):
         decision = "ACCEPT_FOR_NEXT_CYCLE"
         reason = (
-            "All CEC rows passed and the QoR improvement exceeded promotion "
-            f"thresholds: average AND improvement {avg_and:.6f}%, "
-            f"total AND delta {delta_stats.total_delta}, "
-            f"improved rows {delta_stats.improved_count}."
+            "All CEC rows passed and the candidate is a Pareto-safe QoR "
+            "improvement: zero AND-regressed rows, "
+            f"scalar AND reward {scalar_reward}, average AND improvement "
+            f"{avg_and:.6f}%, total AND delta {delta_stats.total_delta}, "
+            f"improved rows {delta_stats.improved_count}. The breadth gate and "
+            "at least one configured magnitude gate were satisfied."
         )
         next_action = "Use this candidate as positive evidence for the next Flow Agent cycle."
         promotion = True
@@ -163,8 +168,9 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
                 f"total AND delta={format_optional_int(delta_stats.total_delta)}, "
                 f"improved rows={delta_stats.improved_count}, "
                 f"required avg>={thresholds.min_average_and_improve_pct:.6f}%, "
-                f"total reduction>={thresholds.min_total_and_reduction}, "
-                f"improved rows>={thresholds.min_improved_benchmarks})."
+                f"or total reduction>={thresholds.min_total_and_reduction}; "
+                f"required improved rows>={thresholds.min_improved_benchmarks} "
+                "with zero AND regressions)."
             )
             next_action = (
                 "Treat this as weak evidence, not a champion. Ask the Flow "
@@ -184,6 +190,7 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         correctness_backed_rows=len(backed_rows),
         average_and_improve_pct=avg_and,
         total_and_delta_candidate_minus_baseline=delta_stats.total_delta,
+        scalar_and_reward=scalar_reward,
         improved_benchmark_count=delta_stats.improved_count,
         regressed_benchmark_count=delta_stats.regressed_count,
         unchanged_benchmark_count=delta_stats.unchanged_count,
@@ -282,8 +289,9 @@ def render_feedback(
             f"- Correctness-backed QoR rows: {decision.correctness_backed_rows}",
             f"- Average AND improvement pct: `{format_float(decision.average_and_improve_pct)}`",
             f"- Total AND delta candidate-minus-baseline: `{format_optional_int(decision.total_and_delta_candidate_minus_baseline)}`",
+            f"- Scalar AND reward: `{format_optional_int(decision.scalar_and_reward)}`",
             f"- AND improved/regressed/unchanged rows: {decision.improved_benchmark_count}/{decision.regressed_benchmark_count}/{decision.unchanged_benchmark_count}",
-            f"- Promotion thresholds: avg >= `{decision.min_average_and_improve_pct:.6f}%`, total reduction >= `{decision.min_total_and_reduction}`, improved rows >= `{decision.min_improved_benchmarks}`",
+            f"- Promotion gate: zero AND regressions, improved rows >= `{decision.min_improved_benchmarks}`, and either avg >= `{decision.min_average_and_improve_pct:.6f}%` or total reduction >= `{decision.min_total_and_reduction}`",
             "",
             "## Evidence",
             "",

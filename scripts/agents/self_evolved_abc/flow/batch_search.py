@@ -52,6 +52,13 @@ CSW_CORE = Path("third_party/FlowTune/src/src/opt/csw/cswCore.c")
 ABC_FXU = Path("third_party/FlowTune/src/src/base/abci/abcFxu.c")
 ABC_COMMANDS = Path("third_party/FlowTune/src/src/base/abci/abc.c")
 FXU_SELECT = Path("third_party/FlowTune/src/src/opt/fxu/fxuSelect.c")
+CSW_FLOOR_PATTERN = re.compile(
+    r"(clk = Abc_Clock\(\);\n)"
+    r"(?:    if \( nCutsMax < (\d+) \)\n"
+    r"        nCutsMax = \d+;\n)?"
+    r"(?:    if \( nLeafMax < (\d+) \)\n"
+    r"        nLeafMax = \d+;\n)?"
+)
 SUMMARY_FIELDS = (
     "batch_id",
     "cycle_id",
@@ -127,6 +134,12 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
             "Comma-separated variant ids to generate. Leave empty to generate "
             "the full variant set."
         ),
+    )
+    parser.add_argument(
+        "--target-command",
+        choices=("fx", "rewrite", "resub", "dc2", "csweep", "refactor"),
+        default="",
+        help="Generate only variants that affect this evaluation-flow command.",
     )
     parser.add_argument(
         "--benchmark-glob",
@@ -219,6 +232,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             batch_id=args.batch_id or f"{args.start_cycle}_flow_batch",
             variant_set=args.variant_set,
             include_variants=parse_variant_filter(args.include_variants),
+            target_command=args.target_command,
             force=args.force,
         )
         manifest_path = repo_root / manifest["manifest_path"]
@@ -247,9 +261,10 @@ def generate_batch(
     batch_id: str,
     variant_set: str,
     include_variants: set[str],
+    target_command: str = "",
     force: bool,
 ) -> dict[str, Any]:
-    variants = build_variants(context, variant_set)
+    variants = build_variants(context, variant_set, target_command=target_command)
     if include_variants:
         variants = [
             variant for variant in variants if variant.variant_id in include_variants
@@ -305,6 +320,7 @@ def generate_batch(
     manifest = {
         "batch_id": batch_id,
         "variant_set": variant_set,
+        "target_command": target_command,
         "include_variants": sorted(include_variants),
         "base_assignment": str(
             context.repo_root
@@ -332,7 +348,12 @@ def generate_batch(
     return manifest
 
 
-def build_variants(context: CycleContext, variant_set: str) -> list[PatchVariant]:
+def build_variants(
+    context: CycleContext,
+    variant_set: str,
+    *,
+    target_command: str = "",
+) -> list[PatchVariant]:
     if variant_set not in ("flow_seed", "flow_wide"):
         raise ValueError(f"unsupported variant set: {variant_set}")
     variants: list[PatchVariant] = []
@@ -341,50 +362,40 @@ def build_variants(context: CycleContext, variant_set: str) -> list[PatchVariant
     if variant_set == "flow_wide":
         variants.extend(build_abc_csweep_default_variants(context))
         variants.extend(build_fxu_select_variants(context))
+        variants.extend(build_command_wrapper_variants(context))
+    if target_command:
+        variants = [
+            variant
+            for variant in variants
+            if variant_command(variant.variant_id) == target_command
+        ]
     return variants
 
 
 def build_csw_variants(context: CycleContext) -> list[PatchVariant]:
     source = source_text(context, CSW_CORE)
-    cut_floor = max_int_match(source, r"nCutsMax\s*<\s*(\d+)")
-    leaf_floor = max_int_match(source, r"nLeafMax\s*<\s*(\d+)")
-    candidates: tuple[tuple[int | None, int | None], ...] = (
-        (10, None),
-        (12, None),
-        (16, None),
-        (None, 8),
+    current_cuts, current_leaves = current_csw_floors(source)
+    candidates: tuple[tuple[int, int], ...] = (
+        (10, 6),
+        (12, 6),
         (12, 8),
+        (16, 6),
         (16, 8),
+        (20, 8),
         (20, 10),
+        (24, 10),
+        (24, 12),
     )
     variants: list[PatchVariant] = []
     for cuts, leaves in candidates:
-        if cuts is not None and cuts <= cut_floor:
+        if (cuts, leaves) == (current_cuts, current_leaves):
             continue
-        if leaves is not None and leaves <= leaf_floor:
-            continue
-        insertion = []
-        if cuts is not None:
-            insertion.append(
-                f"    if ( nCutsMax < {cuts} )\n"
-                f"        nCutsMax = {cuts};\n"
-            )
-        if leaves is not None:
-            insertion.append(
-                f"    if ( nLeafMax < {leaves} )\n"
-                f"        nLeafMax = {leaves};\n"
-            )
-        new_source = insert_after_clock(
-            source,
-            "".join(insertion),
-        )
-        cut_label = str(cuts) if cuts is not None else "keep"
-        leaf_label = str(leaves) if leaves is not None else "keep"
+        new_source = set_csw_floors(source, cuts=cuts, leaves=leaves)
         variants.append(
             PatchVariant(
-                variant_id=f"csweep_floor_c{cut_label}_l{leaf_label}",
+                variant_id=f"csweep_floor_c{cuts}_l{leaves}",
                 description=(
-                    f"Raise csweep cut/leaf floors to {cut_label}/{leaf_label} "
+                    f"Set csweep cut/leaf floors to {cuts}/{leaves} "
                     "before Csw_ManStart."
                 ),
                 target_file=str(CSW_CORE),
@@ -473,6 +484,8 @@ def build_fxu_variants(context: CycleContext, *, wide: bool) -> list[PatchVarian
 
 def build_abc_csweep_default_variants(context: CycleContext) -> list[PatchVariant]:
     source = source_text(context, ABC_COMMANDS)
+    core_source = source_text(context, CSW_CORE)
+    core_cut_floor, core_leaf_floor = current_csw_floors(core_source)
     old = "    nCutsMax  =  8;\n    nLeafMax  =  6;"
     candidates = (
         (6, 5),
@@ -486,6 +499,8 @@ def build_abc_csweep_default_variants(context: CycleContext) -> list[PatchVarian
     if old not in source:
         return variants
     for cuts, leaves in candidates:
+        if cuts <= core_cut_floor and leaves <= core_leaf_floor:
+            continue
         new = f"    nCutsMax  = {cuts:2d};\n    nLeafMax  = {leaves:2d};"
         new_source = source.replace(old, new, 1)
         variants.append(
@@ -529,6 +544,109 @@ def build_fxu_select_variants(context: CycleContext) -> list[PatchVariant]:
                     source,
                     source.replace(old, new, 1),
                 ),
+            )
+        )
+    return variants
+
+
+def build_command_wrapper_variants(context: CycleContext) -> list[PatchVariant]:
+    """Sweep wrapper defaults that are not overridden by the evaluation flow."""
+
+    source = source_text(context, ABC_COMMANDS)
+    specs = (
+        (
+            "rewrite_no_level_update",
+            "Abc_CommandRewrite",
+            "    fUpdateLevel = 1;",
+            "    fUpdateLevel = 0;",
+            "Allow rewrite to prioritize area without preserving levels.",
+        ),
+        (
+            "resub_nodes0",
+            "Abc_CommandResubstitute",
+            "    nNodesMax    =  1;",
+            "    nNodesMax    =  0;",
+            "Restrict resubstitution to zero-added-node replacements.",
+        ),
+        (
+            "resub_nodes2",
+            "Abc_CommandResubstitute",
+            "    nNodesMax    =  1;",
+            "    nNodesMax    =  2;",
+            "Allow resubstitution to add up to two nodes for larger net gain.",
+        ),
+        (
+            "resub_nodes3",
+            "Abc_CommandResubstitute",
+            "    nNodesMax    =  1;",
+            "    nNodesMax    =  3;",
+            "Allow the full supported resubstitution replacement size.",
+        ),
+        (
+            "resub_odc1",
+            "Abc_CommandResubstitute",
+            "    nLevelsOdc   =  0;",
+            "    nLevelsOdc   =  1;",
+            "Enable one level of observability don't-care context in resub.",
+        ),
+        (
+            "dc2_balance",
+            "Abc_CommandDc2",
+            "    fBalance     = 0;",
+            "    fBalance     = 1;",
+            "Enable DC2 internal balancing.",
+        ),
+        (
+            "dc2_update_level",
+            "Abc_CommandDc2",
+            "    fUpdateLevel = 0;",
+            "    fUpdateLevel = 1;",
+            "Enable DC2 level updates during optimization.",
+        ),
+        (
+            "dc2_no_fanout",
+            "Abc_CommandDc2",
+            "    fFanout      = 1;",
+            "    fFanout      = 0;",
+            "Disable DC2 fanout representation to test area sensitivity.",
+        ),
+        (
+            "refactor_node8",
+            "Abc_CommandRefactor",
+            "    nNodeSizeMax = 10;",
+            "    nNodeSizeMax =  8;",
+            "Use smaller refactor cones for more local replacements.",
+        ),
+        (
+            "refactor_node12",
+            "Abc_CommandRefactor",
+            "    nNodeSizeMax = 10;",
+            "    nNodeSizeMax = 12;",
+            "Use larger refactor cones to expose broader divisors.",
+        ),
+        (
+            "refactor_node15",
+            "Abc_CommandRefactor",
+            "    nNodeSizeMax = 10;",
+            "    nNodeSizeMax = 15;",
+            "Use the largest supported refactor node cone.",
+        ),
+    )
+    variants: list[PatchVariant] = []
+    for variant_id, function, old, new, description in specs:
+        new_source = replace_in_function(source, function, old, new)
+        if new_source == source:
+            continue
+        variants.append(
+            PatchVariant(
+                variant_id=variant_id,
+                description=description,
+                target_file=str(ABC_COMMANDS),
+                rationale=(
+                    f"Changes a default consumed by {function}; the evaluated "
+                    "command does not override this specific field."
+                ),
+                patch_text=unified_diff(ABC_COMMANDS, source, new_source),
             )
         )
     return variants
@@ -801,6 +919,54 @@ def insert_after_clock(source: str, insertion: str) -> str:
     if needle not in source:
         raise ValueError("could not locate Csw_Sweep clock initialization")
     return source.replace(needle, needle + insertion, 1)
+
+
+def current_csw_floors(source: str) -> tuple[int, int]:
+    match = CSW_FLOOR_PATTERN.search(source)
+    if match is None:
+        raise ValueError("could not locate Csw_Sweep floor insertion point")
+    return int(match.group(2) or 0), int(match.group(3) or 0)
+
+
+def set_csw_floors(source: str, *, cuts: int, leaves: int) -> str:
+    replacement = (
+        r"\g<1>"
+        f"    if ( nCutsMax < {cuts} )\n"
+        f"        nCutsMax = {cuts};\n"
+        f"    if ( nLeafMax < {leaves} )\n"
+        f"        nLeafMax = {leaves};\n"
+    )
+    updated, count = CSW_FLOOR_PATTERN.subn(replacement, source, count=1)
+    if count != 1:
+        raise ValueError("could not update Csw_Sweep cut/leaf floors")
+    return updated
+
+
+def replace_in_function(
+    source: str,
+    function_name: str,
+    old: str,
+    new: str,
+) -> str:
+    """Replace one exact default inside a named ABC command wrapper."""
+
+    start = source.find(f"int {function_name}(")
+    if start < 0:
+        return source
+    end = source.find("/**Function", start + 1)
+    if end < 0:
+        end = len(source)
+    function_text = source[start:end]
+    if function_text.count(old) != 1:
+        return source
+    return source[:start] + function_text.replace(old, new, 1) + source[end:]
+
+
+def variant_command(variant_id: str) -> str:
+    for command in ("csweep", "rewrite", "resub", "dc2", "refactor", "fx"):
+        if variant_id.startswith(command):
+            return command
+    return ""
 
 
 def unified_diff(path: Path, old: str, new: str) -> str:

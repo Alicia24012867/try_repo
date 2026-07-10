@@ -270,9 +270,10 @@ class PlanningAgent(PaperAgent):
                 f"## Selected Coding Agent\n\n- flow_agent\n\n"
                 f"## Task Type\n\n- {result.strategy.task_type}\n\n"
                 f"## Thresholds\n\n"
-                f"- avg >= {result.thresholds.min_average_and_improve_pct:.1f}%\n"
-                f"- total reduction >= {result.thresholds.min_total_and_reduction}\n"
+                f"- zero AND-regressed rows\n"
                 f"- improved >= {result.thresholds.min_improved_benchmarks}\n"
+                f"- either avg >= {result.thresholds.min_average_and_improve_pct:.1f}% "
+                f"or total reduction >= {result.thresholds.min_total_and_reduction}\n"
             ),
             candidate_markdown=(
                 "# Planner Candidate Dispatch — deterministic\n\n"

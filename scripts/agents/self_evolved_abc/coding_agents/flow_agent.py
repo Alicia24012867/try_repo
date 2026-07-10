@@ -183,21 +183,24 @@ class FlowAgent(CodingAgent):
             "PROGRAMMING_GUIDANCE": load_template(
                 repo_root, "configs/agents/shared/programming_guidance.md"
             ),
-            "RULEBASE": load_template(repo_root, "configs/agents/shared/rulebase.md"),
+            "RULEBASE": self._format_rulebase(assignment),
             "COMPILE_OR_RUNTIME_LOGS": self._runtime_context(evidence),
             "SOURCE_FILES": self._source_file_context(),
             "CEC_LOGS": self._cec_context(previous_cycle),
-            "QOR_DELTAS": "\n\n".join(
-                (
-                    summarize_csv(summary_path, max_rows=20, max_chars=10000),
-                    summarize_csv(skipped_path, max_rows=20, max_chars=4000),
-                    self._read_optional_block("run_notes", run_notes_path, 6000),
-                )
+            "QOR_DELTAS": self._qor_context(
+                previous_cycle,
+                legacy_summary_path=summary_path,
+                legacy_skipped_path=skipped_path,
+                legacy_run_notes_path=run_notes_path,
             ),
             "FLOW_TOUCHPOINTS": self._format_flow_touchpoints(assignment),
             "EVALUATION_FLOW": self._format_evaluation_flow(assignment),
-            "BASELINE_QOR": self._format_baseline_qor(summary_path, assignment),
-            "PREVIOUS_CANDIDATES": self._previous_flow_context(previous_cycle),
+            "BASELINE_QOR": self._format_champion_qor(
+                assignment,
+                previous_cycle=previous_cycle,
+                legacy_summary_path=summary_path,
+            ),
+            "PREVIOUS_CANDIDATES": self._previous_candidate_context(previous_cycle),
             "PRIMARY_METRIC": assignment.get(
                 "target_metric", "AIG node count / depth provisional"
             ),
@@ -296,7 +299,7 @@ class FlowAgent(CodingAgent):
     def _preferred_design_names(self) -> tuple[str, ...]:
         """Return up to 3 benchmark stem names from the assignment scope."""
         names: list[str] = []
-        for benchmark in self.context.benchmark_scope:
+        for benchmark in self.context.evaluation_benchmark_scope:
             stem = Path(str(benchmark)).stem
             if stem:
                 names.append(stem)
@@ -309,6 +312,28 @@ class FlowAgent(CodingAgent):
             *(f"- {path}" for path in evidence),
         ]
         return compact_text_block("compile_or_runtime_context", "\n".join(lines), 4000)
+
+    def _format_rulebase(self, assignment: Mapping[str, Any]) -> str:
+        static_rules = load_template(
+            self.context.repo_root,
+            "configs/agents/shared/rulebase.md",
+        )
+        learned = [
+            str(item).strip()
+            for item in assignment.get("evolved_rules", ())
+            if str(item).strip()
+        ]
+        if not learned:
+            return static_rules
+        return "\n".join(
+            (
+                static_rules.rstrip(),
+                "",
+                "## Evaluated Cycle Rules",
+                "",
+                *(f"- {rule}" for rule in learned[-12:]),
+            )
+        )
 
     def _format_flow_touchpoints(self, assignment: Mapping[str, Any]) -> str:
         """Render the flow-command → source-directory mapping from the assignment."""
@@ -380,6 +405,156 @@ class FlowAgent(CodingAgent):
         if len(lines) == 2:
             lines.append("(no matching benchmarks found in summary.csv)")
         return "\n".join(lines)
+
+    def _format_champion_qor(
+        self,
+        assignment: Mapping[str, Any],
+        *,
+        previous_cycle: str,
+        legacy_summary_path: Path,
+    ) -> str:
+        """Render the incumbent from authoritative S5 comparison artifacts."""
+
+        import csv
+
+        evaluated = {
+            str(item)
+            for item in assignment.get(
+                "evaluation_benchmark_scope",
+                assignment.get("benchmark_scope", ()),
+            )
+        }
+        champion_cycle = str(assignment.get("champion_cycle_id", "")).strip()
+        sources: list[tuple[str, str]] = []
+        if champion_cycle:
+            sources.append((champion_cycle, "candidate"))
+        sources.append((previous_cycle, "baseline"))
+
+        for cycle_id, side in sources:
+            path = (
+                self.context.repo_root
+                / "experiments"
+                / cycle_id
+                / "impl_compare"
+                / "comparison"
+                / "qor_delta.csv"
+            )
+            if not path.is_file():
+                continue
+            try:
+                rows = list(
+                    csv.DictReader(
+                        path.open("r", encoding="utf-8", newline="")
+                    )
+                )
+            except Exception:
+                continue
+
+            and_key = f"{side}_aig_nodes"
+            depth_key = f"{side}_aig_depth"
+            selected = [
+                row
+                for row in rows
+                if not evaluated or row.get("benchmark", "") in evaluated
+            ]
+            if not selected:
+                continue
+
+            lines = [
+                "CURRENT CHAMPION QoR from correctness-backed S5 evidence.",
+                f"source_cycle: {cycle_id}",
+                f"source_side: {side}",
+                "The next candidate is compared against these values.",
+                "",
+            ]
+            total_and = 0
+            parsed_rows = 0
+            for row in selected[:40]:
+                benchmark = row.get("benchmark", "?")
+                and_value = row.get(and_key, "?")
+                depth_value = row.get(depth_key, "?")
+                lines.append(
+                    f"- {benchmark}: champion_and={and_value}, "
+                    f"champion_depth={depth_value}"
+                )
+                try:
+                    total_and += int(float(and_value))
+                    parsed_rows += 1
+                except (TypeError, ValueError):
+                    pass
+            if parsed_rows:
+                lines.extend(
+                    (
+                        "",
+                        f"aggregate_champion_and={total_and} across "
+                        f"{parsed_rows} rows",
+                    )
+                )
+            return "\n".join(lines)
+
+        return self._format_baseline_qor(legacy_summary_path, assignment)
+
+    def _qor_context(
+        self,
+        previous_cycle: str,
+        *,
+        legacy_summary_path: Path,
+        legacy_skipped_path: Path,
+        legacy_run_notes_path: Path,
+    ) -> str:
+        comparison = (
+            self.context.repo_root
+            / "experiments"
+            / previous_cycle
+            / "impl_compare"
+            / "comparison"
+        )
+        qor_delta = comparison / "qor_delta.csv"
+        review = comparison / "review_decision.json"
+        if qor_delta.is_file():
+            return "\n\n".join(
+                (
+                    summarize_csv(qor_delta, max_rows=40, max_chars=18000),
+                    self._read_optional_block("review_decision", review, 5000),
+                )
+            )
+        return "\n\n".join(
+            (
+                summarize_csv(legacy_summary_path, max_rows=20, max_chars=10000),
+                summarize_csv(legacy_skipped_path, max_rows=20, max_chars=4000),
+                self._read_optional_block(
+                    "run_notes", legacy_run_notes_path, 6000
+                ),
+            )
+        )
+
+    def _previous_candidate_context(self, previous_cycle: str) -> str:
+        base = self.context.repo_root / "experiments" / previous_cycle
+        paths = (
+            (
+                "applied_patch",
+                base / "impl_compare" / "candidate_modified" / "patch.diff",
+                10000,
+            ),
+            (
+                "agent_source_patch",
+                base / "agents" / "source_patches" / "candidate_001.diff",
+                10000,
+            ),
+            (
+                "agent_feedback",
+                base / "agents" / "feedback" / "candidate_001.md",
+                7000,
+            ),
+        )
+        blocks = [
+            self._read_optional_block(label, path, limit)
+            for label, path, limit in paths
+            if path.is_file()
+        ]
+        if blocks:
+            return "\n\n".join(blocks)
+        return self._previous_flow_context(previous_cycle)
 
     def _format_regression_threshold(self, assignment: Mapping[str, Any]) -> str:
         thresholds = normalize_promotion_thresholds(
@@ -605,7 +780,7 @@ class FlowAgent(CodingAgent):
 
     def _qor_command(self) -> str:
         flow_path = self.candidate_flow_path().relative_to(self.context.repo_root)
-        benchmarks = self.context.assignment.get("benchmark_scope", ())
+        benchmarks = self.context.evaluation_benchmark_scope
         joined = ", ".join(str(item) for item in benchmarks)
         return (
             "For each benchmark in scope "

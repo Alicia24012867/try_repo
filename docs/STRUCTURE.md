@@ -71,6 +71,9 @@ The executable scaffold follows the paper's agent naming:
   assignment normalization, validation, materialization, isolated source-patch
   application, candidate workspace ABC build, CEC-first implementation
   comparison, review feedback, and next-cycle handoff.
+  `planner_batch.py` executes planner-requested sensitivity probes and writes
+  the winner evidence back into the pending assignment, while `batch_search.py`
+  owns deterministic source-patch variant generation and evaluation.
   Current implementation comparison uses the assignment's
   `evaluation_benchmark_scope` for CEC-backed promotion and keeps unsupported
   frontend samples visible in `unsupported_benchmark_scope`.

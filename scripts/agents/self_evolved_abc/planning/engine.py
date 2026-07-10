@@ -215,9 +215,10 @@ class PlanningEngine:
             if evidence.all_deltas_zero:
                 parts.append(
                     "ALL benchmarks had ZERO AND-node change — the patch "
-                    "did not affect reached synthesis behavior. Check: was "
-                    "the changed code guarded by a condition that is never "
-                    "true? Was the changed constant overridden before use?"
+                    "had no observable final effect. This may mean unreachable "
+                    "code, an overridden value, an unsaturated limit, or a "
+                    "reached but behavior-neutral decision. Use call-chain and "
+                    "batch sensitivity evidence to distinguish these cases."
                 )
         else:
             parts.append(
@@ -242,10 +243,11 @@ class PlanningEngine:
 
         # --- Threshold context ---
         parts.append(
-            f"Promotion thresholds for next champion: "
-            f"avg AND improvement >= {thresholds.min_average_and_improve_pct:.1f}%, "
-            f"total AND reduction >= {thresholds.min_total_and_reduction}, "
-            f"improved benchmarks >= {thresholds.min_improved_benchmarks}. "
+            "Promotion gate for next champion: zero AND-regressed rows, "
+            f"improved benchmarks >= {thresholds.min_improved_benchmarks}, "
+            f"and either avg AND improvement >= "
+            f"{thresholds.min_average_and_improve_pct:.1f}% or total AND "
+            f"reduction >= {thresholds.min_total_and_reduction}. "
             f"({thresholds.adjustment_reason})"
         )
 

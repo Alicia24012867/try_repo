@@ -226,7 +226,7 @@ def _qor_repair_strategy(
     """QoR didn't improve enough — decide: switch target, use batch, or relax."""
     discouraged = _collect_discouraged(evidence, previous_strategies)
 
-    # --- Zero delta → reachability problem, switch command ---
+    # --- Zero delta → reachability/sensitivity problem, switch command ---
     if evidence.all_deltas_zero:
         next_command = _next_untried_command(previous_strategies)
         source_dir = _source_dir_for_command(next_command)
@@ -236,20 +236,23 @@ def _qor_repair_strategy(
         # never-tried command (batch first to find productive parameter ranges).
         skip_llm = (cycle_number <= 3) or untried
         return Strategy(
-            task_type="optimization",
+            task_type="batch_search" if skip_llm else "optimization",
             target_command=next_command,
             target_source_dir=source_dir,
             target_parameter_kind=_default_parameter_kind(next_command),
             hypothesis_template=(
                 f"Previous patch on {evidence.previous_patch_target or 'unknown'} "
-                "produced ZERO AND delta — the code was never reached by the "
-                f"evaluation flow. Target `{next_command}` instead via "
-                f"`{source_dir}`. Adjust a numeric parameter (not a debug flag) "
-                "that directly controls the command's behavior."
+                "produced ZERO AND/depth delta. This proves no observable final "
+                "effect, but does not by itself prove the function was never "
+                f"called. Probe `{next_command}` via `{source_dir}` with a small "
+                "sensitivity batch. A later LLM patch must identify a reached "
+                "decision whose outcome can differ, not merely enlarge another "
+                "constant."
             ),
             rationale=(
-                f"Zero delta in {evidence.cycle_id} — switching from unreached "
-                f"code to {next_command} (source: {source_dir})."
+                f"Zero delta in {evidence.cycle_id} — switching from an "
+                f"insensitive or unreached edit to {next_command} "
+                f"(source: {source_dir})."
                 + (" Batch-search recommended before LLM." if skip_llm else "")
             ),
             should_skip_llm=skip_llm,

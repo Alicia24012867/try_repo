@@ -35,7 +35,10 @@ the next iteration — all without human intervention.
   `base/abci/` command wrappers, and active-cycle artifact directories while
   blocking model-written changes to prompts or evaluation harness code.
 - `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
-  starts the full autonomous loop.
+  starts the full autonomous loop. Planner skip decisions now trigger a
+  deterministic `flow_wide` probe batch automatically; the winner and
+  sensitivity table are written back into the pending assignment before any
+  further model call.
 - Validation failures are retried with diagnostic feedback, and review
   decisions distinguish *why* a build failed (validation, patch, smoke,
   compile) rather than collapsing everything into `REPAIR_BUILD`.
@@ -73,6 +76,21 @@ assignment now keeps:
 This means a valid remote run should report CEC coverage such as `30/30`, not
 `30/70`, until the Verilog frontend is implemented.
 
+The latest corrected remote run produced one valid bootstrap champion:
+
+- `cycle_001`: `ACCEPT_FOR_NEXT_CYCLE`, CEC `30/30`, total AND delta `-6`,
+  improved/regressed/unchanged `3/0/27`.
+- `cycle_002`: CEC `30/30`, but net delta `0` with `1/1/28`; this is not a safe
+  replacement champion.
+- `cycle_003` through `cycle_005`: CEC `30/30`, but all 30 rows were unchanged.
+
+The zero-delta patches enlarged `fx` capacity, a rewrite fanout ceiling, and a
+resubstitution window without evidence that those limits were active. The
+planner requested batch search, but the old loop only printed that request and
+continued calling the model. The current loop executes that control decision,
+uses a separate `probe_NNN` namespace, and feeds `summary.csv`, `winner.json`,
+and the winner QoR vector into the pending cycle.
+
 Recent implementation issues also made the signal weaker than necessary:
 
 - `cycle_001` was not planner-seeded, so the Flow Agent received a generic
@@ -86,7 +104,11 @@ Recent implementation issues also made the signal weaker than necessary:
   now restricted to ABC/FlowTune source plus active-cycle artifacts.
 - The first correctness-backed positive, no-regression candidate can bootstrap
   the champion lineage. Later candidates are compared against that champion and
-  must satisfy the configured promotion thresholds.
+  must be regression-free, meet the benchmark-breadth gate, and meet either the
+  configured relative or absolute AND-reduction magnitude gate.
+- Coding Agent baseline context now comes from authoritative
+  `impl_compare/comparison/qor_delta.csv` artifacts. It sees the incumbent
+  per-design AND/depth values, previous applied patch, and review feedback.
 
 ## Project Structure
 
@@ -111,6 +133,7 @@ try_repo/
       planning_agent.py       LLM-based planner (renders planner_prompt.md)
       coding_agents/          Flow/Logic/Mapper Agent implementations
       flow/                   pipeline stages (S4/S5/review/next_cycle)
+        planner_batch.py        planner skip → probe batch → evidence integration
   third_party/                external source trees (FlowTune)
   .env                        ignored local model-provider environment
   .local/                     ignored local scratch/archive/run dumps
@@ -166,7 +189,7 @@ pip install -r requirements.txt
 #    EDA_AGENT_MODEL_BASE_URL=https://api.deepseek.com/v1
 #    EDA_AGENT_MODEL_API_KEY=<secret>
 #    EDA_AGENT_MODEL_NAME=deepseek-chat
-#    EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384
+#    EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384  # 32768 is also supported
 
 # 3. Launch the autonomous loop (from cycle_001, max 5 cycles)
 bash run.sh
@@ -185,10 +208,13 @@ print(len(a["benchmark_scope"]), len(a["evaluation_benchmark_scope"]), len(a["un
 PY
 ```
 
-When a completed cycle produces zero deltas or repeated weak evidence, the
-planner may recommend batch search before another LLM call. The loop prints
-that recommendation; pass `--honor-planner-skip-llm` to `cycle_loop.py` if you
-want the remote run to stop before spending the next model call.
+When a completed cycle produces zero deltas or repeated weak evidence,
+`run.sh` honors the planner by running deterministic batch search before the
+next LLM call. The automatic batch is filtered to the planner-selected command;
+`flow_wide` includes reached wrapper probes for `rewrite`, `resub`, `dc2`, and
+`refactor` in addition to csweep/fx. Pass `--honor-planner-skip-llm` without
+`--auto-batch-on-planner-skip` when a diagnostic run should stop at that point
+instead.
 
 The repeated-decision guard is configurable. By default the loop stops after
 three repeated review decisions, which means four same-decision cycles in a
@@ -215,9 +241,10 @@ compact winner report.
 # Generate several model-free candidate cycles from the current assignment.
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --base-assignment experiments/cycle_005/agents/assignments/candidate_001.json \
-  --start-cycle cycle_020 \
+  --start-cycle probe_020 \
   --batch-id flow_wide_cycle_020 \
   --variant-set flow_wide \
+  --target-command resub \
   --benchmark-suite large_70 \
   --force
 
@@ -234,27 +261,28 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --summarize-only
 ```
 
-After a full `flow_wide` batch, retest only the nonzero candidates on the
+After a targeted or full `flow_wide` batch, retest only the nonzero candidates on the
 larger 70-design suite before spending another model call:
 
 ```bash
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --base-assignment experiments/cycle_005/agents/assignments/candidate_001.json \
-  --start-cycle cycle_050 \
+  --start-cycle probe_050 \
   --batch-id csweep_retest_cycle_050 \
   --variant-set flow_wide \
-  --include-variants csweep_floor_c12_lkeep,csweep_floor_c16_lkeep,csweep_default_c6_l5,csweep_default_c12_l6,csweep_default_c16_l6 \
+  --include-variants csweep_floor_c12_l6,csweep_floor_c12_l8,csweep_floor_c16_l6,csweep_floor_c20_l8,csweep_floor_c20_l10 \
   --benchmark-suite large_70 \
   --force
 ```
 
 Use `--benchmark-suite standard_30` for the smaller BLIF-only suite, or
-`--benchmark-glob` repeatedly for a custom scope.
+`--benchmark-glob` repeatedly for a custom scope. Omit `--target-command` for
+the full cross-command batch.
 
 Outputs live in `experiments/batches/<batch-id>/summary.csv` and
-`experiments/batches/<batch-id>/winner.json`. Generated cycles use normal
-`experiments/cycle_NNN/` artifacts, so they can be inspected with the same
-review and implementation-compare tooling as LLM-generated cycles.
+`experiments/batches/<batch-id>/winner.json`. Automatic batches use
+`experiments/probe_NNN/` so normal `cycle_NNN` auto-resume is unaffected; each
+probe still uses the standard S4/S5/review artifact layout.
 
 ## Benchmarks
 
@@ -384,14 +412,17 @@ Auto-resume also backfills this metadata for older checked-in assignments, so
 | No prior cycles | `optimization` | Default: csweep, execute first planned LLM cycle |
 | Build/CEC failure | `repair` | Fix the gate, carry discouraged targets |
 | Champion promoted | `optimization` | Exploit same command, vary parameter |
-| REPAIR_QOR + zero delta | `optimization` | Switch to untried command, batch first |
+| REPAIR_QOR + zero delta | `batch_search` | Probe an untried command before another LLM call |
 | REPAIR_QOR + partial improvement | `optimization` | Amplify same command, may relax thresholds |
 | REPAIR_QOR + regressions | `optimization` | Switch command, force batch_search |
 
 ### Adaptive Thresholds
 
 Thresholds scale with the evaluated benchmark scope and tighten as champions
-accumulate. With today's `abc_native` frontend, `large_70` still uses the
+accumulate. Promotion requires zero AND-regressed rows, the improved-row
+breadth threshold, and **either** the average-percentage threshold **or** the
+absolute total-reduction threshold. With today's `abc_native` frontend,
+`large_70` still uses the
 30-design row because only those 30 designs are CEC-backed; the 70-design row is
 for a future Verilog-capable frontend.
 
@@ -410,10 +441,11 @@ for a future Verilog-capable frontend.
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
 ```
 
-Covers 147 assertions across 11 sections: paper compliance, evidence reading,
+Covers 173 assertions across 15 sections: paper compliance, evidence reading,
 strategy routing (all 7 branches), threshold adaptation (all branches),
 engine operations, next_cycle integration, LLM planner, benchmark suites,
-validation smoke, and edge cases.
+validation smoke, scalar reward/Pareto promotion, batch winner integration,
+authoritative champion context, and edge cases.
 
 ## Pipeline Stages
 
@@ -459,6 +491,9 @@ EDA_AGENT_MODEL_API_KEY=<secret>
 EDA_AGENT_MODEL_NAME=deepseek-chat
 EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384    # raise to 32768+ if JSON/diffs truncate
 ```
+
+The Python client and `run.sh` default to 16384 output tokens. Any explicit
+`.env` value is preserved because provider limits differ.
 
 Larger output budgets help when the model response is cut off, malformed, or
 missing part of a unified diff. They do not usually fix repeated `REPAIR_QOR`

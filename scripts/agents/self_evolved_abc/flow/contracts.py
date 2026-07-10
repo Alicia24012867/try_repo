@@ -122,6 +122,7 @@ PYTHON_SMOKE_FILES = (
     "scripts/agents/self_evolved_abc/flow/evaluation.py",
     "scripts/agents/self_evolved_abc/flow/lineage.py",
     "scripts/agents/self_evolved_abc/flow/promotion.py",
+    "scripts/agents/self_evolved_abc/flow/planner_batch.py",
     "scripts/agents/self_evolved_abc/flow/batch_search.py",
     "scripts/agents/self_evolved_abc/flow/implementation_compare.py",
     "scripts/agents/self_evolved_abc/flow/iteration_loop.py",

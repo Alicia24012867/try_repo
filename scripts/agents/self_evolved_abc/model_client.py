@@ -113,7 +113,7 @@ class OpenAIModelClient:
         organization: str | None = None,
         project: str | None = None,
         timeout_seconds: float = 120.0,
-        max_output_tokens: int = 4096,
+        max_output_tokens: int = 16384,
         max_retries: int = 2,
         temperature: float = 0.2,
         response_format_mode: str = "json_object",
@@ -309,7 +309,7 @@ def build_model_client_from_env() -> ModelClient:
         organization=_optional_env("OPENAI_ORG_ID") if provider == "openai" else None,
         project=_optional_env("OPENAI_PROJECT_ID") if provider == "openai" else None,
         timeout_seconds=_env_float("EDA_AGENT_MODEL_TIMEOUT_SECONDS", 120.0),
-        max_output_tokens=_env_int("EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS", 4096),
+        max_output_tokens=_env_int("EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS", 16384),
         max_retries=_env_int("EDA_AGENT_MODEL_RETRIES", 2),
         temperature=_env_float("EDA_AGENT_MODEL_TEMPERATURE", 0.2),
         response_format_mode=os.environ.get(

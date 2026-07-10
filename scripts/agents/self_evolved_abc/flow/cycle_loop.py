@@ -23,6 +23,9 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     DEFAULT_EVAL_FLOW_COMMANDS,
     LEGACY_EVAL_FLOW_COMMANDS,
 )
+from scripts.agents.self_evolved_abc.flow.planner_batch import (
+    run_and_integrate_planner_batch,
+)
 from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
 
 
@@ -88,6 +91,15 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--auto-batch-on-planner-skip",
+        action="store_true",
+        help=(
+            "Run a deterministic flow_wide probe batch when the planner asks "
+            "to skip an LLM call, then feed the winner/sensitivity evidence "
+            "back into the pending assignment."
+        ),
+    )
+    parser.add_argument(
         "--same-decision-repeat-limit",
         type=int,
         default=DEFAULT_STUCK_REPEATS,
@@ -114,7 +126,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("cycle_loop: either --assignment or --auto-resume is required")
         return 2
 
-    champion_cycle: str | None = None
+    champion_cycle: str | None = _assignment_champion_cycle(current_assignment)
     same_decision_repeats = 0
     last_decision: str | None = None
 
@@ -134,7 +146,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         if planner_skip:
             message = _planner_skip_message(current_assignment)
             print(message)
-            if args.honor_planner_skip_llm:
+            if args.auto_batch_on_planner_skip:
+                batch_champion = run_and_integrate_planner_batch(
+                    repo_root=repo_root,
+                    assignment_path=current_assignment,
+                    build_candidate_binary=args.build_candidate_binary,
+                    build_jobs=args.build_jobs,
+                    build_timeout_seconds=args.build_timeout_seconds,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                if batch_champion is None:
+                    print("cycle_loop: planner batch failed; stopping before LLM call")
+                    break
+                if batch_champion:
+                    champion_cycle = batch_champion
+                    print(f"cycle_loop: batch champion = {champion_cycle}")
+                print("cycle_loop: planner batch evidence integrated; continuing")
+            elif args.honor_planner_skip_llm:
                 print("cycle_loop: stopping before LLM call per planner request")
                 break
 
@@ -503,6 +531,15 @@ def _planner_skip_requested(assignment_path: Path) -> bool:
         return False
     meta = payload.get("_planning_meta")
     return isinstance(meta, dict) and bool(meta.get("should_skip_llm"))
+
+
+def _assignment_champion_cycle(assignment_path: Path) -> str | None:
+    try:
+        payload = json.loads(assignment_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    value = str(payload.get("champion_cycle_id", "")).strip()
+    return value or None
 
 
 def _planner_skip_message(assignment_path: Path) -> str:

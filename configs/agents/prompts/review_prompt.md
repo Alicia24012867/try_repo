@@ -49,9 +49,12 @@ not yet correctness-backed QoR improvements.
   improved design, and zero regressions may bootstrap the champion lineage even
   when the normal multi-cycle promotion thresholds have not yet been met.
 - After a champion exists, compare against that champion and use the configured
-  promotion thresholds; do not repeatedly accept tiny neutral follow-ups.
-- Compute reward from the declared primary metric, but report auxiliary metric
-  movement and regressions.
+  promotion policy: zero primary-metric regressions, benchmark breadth met, and
+  either the relative or absolute magnitude threshold met. Do not repeatedly
+  accept tiny neutral follow-ups.
+- Compute scalar reward from net primary-metric reduction, but retain the
+  per-design QoR vector for regression and breadth checks; report auxiliary
+  metric movement separately.
 - Treat skipped, timed-out, crashed, and assertion-failing designs as negative
   evidence inside the evaluated scope unless a documented exclusion was planned
   before evaluation.

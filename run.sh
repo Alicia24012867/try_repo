@@ -11,6 +11,11 @@ set -a
 source .env
 set +a
 
+# Source-patch JSON responses include code context, validation plans, and a
+# unified diff. Use a larger default while preserving provider-specific values
+# explicitly configured in .env.
+export EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS="${EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS:-16384}"
+
 # ----------------------------------------------------------------------------
 # Start the multi-cycle autonomous iteration loop.
 # ----------------------------------------------------------------------------
@@ -26,6 +31,7 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \
   --auto-resume \
   --build-candidate-binary \
   --build-jobs 8 \
+  --auto-batch-on-planner-skip \
   --max-cycles 5
 #
 # Arguments:
@@ -41,6 +47,12 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.cycle_loop \
 #                              Enable it on the remote Linux/ABC host.
 #
 #   --build-jobs 8             Number of parallel make jobs.
+#
+#   --auto-batch-on-planner-skip
+#                              Run a deterministic flow_wide sensitivity batch
+#                              when Planning requests no LLM call, feed the
+#                              winner back into the pending assignment, then
+#                              continue from measured evidence.
 #
 #   --max-cycles 5             Maximum number of automatic cycles, including
 #                              the starting cycle.

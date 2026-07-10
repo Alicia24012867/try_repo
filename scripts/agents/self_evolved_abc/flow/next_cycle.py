@@ -137,6 +137,7 @@ def build_next_assignment(
         "allowed_to_read": evidence,
         "recent_evidence": evidence,
         "source_patch_mode": FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+        "evolved_rules": _next_evolved_rules(current, plan_result),
         **planning_updates,
         **champion,
     }
@@ -258,6 +259,47 @@ def _read_previous_review(context: CycleContext) -> dict[str, Any]:
     except (json.JSONDecodeError, OSError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _next_evolved_rules(
+    current: dict[str, Any],
+    plan_result: object,
+) -> list[str]:
+    """Carry concise, evaluation-backed lessons into the active prompt."""
+
+    rules = [
+        str(item).strip()
+        for item in current.get("evolved_rules", ())
+        if str(item).strip()
+    ]
+    history = getattr(plan_result, "history", ())
+    evidence = history[-1] if history else None
+    if evidence is not None:
+        target = getattr(evidence, "previous_patch_target", "") or "the prior target"
+        if getattr(evidence, "is_champion", False):
+            rules.append(
+                f"Preserve the correctness-backed champion mechanism from "
+                f"{getattr(evidence, 'cycle_id', 'the prior cycle')}; follow-up "
+                "edits must compare against that incumbent."
+            )
+        elif getattr(evidence, "all_deltas_zero", False):
+            rules.append(
+                f"The evaluated edit to {target} produced zero AND/depth "
+                "movement. Do not repeat the same mechanism without call-chain "
+                "or batch sensitivity evidence showing a changed decision."
+            )
+        elif int(getattr(evidence, "regressed_benchmark_count", 0)) > 0:
+            rules.append(
+                f"The evaluated edit to {target} regressed at least one AND "
+                "row. Keep it out of the champion lineage and change the "
+                "mechanism or add a general circuit-feature guard."
+            )
+
+    deduplicated: list[str] = []
+    for rule in rules:
+        if rule not in deduplicated:
+            deduplicated.append(rule)
+    return deduplicated[-12:]
 
 
 def write_next_assignment(

@@ -23,7 +23,9 @@ on the Linux server.
 - Promotion thresholds are centralized in `flow/promotion.py`, so review,
   prompts, and initial/next assignments agree on what counts as a champion.
 - Weak one-row or one-node improvements are treated as repair feedback rather
-  than accumulated into the champion lineage.
+  than accumulated into the champion lineage. Follow-up promotion uses a
+  scalar net-AND reward plus a per-design Pareto safeguard: zero regressions,
+  breadth met, and either relative or absolute magnitude met.
 - Deterministic batch search is model-free and still passes through S4/S5/review;
   it increases feedback density without weakening correctness gates.
 - Duplicate `* 2.*` backup files were removed because they were unreferenced and
@@ -47,6 +49,17 @@ on the Linux server.
 - The first correctness-backed positive candidate with no regressions may
   bootstrap the champion lineage; subsequent accepted candidates must beat the
   recorded champion under the promotion thresholds.
+- Coding Agent QoR context now reads the authoritative S5
+  `impl_compare/comparison/qor_delta.csv`, not the legacy flow-only summary
+  path, and includes the incumbent vector plus the previous applied patch.
+- Evaluation-backed lessons are carried as bounded `evolved_rules` in the next
+  assignment and rendered with the static rulebase, so rule updates affect
+  later coding behavior instead of remaining inert Markdown artifacts.
+- Planner `should_skip_llm` is executable control state. `run.sh` launches a
+  model-free, planner-command-filtered `flow_wide` batch in `probe_NNN`, filters
+  shadowed csweep-default variants, covers reached wrapper parameters for
+  rewrite/resub/dc2/refactor, and integrates the winner/sensitivity evidence
+  before resuming.
 
 ## Local Compliance Pass: Planning Agent Integration
 
@@ -105,6 +118,23 @@ on the Linux server.
 - `batch_search` supports `--include-variants` and repeated `--benchmark-glob`
   arguments so this retest can focus on the known nonzero candidates instead of
   rerunning the whole 24-candidate grid.
+
+## Remote Diagnosis: Corrected 30-Design Run
+
+- `cycle_001` passed CEC `30/30` and bootstrapped the champion with total AND
+  delta `-6`, three improved rows, and no regressions.
+- `cycle_002` inherited that champion correctly but produced one improvement
+  and one regression for net zero, so rollback was correct.
+- `cycle_003` through `cycle_005` passed CEC but produced exact zero structural
+  deltas. Their edits changed large capacity/fanout/window constants without
+  evidence that the limiting conditions were active.
+- The assignments already contained `should_skip_llm: true`, but the launcher
+  treated it as advisory. Automatic batch execution and feedback integration
+  now close that planner-to-executor control gap.
+- The former three-way promotion conjunction incorrectly reused the paper's
+  long-run percentage result as a per-cycle hard requirement. Promotion now
+  follows the paper's scalar-reward-plus-vector model while retaining strict
+  no-regression and breadth gates.
 
 ## Remaining Remote Evidence Needed
 

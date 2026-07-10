@@ -86,10 +86,14 @@ path for the paper's autonomous feedback iteration over source code.
    - Do not invent paths such as `flowtune/flowtune.c`; use exact repository
      paths from the provided source context.
 3. Implementation shape:
-   - Change one narrow decision point, tie-break, threshold, stopping condition,
-     or logging hook.
+   - Change one narrow, reached decision point: a score, tie-break, candidate
+     filter, threshold, stopping condition, or combination of existing safe
+     heuristics.
    - Preserve existing public command names, options, default behavior, memory
      ownership, allocation/free conventions, and error-handling style.
+   - Prefer changes that can alter which legal optimization candidate wins.
+     Pure capacity increases are useful only when evidence shows the old limit
+     was saturated.
    - Add instrumentation only when it directly improves the next feedback
      cycle, preferably behind an existing verbosity/debug mechanism.
    - Use circuit features such as node count, edge count, depth, local delta,
@@ -173,45 +177,49 @@ against the baseline numbers shown in `{{BASELINE_QOR}}`.
 4. Pick ONE command whose behaviour you want to change.
 5. Look up its directory in `{{FLOW_TOUCHPOINTS}}`, then find the key source
    file(s) in `{{SOURCE_FILES}}` under that directory.
-6. Identify a **numeric parameter or threshold** in that file (cut size,
-   iteration limit, sampling rate, scoring weight, stopping criterion) that,
-   when changed, is likely to change the AIG produced by that command.
-7. Produce a `source_patch_diff` that **adjusts that parameter** — not just
-   adding logging, not just adding a comment.  A line that prints to stdout
-   will not reduce node count.
+6. Identify a decision mechanism that can change the produced AIG: candidate
+   scoring/ranking, a tie-break, a realistic conditional heuristic, a reached
+   stopping rule, or a proven-saturated numeric limit.
+7. Produce a `source_patch_diff` that changes that mechanism. Do not default to
+   enlarging a constant merely because it is easy to edit. A line that prints
+   to stdout will not reduce node count.
 
 **SELF-CHECK** — before finalising your diff, answer these three questions
 in your `rationale`:
 
-1. **Will my change actually execute?**  If your change is guarded by
+1. **Will my change actually execute?** Trace the concrete call chain from one
+   command in `{{EVALUATION_FLOW_COMMANDS}}` through its wrapper to the changed
+   function and line. If your change is guarded by
    ``if (x <= 0)`` but the caller always passes a positive value, it will
    never run.  If you set a default that is immediately overwritten, it
    will never run.  Trace the execution path from the function entry to
    your changed line and confirm it is reached.
-2. **Will my change produce a different output?**  Changing ``>`` to
+2. **Will my change produce a different decision?** Name the candidate set,
+   score, branch, loop, or stopping condition whose outcome can differ.
+   Changing ``>`` to
    ``>=`` on integer values that are never equal has zero effect.
    Changing a constant that is then overridden by a dynamic calculation
    has zero effect.  Explain why the output of the function will differ.
-3. **By how much?**  State the expected AND-count change per benchmark
-   (e.g. ``epfl_adder: 895 → ~880, approx 1.5% reduction``).  If you
-   cannot give a number, your change is too uncertain — pick a different
-   parameter.
+3. **What is the grounded impact hypothesis?** Use prior QoR rows, observed
+   saturation/counter statistics, or the number of affected optimization
+   decisions. Do not fabricate per-benchmark AND counts. If no evidence shows
+   that the mechanism is active, request instrumentation or batch sensitivity
+   evidence instead of guessing.
 
 **Good candidate types** (change optimisation behaviour):
 
-- **unconditionally** increase a cut-size or leaf-count limit inside the
-  top-level flow function (e.g. ``if (nCutsMax < 16) nCutsMax = 16``
-  placed BEFORE the call to the worker).  Do NOT change the ``?:``
-  fallback inside a helper like ``Csw_ManStart`` — that fallback only
-  fires when the caller passes 0, which the top-level function never does.
-- change a hard-coded numerical constant that directly controls a loop
-  bound — use ``sed -n 'line1,line2p'`` in your head to verify the
-  constant appears exactly once in the file
+- refine an existing score or tie-break using already-available circuit
+  features, preserving all legality checks and deterministic fallback
+- add a conditional heuristic anchored in a nearby ABC precedent, such as
+  depth-aware selection only when area gain is tied
+- adjust a reached stopping rule when prior feedback shows premature
+  termination or wasted iterations
+- change a hard-coded loop bound only when source/runtime evidence shows the
+  old bound is reached and truncates productive work
 - toggle a heuristic flag from its default (0→1 or 1→0) so a code path
   that was previously skipped is now executed
-- adjust a scoring formula so a different candidate wins ties
-- add an early-exit condition that is triggered in realistic cases (not
-  only at extremes)
+- combine two existing, locally safe heuristics when batch evidence shows each
+  has signal and their invariants are compatible
 
 **Bad candidate types** (will be rejected as REPAIR_QOR):
 
@@ -224,6 +232,9 @@ in your `rationale`:
   the call to the helper.
 - changing a ``#define`` constant that only controls debug output, array
   sizing hints, or statistics — these do not affect the AIG
+- increasing capacity limits by orders of magnitude without evidence that the
+  previous limit was reached; examples include 20000→10000000 or arbitrary
+  fanout ceilings
 - adding `printf`, `Abc_Print`, or logging statements
 - adding comments or renaming variables
 - hard-coding design names or benchmark paths
@@ -399,10 +410,10 @@ proof obligation:
 
 If the previous QoR feedback shows CEC passed but every correctness-backed row
 has zero AND/depth delta, treat that as a reachability or strategy signal. In
-the next patch, prefer a target file, command behavior, threshold, tie-break, or
-flow strategy that is more likely to be touched by the evaluation flow. Do not
-immediately force a subsystem switch solely because one small patch had zero
-effect.
+the next patch, do not merely enlarge another unrelated constant. First use
+the call chain and any batch-search evidence to distinguish unreached code from
+reached-but-behavior-neutral code. Then target a decision whose outcome can
+actually differ, or return `DEFER` for instrumentation/batch search.
 
 When the assignment contains both `benchmark_scope` and
 `evaluation_benchmark_scope`, optimize only against correctness-backed rows from
@@ -449,9 +460,10 @@ Follow this exact procedure:
   **CRITICAL**: Every source file path appearing in the unified diff headers
   (``--- a/…`` / ``+++ b/…`` / ``diff --git a/… b/…``) MUST also be listed in
   ``files_to_write``. Otherwise validation rejects the candidate with
-  "source_patch_diff target is missing from files_to_write". Artifact-only
-  paths such as ``experiments/<cycle>/agents/…`` may appear alongside source
-  targets, but source targets are mandatory.
+  "source_patch_diff target is missing from files_to_write". List only source
+  paths that you are asking the materializer to patch. Do not list generated
+  destinations under `impl_compare/`; the runner creates `patch.diff`, build
+  logs, and comparison artifacts automatically.
 - For `candidate_kind: "mapping_heuristic_todo"`, include library/mapping
   assumptions in `compatibility_notes` or `validation_plan`.
 - For `candidate_kind: "diagnostic_only"`, explain why diagnostics are required
@@ -461,6 +473,8 @@ Follow this exact procedure:
   For ``source_patch_diff``, ``files_to_write`` MUST additionally include every
   source-file path referenced in the unified diff so the patch scope is
   explicitly declared and validated.
+  Never include `experiments/<cycle>/impl_compare/candidate_modified/patch.diff`
+  or other S4/S5 outputs in `files_to_write`.
 
 ## Feedback-Specific Repair Guidance
 
