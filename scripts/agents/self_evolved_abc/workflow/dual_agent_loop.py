@@ -5,10 +5,12 @@ from __future__ import annotations
 import argparse
 import fcntl
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,7 +34,12 @@ from scripts.agents.self_evolved_abc.flow.source_patch import (
 )
 from scripts.agents.self_evolved_abc.model_client import ModelClientError
 from scripts.agents.self_evolved_abc.planning_agent import PlanningAgent
-from scripts.agents.self_evolved_abc.workflow.artifacts import review_decision_path
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    review_decision_path,
+    safe_repo_path,
+    validate_candidate_id,
+    validate_portfolio_cycle_id,
+)
 from scripts.agents.self_evolved_abc.workflow.branch_run import (
     branch_run_manifest_path,
     load_valid_branch_run,
@@ -126,10 +133,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("dual_agent_loop: --build-jobs must be >= 1", file=sys.stderr)
         return 2
     repo_root = args.repo_root.resolve()
-    lock = _acquire_campaign_lock(repo_root, args.portfolio_id)
+    lock = _acquire_campaign_lock(repo_root)
     if lock is None:
         print(
-            "dual_agent_loop: another process owns this portfolio campaign",
+            "dual_agent_loop: another process owns this repository campaign",
             file=sys.stderr,
         )
         return 3
@@ -167,27 +174,44 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
             build_jobs=args.build_jobs,
             build_candidate_binary=args.build_candidate_binary,
         )
+        _print_branch_outcomes(
+            repo_root=repo_root,
+            cycle_id=current_plan.cycle_id,
+            outcomes=outcomes,
+        )
         review = write_portfolio_review(
             repo_root=repo_root,
             plan=current_plan,
             outcomes=outcomes,
         )
+        # A review command deliberately returns one for a valid negative
+        # decision such as REPAIR_QOR.  That branch is settled; malformed or
+        # missing reviews and unexpected runner exits remain execution failures.
         had_failed_branch = had_failed_branch or any(
-            item.status == "failed"
-            or item.return_code != 0
-            or bool(item.error)
-            for item in outcomes
+            _branch_execution_failed(item) for item in outcomes
         )
+        reviewed_count = int(review["reviewed_count"])
+        failed_count = int(review["failed_count"])
         print(
             "dual_agent_loop: fan-in "
             f"status={review['round_status']} "
+            f"reviewed={reviewed_count}/{len(outcomes)} "
+            f"failed={failed_count} "
             f"winner={review['selected_candidate_id'] or 'none'}"
+        )
+        print(
+            "dual_agent_loop: portfolio review = "
+            f"experiments/{current_plan.cycle_id}/planning/portfolio_review.json"
         )
 
         if not bool(review["quorum_reached"]):
+            missing_roles = ", ".join(
+                item.branch_role for item in outcomes if item.status != "reviewed"
+            )
             print(
                 "dual_agent_loop: stopping — both branch reviews are required "
-                "before the next Planning round"
+                "before the next Planning round; missing valid review from: "
+                f"{missing_roles or 'unknown'}"
             )
             break
         if iteration == args.max_cycles:
@@ -214,17 +238,14 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
     return 1 if had_failed_branch else 0
 
 
-def _acquire_campaign_lock(repo_root: Path, portfolio_id: str):
+def _acquire_campaign_lock(repo_root: Path):
     lock_root = repo_root / "experiments" / ".locks"
     lock_root.mkdir(parents=True, exist_ok=True)
-    safe_name = "".join(
-        character
-        for character in str(portfolio_id)
-        if character.isalnum() or character in ("_", "-")
+    # Candidate and planning paths are shared across portfolio ids, so the
+    # repository (not a caller-controlled portfolio label) is the lock scope.
+    handle = (lock_root / "dual_agent_campaign.lock").open(
+        "a+", encoding="utf-8"
     )
-    if not safe_name or safe_name != str(portfolio_id):
-        raise ValueError(f"invalid portfolio id: {portfolio_id!r}")
-    handle = (lock_root / f"{safe_name}.lock").open("a+", encoding="utf-8")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -295,7 +316,16 @@ def execute_portfolio_plan(
             branch = futures[future]
             try:
                 outcomes_by_role[branch.branch_role] = future.result()
-            except BaseException as exc:  # all-settled boundary
+            except Exception as exc:  # all-settled boundary
+                try:
+                    _append_branch_failure_log(
+                        repo_root=repo_root,
+                        cycle_id=plan.cycle_id,
+                        candidate_id=branch.candidate_id,
+                        message=traceback.format_exc(),
+                    )
+                except (OSError, ValueError):
+                    pass
                 outcomes_by_role[branch.branch_role] = _failed_branch_outcome(
                     repo_root=repo_root,
                     plan=plan,
@@ -368,6 +398,9 @@ def _reset_branch_outputs(
 ) -> None:
     """Remove stale candidate evidence before a non-resumed execution."""
 
+    _branch_log_path(repo_root, plan.cycle_id, branch.candidate_id).unlink(
+        missing_ok=True
+    )
     implementation_root = review_decision_path(context).parent.parent
     if implementation_root.exists():
         shutil.rmtree(implementation_root)
@@ -430,7 +463,19 @@ def _run_branch(
     try:
         return_code = int(command_runner(command, repo_root))
         error = "" if return_code == 0 else f"pipeline return code {return_code}"
-    except BaseException as exc:  # converted into an all-settled lane result
+    except Exception as exc:  # converted into an all-settled lane result
+        try:
+            context = CycleContext.from_assignment_file(
+                repo_root, branch.assignment_path
+            )
+            _append_branch_failure_log(
+                repo_root=repo_root,
+                cycle_id=context.cycle_id,
+                candidate_id=context.candidate_id,
+                message=traceback.format_exc(),
+            )
+        except Exception:
+            pass
         return_code = None
         error = f"runner raised {type(exc).__name__}: {exc}"
     return BranchRun(
@@ -473,8 +518,164 @@ def _build_candidate_command(
 
 
 def _default_command_runner(command: Sequence[str], cwd: Path) -> int:
-    print(f"running: {' '.join(command)}")
-    return subprocess.run(command, cwd=cwd, check=False).returncode
+    try:
+        assignment_value = command[command.index("--assignment") + 1]
+    except (ValueError, IndexError) as exc:
+        raise ValueError("branch command is missing --assignment") from exc
+    assignment = Path(assignment_value)
+    assignment_path = safe_repo_path(
+        cwd,
+        assignment if assignment.is_absolute() else cwd / assignment,
+    )
+    context = CycleContext.from_assignment_file(cwd, assignment_path)
+    log_path = _branch_log_path(cwd, context.cycle_id, context.candidate_id)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[{context.candidate_id}] running: {' '.join(command)}", flush=True)
+    environment = dict(os.environ)
+    environment["PYTHONUNBUFFERED"] = "1"
+    with log_path.open("w", encoding="utf-8") as log_stream:
+        with subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            start_new_session=True,
+        ) as process:
+            assert process.stdout is not None
+            try:
+                for line in process.stdout:
+                    log_stream.write(line)
+                    log_stream.flush()
+                    print(f"[{context.candidate_id}] {line}", end="", flush=True)
+                return process.wait()
+            except BaseException:
+                _terminate_process_group(process)
+                raise
+
+
+def _branch_log_path(
+    repo_root: Path,
+    cycle_id: str,
+    candidate_id: str,
+) -> Path:
+    cycle_id = validate_portfolio_cycle_id(cycle_id)
+    candidate_id = validate_candidate_id(candidate_id)
+    return safe_repo_path(
+        repo_root,
+        repo_root.resolve()
+        / "experiments"
+        / cycle_id
+        / "planning"
+        / "branch_logs"
+        / f"{candidate_id}.log",
+    )
+
+
+def _append_branch_failure_log(
+    *,
+    repo_root: Path,
+    cycle_id: str,
+    candidate_id: str,
+    message: str,
+) -> None:
+    path = _branch_log_path(repo_root, cycle_id, candidate_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write("\n[coordinator_failure]\n")
+        stream.write(message.rstrip() + "\n")
+
+
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Reap the branch process tree if log pumping or cancellation fails."""
+
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5.0)
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    process.wait()
+
+
+def _print_branch_outcomes(
+    *,
+    repo_root: Path,
+    cycle_id: str,
+    outcomes: Sequence[BranchOutcome],
+) -> None:
+    for outcome in outcomes:
+        return_code = "none" if outcome.return_code is None else str(outcome.return_code)
+        print(
+            "dual_agent_loop: branch "
+            f"role={outcome.branch_role} "
+            f"candidate={outcome.candidate_id} "
+            f"status={outcome.status} "
+            f"review_valid={str(outcome.status == 'reviewed').lower()} "
+            f"return_code={return_code} "
+            f"decision={outcome.decision} "
+            f"eligible={str(outcome.eligible_for_promotion).lower()}"
+        )
+        if outcome.build_status:
+            print(f"  build_status: {_terminal_field(outcome.build_status)}")
+        if outcome.review_reason:
+            print(f"  reason: {_terminal_field(outcome.review_reason)}")
+        if outcome.next_action:
+            print(f"  next_action: {_terminal_field(outcome.next_action)}")
+        if outcome.error:
+            if _is_expected_negative_exit(outcome):
+                print("  settled_negative_exit: 1")
+            else:
+                label = "runner" if outcome.status == "reviewed" else "error"
+                print(f"  {label}: {_terminal_field(outcome.error)}")
+        print(f"  review: {outcome.review_path}")
+        log_path = _branch_log_path(repo_root, cycle_id, outcome.candidate_id)
+        if log_path.is_file():
+            print(f"  log: {log_path.relative_to(repo_root.resolve())}")
+
+
+def _is_expected_negative_exit(outcome: BranchOutcome) -> bool:
+    return (
+        outcome.status == "reviewed"
+        and outcome.return_code == 1
+        and outcome.decision != "ACCEPT_FOR_NEXT_CYCLE"
+        and outcome.error == "pipeline return code 1"
+    )
+
+
+def _branch_execution_failed(outcome: BranchOutcome) -> bool:
+    """Separate settled negative candidates from infrastructure failures."""
+
+    if outcome.status != "reviewed":
+        return True
+    if _is_expected_negative_exit(outcome):
+        return False
+    if outcome.return_code not in (0,):
+        return True
+    return bool(outcome.error)
+
+
+def _terminal_field(value: object, max_chars: int = 2000) -> str:
+    text = " ".join(str(value).split())
+    printable = "".join(
+        character if character.isprintable() else "?" for character in text
+    )
+    if len(printable) <= max_chars:
+        return printable
+    return printable[: max_chars - 16].rstrip() + " ...[truncated]"
 
 
 def _load_or_create_initial_plan(

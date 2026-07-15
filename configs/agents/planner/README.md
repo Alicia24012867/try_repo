@@ -32,9 +32,10 @@ logic_candidate_001 -> third_party/FlowTune/src/src/base/abci
 ```
 
 The model cannot alter candidate identity, role, baseline, benchmark scope,
-evaluation commands, artifact roots, or source ownership. Canonical planner
-advice is persisted in `planning/planner_advice.json`; its hash is bound into
-the portfolio plan, both assignments, and both branch manifests.
+evaluation commands, artifact roots, or source ownership; those values are not
+fields in the model response. Canonical semantic advice is persisted in
+`planning/planner_advice.json`; its hash is bound into the portfolio plan, both
+assignments, and both branch manifests.
 
 ## Decision policy
 

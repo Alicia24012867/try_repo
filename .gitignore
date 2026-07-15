@@ -18,6 +18,8 @@ experiments/**/outputs*/*
 !experiments/**/outputs*/.gitkeep
 experiments/**/logs*/*
 !experiments/**/logs*/.gitkeep
+# Per-branch subprocess output may contain provider errors or request metadata.
+experiments/**/planning/branch_logs/
 experiments/**/results*/*
 !experiments/**/results*/.gitkeep
 !experiments/**/results*/README.md

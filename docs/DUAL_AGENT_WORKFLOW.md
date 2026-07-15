@@ -28,7 +28,8 @@ Planning frozen dispatch ┤                                            ├─ f
    `workflow/portfolio_review.py` 统一选取 champion 并驱动下一轮。
 
 Planning 模型不直接生成 assignment。代码先锁定 baseline、benchmark、评测 flow、
-候选 ID 与写域；模型只允许补充两个分支的 hypothesis/task。有效建议写入
+候选 ID 与写域；这些字段只作为只读推理上下文，不属于模型响应。模型只返回两个
+分支的 hypothesis/task、验收/回滚条件与风险说明。有效建议写入
 `planning/planner_advice.json`，其 hash 同时绑定到 portfolio plan、两个 assignment
 和 branch run manifest。`--planner-mode auto` 在配置模型时每个新 cycle 调用一次模型，
 无模型配置时使用字节稳定的 deterministic fallback；resume 已存在的合法 plan 不重复调用。
@@ -57,8 +58,13 @@ Planning 模型不直接生成 assignment。代码先锁定 baseline、benchmark
   只保存在 `diagnostic_flow_commands`。
 - 任一分支异常只会把该分支标为 `failed`，不会取消另一个 future。汇总必须等待全部
   future settled。
+- Coding Agent 未产出合法候选（包括模型响应连续校验失败）时，流水线会写入
+  `REPAIR_VALIDATION` 负评审；它不具备晋级资格，但属于已结算结果，因此仍可与另一
+  分支 fan-in 并把失败证据交给下一轮 Planning。
 - 晋级要求两个分支都产出有效 review（严格 quorum）。pipeline 非零、缺失 benchmark、
   CEC/正确性行数不等于冻结 scope，或旧 review lineage 不匹配时，该候选不得晋级。
+- `REPAIR_QOR`、`REPAIR_VALIDATION` 等有效负评审的命令返回码可以非零；非零码本身
+  不等于分支缺失。只有没有有效且身份匹配的 review 时，round 才是 `incomplete`。
 - 单分支 `champion_update` 仅表示“具备晋升资格”。真正 champion 只由
   `planning/portfolio_review.json` 决定，且与完成顺序无关。
 - 不会隐式合并 Flow/Logic patch。组合方案必须作为第三个候选重新执行 build、CEC 和
@@ -97,6 +103,7 @@ experiments/cycle_NNN/
     portfolio_review.json      唯一 round/champion 决策
     portfolio_review.md        人可读汇总
     branch_runs/*.json         assignment/review/contract hash 恢复凭据
+    branch_logs/*.log          每个候选独立的 stdout/stderr（本地忽略，不提交）
   agents/
     assignments/flow_candidate_001.json
     assignments/logic_candidate_001.json
@@ -139,3 +146,7 @@ PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 `--max-workers 2` 是默认值，表示两个 coding agent 同时运行；`--max-workers 1` 仅用于
 串行诊断。只有 review 与 coordinator 生成的 branch manifest、assignment hash、合同 hash
 及 baseline lineage 全部一致时才能 resume；裸 review 或被修改的 review 会重跑对应分支。
+终端会逐分支打印 `review_valid`、decision、reason、review 与 log 路径。若 round 仍为
+`incomplete`，先查看 `planning/portfolio_review.md` 和对应的
+`planning/branch_logs/<candidate>.log`；修复后直接重跑 `bash run.sh`，合法的另一分支会
+从 manifest 恢复，仅缺失分支重新执行。

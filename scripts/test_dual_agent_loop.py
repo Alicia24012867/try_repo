@@ -10,6 +10,9 @@ import tempfile
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -46,9 +49,17 @@ from scripts.agents.self_evolved_abc.repository_context import (
 )
 from scripts.agents.self_evolved_abc.workflow.artifacts import implementation_root
 from scripts.agents.self_evolved_abc.workflow.dual_agent_loop import (
+    _branch_execution_failed,
+    _branch_log_path,
+    _default_command_runner,
+    _print_branch_outcomes,
     execute_portfolio_plan,
 )
+from scripts.agents.self_evolved_abc.workflow.candidate_pipeline import (
+    main as candidate_pipeline_main,
+)
 from scripts.agents.self_evolved_abc.workflow.portfolio_review import (
+    collect_branch_outcome,
     write_portfolio_review,
 )
 
@@ -139,35 +150,21 @@ def _planner_reply_payload() -> dict[str, object]:
         "dispatches": [
             {
                 "branch_role": "flow",
-                "agent_name": "flow_agent",
-                "candidate_id": "flow_candidate_001",
                 "task_type": "optimization",
                 "hypothesis": "Test one reached Flow decision.",
                 "coding_agent_task": "Edit one reached Flow mechanism.",
-                "source_patch_mode": "source_patch_diff",
-                "source_patch_allowed_roots": [
-                    "third_party/FlowTune/src/src/opt"
-                ],
                 "acceptance_criteria": ["Build, CEC, and QoR pass."],
                 "rollback_criteria": ["Any hard gate fails."],
             },
             {
                 "branch_role": "logic",
-                "agent_name": "logic_minimization_agent",
-                "candidate_id": "logic_candidate_001",
                 "task_type": "optimization",
                 "hypothesis": "Test one reached Logic decision.",
                 "coding_agent_task": "Edit one reached Logic mechanism.",
-                "source_patch_mode": "source_patch_diff",
-                "source_patch_allowed_roots": [
-                    "third_party/FlowTune/src/src/base/abci"
-                ],
                 "acceptance_criteria": ["Build, CEC, and QoR pass."],
                 "rollback_criteria": ["Any hard gate fails."],
             },
         ],
-        "benchmark_scope": ["benchmarks/a.blif", "benchmarks/b.blif"],
-        "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
         "risk_controls": ["No implicit patch merge."],
         "rulebase_notes": [],
     }
@@ -309,44 +306,21 @@ class DualAgentLoopTests(unittest.TestCase):
         schema = agent.response_schema()
         self.assertIn("dispatches", schema["required"])
         self.assertNotIn("selected_agent", schema["properties"])
+        self.assertNotIn("benchmark_scope", schema["properties"])
+        self.assertNotIn("evaluation_flow_commands", schema["properties"])
+        dispatch_properties = schema["properties"]["dispatches"]["items"][
+            "properties"
+        ]
+        for coordinator_field in (
+            "agent_name",
+            "candidate_id",
+            "source_patch_mode",
+            "source_patch_allowed_roots",
+        ):
+            self.assertNotIn(coordinator_field, dispatch_properties)
         reply = ModelReply(
             raw_text="{}",
-            parsed_json={
-                "cycle_objective": "Evaluate two independent improvements.",
-                "dispatches": [
-                    {
-                        "branch_role": "flow",
-                        "agent_name": "flow_agent",
-                        "candidate_id": "flow_candidate_001",
-                        "task_type": "optimization",
-                        "hypothesis": "Flow hypothesis",
-                        "coding_agent_task": "Flow task",
-                        "source_patch_mode": "source_patch_diff",
-                        "source_patch_allowed_roots": [
-                            "third_party/FlowTune/src/src/opt"
-                        ],
-                        "acceptance_criteria": ["CEC"],
-                        "rollback_criteria": ["CEC failure"],
-                    },
-                    {
-                        "branch_role": "logic",
-                        "agent_name": "logic_minimization_agent",
-                        "candidate_id": "logic_candidate_001",
-                        "task_type": "optimization",
-                        "hypothesis": "Logic hypothesis",
-                        "coding_agent_task": "Logic task",
-                        "source_patch_mode": "source_patch_diff",
-                        "source_patch_allowed_roots": [
-                            "third_party/FlowTune/src/src/base/abci"
-                        ],
-                        "acceptance_criteria": ["CEC"],
-                        "rollback_criteria": ["CEC failure"],
-                    },
-                ],
-                "benchmark_scope": ["benchmarks/a.blif"],
-                "evaluation_flow_commands": ["strash", "print_stats"],
-                "risk_controls": ["no implicit merge"],
-            },
+            parsed_json=_planner_reply_payload(),
         )
         artifacts = agent.materialize_reply(reply, {})
         self.assertEqual(artifacts.decision, "PROPOSE_CANDIDATES")
@@ -389,6 +363,55 @@ class DualAgentLoopTests(unittest.TestCase):
             ["third_party/FlowTune/src/src/opt"],
         )
 
+    def test_model_semantics_do_not_echo_standard_or_large_suite_scope(self) -> None:
+        for suite, tracked_count, evaluated_count in (
+            ("standard_30", 30, 30),
+            ("large_70", 70, 30),
+        ):
+            with self.subTest(suite=suite):
+                repo = self.repo / suite
+                repo.mkdir()
+                shutil.copytree(PROJECT_ROOT / "benchmarks", repo / "benchmarks")
+                _install_planner_templates(repo)
+                client = _RecordingModelClient(_planner_reply_payload())
+                with patch(
+                    "scripts.agents.self_evolved_abc.planning_agent."
+                    "build_repository_context",
+                    return_value=_ready_planner_prior(),
+                ):
+                    plan = PlanningAgent.create_parallel_coding_dispatch(
+                        repo_root=repo,
+                        cycle_id="cycle_001",
+                        previous_cycle_id="cycle_000",
+                        benchmark_suite=suite,
+                        planner_mode="model",
+                        model_client=client,
+                    )
+                assignment = json.loads(
+                    plan.branches[0].assignment_path.read_text(encoding="utf-8")
+                )
+                self.assertEqual(len(assignment["benchmark_scope"]), tracked_count)
+                self.assertEqual(
+                    len(plan.evaluation_contract["benchmark_scope"]),
+                    evaluated_count,
+                )
+                response_properties = client.invocations[0].response_schema[
+                    "properties"
+                ]
+                self.assertNotIn("benchmark_scope", response_properties)
+                self.assertNotIn("evaluation_flow_commands", response_properties)
+                required_output = client.invocations[0].user_prompt.split(
+                    "## Required Output", 1
+                )[1]
+                for coordinator_field in (
+                    '"benchmark_scope"',
+                    '"evaluation_flow_commands"',
+                    '"agent_name"',
+                    '"candidate_id"',
+                    '"source_patch_allowed_roots"',
+                ):
+                    self.assertNotIn(coordinator_field, required_output)
+
     def test_deterministic_planner_never_calls_injected_model(self) -> None:
         class ExplodingClient:
             def complete_json(self, _invocation):
@@ -404,25 +427,67 @@ class DualAgentLoopTests(unittest.TestCase):
         )
         self.assertEqual(plan.planner_advice_source, "deterministic_fallback")
 
-    def test_model_planner_drift_fails_before_any_plan_is_written(self) -> None:
+    def test_model_envelope_echo_is_ignored_and_coordinator_contract_wins(self) -> None:
         _install_planner_templates(self.repo)
         payload = _planner_reply_payload()
         payload["benchmark_scope"] = ["benchmarks/forged.blif"]
+        payload["evaluation_flow_commands"] = ["forged_command"]
+        payload["evidence_summary"] = {"compile": "forged_evidence"}
+        payload["validation_evidence"] = {"compile": "forged_validation"}
+        dispatches = payload["dispatches"]
+        assert isinstance(dispatches, list)
+        flow_dispatch = dispatches[0]
+        assert isinstance(flow_dispatch, dict)
+        flow_dispatch.update(
+            {
+                "agent_name": "forged_agent",
+                "candidate_id": "forged_candidate",
+                "source_patch_mode": "forged_mode",
+                "source_patch_allowed_roots": ["forged/root"],
+            }
+        )
         client = _RecordingModelClient(payload)
         with patch(
             "scripts.agents.self_evolved_abc.planning_agent.build_repository_context",
             return_value=_ready_planner_prior(),
         ):
-            with self.assertRaisesRegex(ValueError, "benchmark scope"):
-                PlanningAgent.create_parallel_coding_dispatch(
-                    repo_root=self.repo,
-                    cycle_id="cycle_001",
-                    previous_cycle_id="cycle_000",
-                    benchmarks=("benchmarks/a.blif", "benchmarks/b.blif"),
-                    planner_mode="model",
-                    model_client=client,
-                )
-        self.assertFalse((self.repo / "experiments").exists())
+            plan = PlanningAgent.create_parallel_coding_dispatch(
+                repo_root=self.repo,
+                cycle_id="cycle_001",
+                previous_cycle_id="cycle_000",
+                benchmarks=("benchmarks/a.blif", "benchmarks/b.blif"),
+                planner_mode="model",
+                model_client=client,
+            )
+        expected_scope = ["benchmarks/a.blif", "benchmarks/b.blif"]
+        self.assertEqual(plan.evaluation_contract["benchmark_scope"], expected_scope)
+        self.assertEqual(
+            plan.evaluation_contract["flow_commands"],
+            list(DEFAULT_EVAL_FLOW_COMMANDS),
+        )
+        serialized = json.dumps(plan.as_dict(self.repo.resolve()), sort_keys=True)
+        for branch in plan.branches:
+            assignment = json.loads(branch.assignment_path.read_text(encoding="utf-8"))
+            self.assertEqual(assignment["evaluation_benchmark_scope"], expected_scope)
+            self.assertEqual(
+                assignment["evaluation_flow_commands"],
+                list(DEFAULT_EVAL_FLOW_COMMANDS),
+            )
+            serialized += json.dumps(assignment, sort_keys=True)
+        advice = planner_advice_path(self.repo, "cycle_001").read_text(
+            encoding="utf-8"
+        )
+        serialized += advice
+        for forged in (
+            "benchmarks/forged.blif",
+            "forged_command",
+            "forged_agent",
+            "forged_candidate",
+            "forged/root",
+            "forged_evidence",
+            "forged_validation",
+        ):
+            self.assertNotIn(forged, serialized)
 
     def test_assignments_share_contract_but_keep_role_ownership(self) -> None:
         plan = self._plan()
@@ -490,6 +555,13 @@ class DualAgentLoopTests(unittest.TestCase):
 
         path = plan.branches[1].assignment_path
         payload = json.loads(path.read_text(encoding="utf-8"))
+        original = dict(payload)
+        payload["evaluation_benchmark_scope"] = ["benchmarks/forged.blif"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "evaluation_benchmark_scope"):
+            load_portfolio_plan(self.repo, "cycle_001")
+
+        payload = original
         payload["evaluation_flow_commands"] = ["strash", "print_stats"]
         path.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "evaluation_flow_commands"):
@@ -549,6 +621,191 @@ class DualAgentLoopTests(unittest.TestCase):
         self.assertIn("synthetic flow failure", by_role["flow"].error)
         self.assertEqual(by_role["logic"].status, "reviewed")
         self.assertEqual(by_role["logic"].decision, "REPAIR_QOR")
+        self.assertFalse(_branch_execution_failed(by_role["logic"]))
+        review = write_portfolio_review(
+            repo_root=self.repo,
+            plan=plan,
+            outcomes=outcomes,
+        )
+        self.assertEqual(review["round_status"], "incomplete")
+        output = StringIO()
+        with redirect_stdout(output):
+            _print_branch_outcomes(
+                repo_root=self.repo,
+                cycle_id=plan.cycle_id,
+                outcomes=outcomes,
+            )
+        rendered = output.getvalue()
+        self.assertIn("role=flow", rendered)
+        self.assertIn("status=failed", rendered)
+        self.assertIn("review_valid=false", rendered)
+        self.assertIn("synthetic flow failure", rendered)
+        self.assertIn("role=logic", rendered)
+        self.assertIn("review_valid=true", rendered)
+        self.assertIn("decision=REPAIR_QOR", rendered)
+        self.assertIn("reason: test review", rendered)
+        self.assertIn("next_action: continue", rendered)
+        self.assertIn("review_decision.json", rendered)
+
+    def test_negative_reviews_are_settled_and_reach_fan_in_quorum(self) -> None:
+        plan = self._plan()
+
+        def runner(command, cwd):
+            assignment = _assignment_from_command(cwd, command)
+            _write_review(cwd, assignment, decision="REPAIR_QOR")
+            # The review CLI uses one to signal a non-promoting decision.
+            return 1
+
+        outcomes = execute_portfolio_plan(
+            repo_root=self.repo,
+            plan=plan,
+            command_runner=runner,
+        )
+        self.assertEqual([item.status for item in outcomes], ["reviewed", "reviewed"])
+        self.assertEqual([item.return_code for item in outcomes], [1, 1])
+        self.assertFalse(any(_branch_execution_failed(item) for item in outcomes))
+        review = write_portfolio_review(
+            repo_root=self.repo,
+            plan=plan,
+            outcomes=outcomes,
+        )
+        self.assertTrue(review["quorum_reached"])
+        self.assertEqual(review["reviewed_count"], 2)
+        self.assertEqual(review["failed_count"], 0)
+        self.assertEqual(review["round_status"], "no_promotion")
+        next_plan = create_next_portfolio_plan(
+            repo_root=self.repo,
+            current_plan=plan,
+            portfolio_review=review,
+            next_cycle_id="cycle_002",
+        )
+        self.assertEqual(next_plan.cycle_id, "cycle_002")
+        self.assertEqual(next_plan.baseline_ref, plan.baseline_ref)
+        self.assertEqual(
+            [branch.branch_role for branch in next_plan.branches],
+            ["flow", "logic"],
+        )
+
+    def test_invalid_coding_reply_materializes_a_settled_negative_review(self) -> None:
+        plan = self._plan()
+        logic_branch = plan.branches[1]
+        with patch(
+            "scripts.agents.self_evolved_abc.workflow.candidate_pipeline."
+            "_run_agent_with_retry",
+            return_value=False,
+        ):
+            return_code = candidate_pipeline_main(
+                (
+                    "--repo-root",
+                    str(self.repo),
+                    "--assignment",
+                    str(logic_branch.assignment_path),
+                    "--skip-next-cycle",
+                )
+            )
+        self.assertEqual(return_code, 1)
+        outcome = collect_branch_outcome(
+            repo_root=self.repo.resolve(),
+            branch=logic_branch,
+            return_code=return_code,
+            elapsed_seconds=0.0,
+            runner_error="pipeline return code 1",
+        )
+        self.assertEqual(outcome.status, "reviewed")
+        self.assertEqual(outcome.decision, "REPAIR_VALIDATION")
+        self.assertEqual(outcome.build_status, "missing")
+        self.assertIn("response validation", outcome.review_reason)
+        self.assertFalse(outcome.eligible_for_promotion)
+        feedback = (
+            self.repo
+            / "experiments"
+            / "cycle_001"
+            / "agents"
+            / "feedback"
+            / "logic_candidate_001.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Logic Minimization Agent Feedback", feedback)
+
+    def test_default_runner_prefixes_and_persists_each_branch_output(self) -> None:
+        plan = self._plan()
+        branch = plan.branches[0]
+        relative_assignment = branch.assignment_path.relative_to(self.repo.resolve())
+        command = (
+            sys.executable,
+            "-B",
+            "-c",
+            "import sys; print('branch stdout'); print('branch stderr', file=sys.stderr)",
+            "--assignment",
+            str(relative_assignment),
+        )
+        output = StringIO()
+        with redirect_stdout(output):
+            return_code = _default_command_runner(command, self.repo.resolve())
+        self.assertEqual(return_code, 0)
+        rendered = output.getvalue()
+        self.assertIn("[flow_candidate_001] branch stdout", rendered)
+        self.assertIn("[flow_candidate_001] branch stderr", rendered)
+        log_path = (
+            self.repo
+            / "experiments"
+            / "cycle_001"
+            / "planning"
+            / "branch_logs"
+            / "flow_candidate_001.log"
+        )
+        self.assertEqual(
+            log_path.read_text(encoding="utf-8"),
+            "branch stdout\nbranch stderr\n",
+        )
+
+    def test_parallel_default_runner_keeps_branch_logs_isolated(self) -> None:
+        plan = self._plan()
+
+        def run(branch):
+            relative = branch.assignment_path.relative_to(self.repo.resolve())
+            command = (
+                sys.executable,
+                "-B",
+                "-c",
+                (
+                    "import sys,time; label=sys.argv[1]; "
+                    "print(label+'-first', flush=True); time.sleep(0.02); "
+                    "print(label+'-second', flush=True)"
+                ),
+                branch.branch_role,
+                "--assignment",
+                str(relative),
+            )
+            return _default_command_runner(command, self.repo.resolve())
+
+        output = StringIO()
+        with redirect_stdout(output):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                return_codes = list(executor.map(run, plan.branches))
+        self.assertEqual(return_codes, [0, 0])
+        for branch in plan.branches:
+            log = _branch_log_path(
+                self.repo,
+                plan.cycle_id,
+                branch.candidate_id,
+            ).read_text(encoding="utf-8")
+            self.assertIn(f"{branch.branch_role}-first", log)
+            self.assertIn(f"{branch.branch_role}-second", log)
+            other = "logic" if branch.branch_role == "flow" else "flow"
+            self.assertNotIn(f"{other}-first", log)
+
+        rendered = output.getvalue()
+        for branch in plan.branches:
+            self.assertIn(
+                f"[{branch.candidate_id}] {branch.branch_role}-first",
+                rendered,
+            )
+
+    def test_branch_log_path_rejects_unsafe_identity(self) -> None:
+        with self.assertRaisesRegex(ValueError, "cycle_id"):
+            _branch_log_path(self.repo, "../../escape", "candidate")
+        with self.assertRaisesRegex(ValueError, "candidate_id"):
+            _branch_log_path(self.repo, "cycle_001", "../escape")
 
     def test_nonzero_runner_cannot_promote_an_accept_review(self) -> None:
         plan = self._plan()
@@ -567,6 +824,7 @@ class DualAgentLoopTests(unittest.TestCase):
         by_role = {item.branch_role: item for item in outcomes}
         self.assertEqual(by_role["flow"].return_code, 7)
         self.assertFalse(by_role["flow"].eligible_for_promotion)
+        self.assertTrue(_branch_execution_failed(by_role["flow"]))
 
         review = write_portfolio_review(
             repo_root=self.repo,
@@ -604,6 +862,46 @@ class DualAgentLoopTests(unittest.TestCase):
         self.assertEqual(review["reviewed_count"], 1)
         self.assertEqual(review["selected_candidate_id"], "")
         self.assertEqual(review["selected_agent_name"], "")
+
+    def test_partial_or_unknown_review_cannot_satisfy_quorum(self) -> None:
+        plan = self._plan()
+        branch = plan.branches[0]
+        context = CycleContext.from_assignment_file(
+            self.repo, branch.assignment_path
+        )
+        path = impl_compare_root(context) / "comparison" / "review_decision.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "cycle_id": context.cycle_id,
+                    "candidate_id": context.candidate_id,
+                }
+            ),
+            encoding="utf-8",
+        )
+        partial = collect_branch_outcome(
+            repo_root=self.repo.resolve(),
+            branch=branch,
+            return_code=0,
+            elapsed_seconds=0.0,
+        )
+        self.assertEqual(partial.status, "failed")
+        self.assertIn("missing required fields", partial.error)
+
+        _write_review(self.repo, branch.assignment_path, decision="REPAIR_QOR")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload["decision"] = "UNKNOWN_DECISION"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        unknown = collect_branch_outcome(
+            repo_root=self.repo.resolve(),
+            branch=branch,
+            return_code=1,
+            elapsed_seconds=0.0,
+            runner_error="pipeline return code 1",
+        )
+        self.assertEqual(unknown.status, "failed")
+        self.assertIn("review decision is invalid", unknown.error)
 
     def test_fan_in_is_deterministic_and_next_round_shares_winner(self) -> None:
         plan = self._plan()

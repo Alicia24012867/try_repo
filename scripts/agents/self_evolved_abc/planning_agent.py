@@ -201,9 +201,10 @@ class PlanningAgent(PaperAgent):
             "You are the Planning Agent for a small reproduction of "
             "Multi-Agent Self-Evolved ABC. Propose one conservative round "
             "objective and exactly two isolated coding dispatches: one Flow "
-            "Agent and one Logic Minimization Agent. The candidate identities, "
+            "Agent and one Logic Minimization Agent. Candidate identities, "
             "source ownership, baseline, benchmark scope, and evaluation flow "
-            "shown in the prompt are locked. Return exactly one JSON object and "
+            "are coordinator-owned inputs: use them for reasoning but do not "
+            "repeat them in the response. Return exactly one JSON object and "
             "do not include Markdown prose."
         )
 
@@ -219,45 +220,30 @@ class PlanningAgent(PaperAgent):
             "type": "object",
             "required": [
                 "branch_role",
-                "agent_name",
-                "candidate_id",
                 "task_type",
                 "hypothesis",
                 "coding_agent_task",
-                "source_patch_mode",
-                "source_patch_allowed_roots",
                 "acceptance_criteria",
                 "rollback_criteria",
             ],
             "additionalProperties": False,
             "properties": {
                 "branch_role": {"type": "string", "enum": ["flow", "logic"]},
-                "agent_name": {
-                    "type": "string",
-                    "enum": ["flow_agent", "logic_minimization_agent"],
-                },
-                "candidate_id": {"type": "string"},
                 "task_type": {
                     "type": "string",
                     "enum": ["optimization", "repair", "instrumentation"],
                 },
                 "hypothesis": {"type": "string"},
                 "coding_agent_task": {"type": "string"},
-                "source_patch_mode": {
-                    "type": "string",
-                    "enum": ["source_patch_diff"],
-                },
-                "source_patch_allowed_roots": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
                 "acceptance_criteria": {
                     "type": "array",
                     "items": {"type": "string"},
+                    "minItems": 1,
                 },
                 "rollback_criteria": {
                     "type": "array",
                     "items": {"type": "string"},
+                    "minItems": 1,
                 },
             },
         }
@@ -266,9 +252,8 @@ class PlanningAgent(PaperAgent):
             "required": [
                 "cycle_objective",
                 "dispatches",
-                "benchmark_scope",
-                "evaluation_flow_commands",
                 "risk_controls",
+                "rulebase_notes",
             ],
             "additionalProperties": False,
             "properties": {
@@ -279,31 +264,10 @@ class PlanningAgent(PaperAgent):
                     "maxItems": 2,
                     "items": dispatch_schema,
                 },
-                "benchmark_scope": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "allowed_to_read": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "evaluation_flow_commands": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-                "evidence_summary": {
-                    "type": "object",
-                    "properties": {
-                        "compile": {"type": "string"},
-                        "cec": {"type": "string"},
-                        "qor": {"type": "string"},
-                        "runtime": {"type": "string"},
-                    },
-                },
-                "validation_evidence": {"type": "object"},
                 "risk_controls": {
                     "type": "array",
                     "items": {"type": "string"},
+                    "minItems": 1,
                 },
                 "rulebase_notes": {
                     "type": "array",
@@ -332,10 +296,6 @@ class PlanningAgent(PaperAgent):
             if str(item)
         ]
 
-        evidence_summary = data.get("evidence_summary", {}) or {}
-        compile_status = str(evidence_summary.get("compile", "missing"))
-        cec_status = str(evidence_summary.get("cec", "missing"))
-        qor_status = str(evidence_summary.get("qor", "inconclusive"))
         dispatch_plan = self._render_dispatches(dispatches, include_tasks=False)
         dispatch_tasks = self._render_dispatches(dispatches, include_tasks=True)
 
@@ -344,10 +304,6 @@ class PlanningAgent(PaperAgent):
                 f"# Planning Agent Plan -- {self.context.candidate_id}\n\n"
                 f"## Objective\n\n{objective}\n\n"
                 f"## Parallel Coding Dispatches\n\n{dispatch_plan}"
-                f"## Evidence Summary\n\n"
-                f"- compile: {compile_status}\n"
-                f"- cec: {cec_status}\n"
-                f"- qor: {qor_status}\n\n"
                 f"## Risk Controls\n\n{markdown_bullets(risk_controls)}"
             ),
             candidate_markdown=(
@@ -443,18 +399,6 @@ class PlanningAgent(PaperAgent):
         self,
         dispatches: list[Mapping[str, Any]],
     ) -> None:
-        expected = {
-            "flow": (
-                "flow_agent",
-                "flow_candidate_001",
-                "third_party/FlowTune/src/src/opt",
-            ),
-            "logic": (
-                "logic_minimization_agent",
-                "logic_candidate_001",
-                "third_party/FlowTune/src/src/base/abci",
-            ),
-        }
         if len(dispatches) != 2:
             raise ValueError("Planning Agent must dispatch exactly Flow and Logic")
         if [str(item.get("branch_role", "")) for item in dispatches] != [
@@ -464,16 +408,6 @@ class PlanningAgent(PaperAgent):
             raise ValueError("Planning Agent dispatch order must be Flow then Logic")
         for item in dispatches:
             role = str(item.get("branch_role", ""))
-            agent_name, candidate_id, allowed_root = expected[role]
-            if item.get("agent_name") != agent_name:
-                raise ValueError(f"{role} dispatch agent_name mismatch")
-            if item.get("candidate_id") != candidate_id:
-                raise ValueError(f"{role} dispatch candidate_id mismatch")
-            if item.get("source_patch_mode") != "source_patch_diff":
-                raise ValueError(f"{role} dispatch source_patch_mode mismatch")
-            roots = [str(value) for value in item.get("source_patch_allowed_roots", ())]
-            if roots != [allowed_root]:
-                raise ValueError(f"{role} dispatch source ownership mismatch")
             if str(item.get("task_type", "")) not in {
                 "optimization",
                 "repair",
@@ -502,12 +436,22 @@ class PlanningAgent(PaperAgent):
         lines: list[str] = []
         for item in dispatches:
             role = str(item["branch_role"])
+            if role == "flow":
+                agent_name = "flow_agent"
+                candidate_id = "flow_candidate_001"
+                allowed_roots = ("third_party/FlowTune/src/src/opt",)
+            else:
+                agent_name = "logic_minimization_agent"
+                candidate_id = "logic_candidate_001"
+                allowed_roots = (
+                    "third_party/FlowTune/src/src/base/abci",
+                )
             lines.extend(
                 (
                     f"### {role.title()} branch",
                     "",
-                    f"- Agent: `{item['agent_name']}`",
-                    f"- Candidate: `{item['candidate_id']}`",
+                    f"- Agent: `{agent_name}`",
+                    f"- Candidate: `{candidate_id}`",
                     f"- Task type: `{item['task_type']}`",
                     f"- Hypothesis: {item['hypothesis']}",
                 )
@@ -517,10 +461,7 @@ class PlanningAgent(PaperAgent):
                     (
                         f"- Task: {item['coding_agent_task']}",
                         "- Allowed source roots: "
-                        + ", ".join(
-                            f"`{value}`"
-                            for value in item.get("source_patch_allowed_roots", ())
-                        ),
+                        + ", ".join(f"`{value}`" for value in allowed_roots),
                     )
                 )
             lines.extend(
@@ -595,7 +536,10 @@ class PlanningAgent(PaperAgent):
                 "target_metric", "AND node count"
             ),
             "BENCHMARK_SUITES": str(
-                assignment.get("benchmark_scope", "EPFL + ISCAS85 + ISCAS89")
+                assignment.get(
+                    "evaluation_benchmark_scope",
+                    assignment.get("benchmark_scope", "EPFL + ISCAS85 + ISCAS89"),
+                )
             ),
             "FLOW_CONFIGS": str(
                 assignment.get(

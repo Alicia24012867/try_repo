@@ -296,31 +296,31 @@ Follow this procedure before writing the plan:
    - assign the same agent that produced the candidate
    - do not plan new optimization
 2. Else if CEC failed:
-   - choose `task_type: repair` or `rollback`
+   - choose `task_type: repair`
    - identify the smallest semantic risk
+   - put full rollback conditions in `rollback_criteria`
    - do not accept any QoR from that candidate
 3. Else if runtime exceeded budget:
    - choose Flow Agent if the issue is search schedule
    - choose original agent if the issue is algorithmic cost
    - ask for instrumentation only if evidence is insufficient
 4. Else if QoR improved with acceptable regressions:
-   - choose `task_type: review_or_followup`
+   - choose `task_type: optimization` for the next conservative follow-up
    - decide whether to exploit the same subsystem or evaluate broader suites
 5. Else if QoR regressed:
-   - choose `task_type: rollback` or targeted repair
+   - choose `task_type: repair`
+   - put rollback conditions in `rollback_criteria`
    - state which metric caused rejection
 6. Else if evidence is inconclusive:
-   - choose `task_type: instrumentation` or `evaluation_only`
+   - choose `task_type: instrumentation`
    - avoid source optimization
 7. For any new optimization:
    - state one independent Flow hypothesis and one independent Logic hypothesis
    - dispatch both paper roles in Flow-then-Logic order
-   - preserve the code-owned candidate IDs and disjoint allowed paths
+   - reason within the coordinator-owned candidate IDs and disjoint paths
    - define compile, CEC, and benchmark evidence required
-   - for Flow Agent source-code evolution, explicitly set
-     `source_patch_mode: source_patch_diff` and include likely exercised
-     roots such as `third_party/FlowTune/src/src/opt` and
-     `third_party/FlowTune/src/src/base/abci`
+   - do not repeat candidate IDs, source modes, writable roots, benchmark scope,
+     or evaluation commands in the response; the coordinator injects them
 8. For any rulebase proposal:
    - cite the cycle evidence that motivates it
    - classify the action as add, tighten, relax, retire, or none
@@ -330,16 +330,11 @@ Follow this procedure before writing the plan:
 
 Use these rules for the Flow branch of the paired source-level feedback loop:
 
-- Prefer `source_patch_mode: source_patch_diff` for materialized source
-  evolution. Use `abc_flow` only for legacy flow-recipe experiments, and use
-  `source_patch_todo` only when the planner intentionally wants proposal-only
-  design notes.
+- Both branches already use coordinator-locked `source_patch_diff` mode. Do not
+  request a different mode in the response.
 - Flow owns only `third_party/FlowTune/src/src/opt`; Logic owns only
-  `third_party/FlowTune/src/src/base/abci`. Never cross or combine these roots.
-- Include the source-patch root in `allowed_to_edit` together with active-cycle
-  artifact directories. Do not give write access to benchmarks, previous-cycle
-  evidence, generated outputs outside the active cycle, or unrelated ABC
-  subsystems.
+  `third_party/FlowTune/src/src/base/abci`. Never ask either task to cross or
+  combine these coordinator-owned roots.
 - Treat the evaluation flow as a reachability guide. The default flow includes
   `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and `refactor`, so patches under
   `opt/fxu`, `opt/csw`, and the corresponding `base/abci` command wrappers have
@@ -412,76 +407,27 @@ Respond only with one JSON object matching this schema:
   "dispatches": [
     {
       "branch_role": "flow",
-      "agent_name": "flow_agent",
-      "candidate_id": "flow_candidate_001",
       "task_type": "optimization",
       "hypothesis": "one Flow-specific testable hypothesis",
       "coding_agent_task": "copy-ready Flow task",
-      "source_patch_mode": "source_patch_diff",
-      "source_patch_allowed_roots": [
-        "third_party/FlowTune/src/src/opt"
-      ],
       "acceptance_criteria": ["build + exact-scope CEC + frozen QoR gates"],
       "rollback_criteria": ["any build, CEC, coverage, or regression failure"]
     },
     {
       "branch_role": "logic",
-      "agent_name": "logic_minimization_agent",
-      "candidate_id": "logic_candidate_001",
       "task_type": "optimization",
       "hypothesis": "one Logic-specific testable hypothesis",
       "coding_agent_task": "copy-ready Logic task",
-      "source_patch_mode": "source_patch_diff",
-      "source_patch_allowed_roots": [
-        "third_party/FlowTune/src/src/base/abci"
-      ],
       "acceptance_criteria": ["build + exact-scope CEC + frozen QoR gates"],
       "rollback_criteria": ["any build, CEC, coverage, or regression failure"]
     }
   ],
-  "evaluation_flow_commands": [
-    "fx",
-    "strash",
-    "rewrite -z",
-    "resub -K 8",
-    "dc2",
-    "csweep",
-    "refactor -z",
-    "strash",
-    "print_stats"
-  ],
-  "benchmark_scope": [
-    "benchmarks/epfl/epfl_adder.blif",
-    "benchmarks/epfl/epfl_bar.blif",
-    "benchmarks/epfl/epfl_sqrt.blif"
-  ],
-  "allowed_to_read": [
-    "experiments/cycle_000/results/summary.csv",
-    "experiments/cycle_000/results/skipped.csv",
-    "experiments/cycle_000/results/run_notes.md"
-  ],
-  "evidence_summary": {
-    "compile": "pass | fail | missing",
-    "cec": "pass | fail | missing",
-    "qor": "improved | neutral | regressed | inconclusive",
-    "runtime": "within_budget | over_budget | missing"
-  },
-  "validation_evidence": {
-    "compile": {"command": "string", "pass_condition": "string"},
-    "correctness": {"command": "string", "pass_condition": "string"},
-    "benchmarks": {"suites": ["string"], "flows": ["string"]},
-    "metrics": {
-      "primary": "string",
-      "secondary": ["string"],
-      "regression_threshold": "string",
-      "runtime_budget": "string"
-    }
-  },
   "risk_controls": ["string"],
   "rulebase_notes": ["string"]
 }
 ```
 
-The two candidate IDs, agent names, source roots, benchmark scope, evaluation
-flow, baseline, and promotion thresholds are locked inputs. Echo them exactly;
-the coordinator rejects any drift before writing assignments.
+Candidate IDs, agent names, source roots, benchmark scope, evaluation flow,
+baseline, promotion thresholds, and timeouts are coordinator-owned inputs.
+Use the displayed values for reasoning but never include them in the JSON
+response. The coordinator injects and hash-binds them after Planning returns.

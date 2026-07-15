@@ -35,9 +35,10 @@ unfinished configuration.
 
 1. Fill `planner_prompt.md` with the current champion, both prior branch
    results, rulebase, pinned prior knowledge, and cycle budget.
-2. Validate the planner JSON against the locked envelope and freeze exactly
-   two assignments under `experiments/{{CYCLE_ID}}/agents/assignments/`: Flow
-   first and Logic second.
+2. Validate the planner's semantic-only JSON, inject the coordinator-owned
+   baseline/benchmark/flow/identity/source capabilities, and freeze exactly two
+   assignments under `experiments/{{CYCLE_ID}}/agents/assignments/`: Flow first
+   and Logic second.
 3. Render `coding_agent_prompt.md` independently for both isolated roles.
 4. Run validation, patch application, compile, smoke, full-scope CEC, QoR, and
    branch review in each lane; one failure does not cancel the sibling.

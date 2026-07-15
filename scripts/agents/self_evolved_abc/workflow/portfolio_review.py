@@ -9,6 +9,10 @@ from typing import Any, Mapping, Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root
+from scripts.agents.self_evolved_abc.flow.review import (
+    REVIEW_DECISIONS,
+    REVIEW_REQUIRED_FIELDS,
+)
 from scripts.agents.self_evolved_abc.planning.portfolio import (
     BRANCH_ORDER,
     BranchDispatch,
@@ -40,6 +44,9 @@ class BranchOutcome:
     cec_total_count: int = 0
     correctness_backed_rows: int = 0
     expected_benchmark_count: int = 0
+    build_status: str = ""
+    review_reason: str = ""
+    next_action: str = ""
 
 
 def collect_branch_outcome(
@@ -80,6 +87,12 @@ def collect_branch_outcome(
             for message in identity_errors:
                 error = _append_error(error, message)
             review = {}
+    if review:
+        schema_errors = _review_schema_errors(review)
+        if schema_errors:
+            for message in schema_errors:
+                error = _append_error(error, message)
+            review = {}
     status = "reviewed" if review else "failed"
     decision = str(review.get("decision", "MISSING_REVIEW"))
     eligible = (
@@ -114,6 +127,9 @@ def collect_branch_outcome(
         cec_total_count=_int(review.get("cec_total_count")),
         correctness_backed_rows=_int(review.get("correctness_backed_rows")),
         expected_benchmark_count=expected_benchmark_count,
+        build_status=str(review.get("build_status", "")),
+        review_reason=str(review.get("reason", "")),
+        next_action=str(review.get("next_action", "")),
     )
 
 
@@ -289,7 +305,10 @@ def _render_markdown(
                 f"- Candidate: `{item.candidate_id}`",
                 f"- Status / decision: `{item.status}` / `{item.decision}`",
                 f"- Eligible: `{str(item.eligible_for_promotion).lower()}`",
+                f"- Build status: `{item.build_status or 'unknown'}`",
                 f"- Scalar AND reward: `{item.scalar_and_reward}`",
+                f"- Review reason: {item.review_reason or 'none'}",
+                f"- Next action: {item.next_action or 'none'}",
                 f"- Evidence: `{item.review_path}`",
                 f"- Error: {item.error or 'none'}",
                 "",
@@ -301,6 +320,72 @@ def _render_markdown(
 
 def _append_error(current: str, message: str) -> str:
     return f"{current}; {message}" if current else message
+
+
+def _review_schema_errors(review: Mapping[str, Any]) -> tuple[str, ...]:
+    """Validate the persisted review before it can satisfy fan-in quorum."""
+
+    errors: list[str] = []
+    missing = sorted(REVIEW_REQUIRED_FIELDS - set(review))
+    if missing:
+        errors.append("review is missing required fields: " + ", ".join(missing))
+
+    decision = review.get("decision")
+    if decision not in REVIEW_DECISIONS:
+        errors.append(f"review decision is invalid: {decision!r}")
+
+    for field in ("champion_update", "promotion_allowed"):
+        if not isinstance(review.get(field), bool):
+            errors.append(f"review {field} must be boolean")
+
+    count_fields = (
+        "cec_pass_count",
+        "cec_total_count",
+        "correctness_backed_rows",
+        "improved_benchmark_count",
+        "regressed_benchmark_count",
+        "unchanged_benchmark_count",
+        "min_total_and_reduction",
+        "min_improved_benchmarks",
+    )
+    for field in count_fields:
+        value = review.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            errors.append(f"review {field} must be a non-negative integer")
+
+    for field in ("build_status", "reason", "next_action"):
+        value = review.get(field)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"review {field} must be a non-empty string")
+
+    average = review.get("average_and_improve_pct")
+    if average is not None and (
+        not isinstance(average, (int, float)) or isinstance(average, bool)
+    ):
+        errors.append("review average_and_improve_pct must be numeric or null")
+    for field in (
+        "total_and_delta_candidate_minus_baseline",
+        "scalar_and_reward",
+    ):
+        value = review.get(field)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool)
+        ):
+            errors.append(f"review {field} must be an integer or null")
+    threshold = review.get("min_average_and_improve_pct")
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+        errors.append("review min_average_and_improve_pct must be numeric")
+
+    promotion = review.get("promotion_allowed")
+    champion_update = review.get("champion_update")
+    if isinstance(promotion, bool) and isinstance(champion_update, bool):
+        if promotion != champion_update:
+            errors.append("review champion_update must match promotion_allowed")
+        if (decision == "ACCEPT_FOR_NEXT_CYCLE") != promotion:
+            errors.append(
+                "review ACCEPT_FOR_NEXT_CYCLE must exactly match promotion_allowed"
+            )
+    return tuple(errors)
 
 
 def _optional_int(value: object) -> int | None:

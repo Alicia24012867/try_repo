@@ -28,6 +28,45 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
 )
 
 
+REVIEW_DECISIONS = frozenset(
+    (
+        "ACCEPT_FOR_NEXT_CYCLE",
+        "REJECT_CEC",
+        "REPAIR_BUILD",
+        "REPAIR_COMPILE",
+        "REPAIR_EVALUATION",
+        "REPAIR_PATCH",
+        "REPAIR_QOR",
+        "REPAIR_SMOKE",
+        "REPAIR_VALIDATION",
+    )
+)
+REVIEW_REQUIRED_FIELDS = frozenset(
+    (
+        "cycle_id",
+        "candidate_id",
+        "decision",
+        "champion_update",
+        "promotion_allowed",
+        "build_status",
+        "cec_pass_count",
+        "cec_total_count",
+        "correctness_backed_rows",
+        "average_and_improve_pct",
+        "total_and_delta_candidate_minus_baseline",
+        "scalar_and_reward",
+        "improved_benchmark_count",
+        "regressed_benchmark_count",
+        "unchanged_benchmark_count",
+        "min_average_and_improve_pct",
+        "min_total_and_reduction",
+        "min_improved_benchmarks",
+        "reason",
+        "next_action",
+    )
+)
+
+
 @dataclass(frozen=True)
 class ReviewDecision:
     cycle_id: str
@@ -147,7 +186,10 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
             f"improved rows {delta_stats.improved_count}. The breadth gate and "
             "at least one configured magnitude gate were satisfied."
         )
-        next_action = "Use this candidate as positive evidence for the next Flow Agent cycle."
+        next_action = (
+            "Use this candidate as positive evidence for the next "
+            f"{context.paper_role} cycle."
+        )
         promotion = True
     else:
         decision = "REPAIR_QOR"
@@ -158,7 +200,8 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
                 "by the evaluation flow or may have been behavior-neutral."
             )
             next_action = (
-                "Feed zero-delta QoR back to the Flow Agent as a reachability "
+                f"Feed zero-delta QoR back to the {context.paper_role} as a "
+                "reachability "
                 "signal and request a different target file or strategy."
             )
         else:
@@ -173,8 +216,9 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
                 "with zero AND regressions)."
             )
             next_action = (
-                "Treat this as weak evidence, not a champion. Ask the Flow "
-                "Agent to change strategy or target a different reachable "
+                "Treat this as weak evidence, not a champion. Ask the "
+                f"{context.paper_role} to change strategy or target a different "
+                "reachable "
                 "decision point with a larger expected effect."
             )
 
@@ -272,7 +316,7 @@ def render_feedback(
 ) -> str:
     return "\n".join(
         (
-            f"# Flow Agent Feedback -- {context.candidate_id}",
+            f"# {context.paper_role} Feedback -- {context.candidate_id}",
             "",
             "## Review Decision",
             "",
@@ -313,7 +357,8 @@ def render_rule_update(
 ) -> str:
     if decision.promotion_allowed:
         rule = (
-            "Flow Agent source patches may be used as positive next-cycle evidence "
+            f"{context.paper_role} source patches may be used as positive "
+            "next-cycle evidence "
             "only after build/smoke, full CEC, and correctness-backed QoR deltas pass."
         )
     elif decision.decision == "REJECT_CEC":
@@ -323,13 +368,14 @@ def render_rule_update(
         )
     else:
         rule = (
-            "Keep Flow Agent source-patch edits out of the champion lineage until "
+            f"Keep {context.paper_role} source-patch edits out of the champion "
+            "lineage until "
             "implementation comparison produces correctness-backed QoR improvement "
             "above the configured promotion thresholds."
         )
     return "\n".join(
         (
-            f"# Flow Agent Rule Updates -- {context.candidate_id}",
+            f"# {context.paper_role} Rule Updates -- {context.candidate_id}",
             "",
             "Active rulebase was not modified.",
             "",
@@ -366,9 +412,11 @@ def _classify_build_failure(build_status: str | None) -> tuple[str, str, str]:
     if status in ("missing",):
         return (
             "REPAIR_VALIDATION",
-            "Build manifest is missing — model validation likely failed before "
-            "any patch was materialized. Check feedback for validation issues.",
-            "Fix the JSON response fields flagged in the validation issues above.",
+            "Build manifest is missing — the coding agent ended before any "
+            "patch was materialized because the model/provider call or response "
+            "validation failed.",
+            "Inspect the candidate branch log and validation feedback, then fix "
+            "the provider failure or the flagged JSON response fields.",
         )
     if status in ("patch_not_applied", "patch_apply_failed"):
         return (

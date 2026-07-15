@@ -51,7 +51,7 @@ BRANCH_SPECS = {
 }
 PLAN_SCHEMA_VERSION = 2
 EVALUATION_CONTRACT_VERSION = 1
-PLANNER_ADVICE_SCHEMA_VERSION = 1
+PLANNER_ADVICE_SCHEMA_VERSION = 2
 PlannerAdviceProvider = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 
@@ -639,7 +639,7 @@ def _resolve_planner_advice(
         persisted = json.loads(existing_path.read_text(encoding="utf-8"))
         if not isinstance(persisted, Mapping):
             raise ValueError("persisted planner advice is not a JSON object")
-        replay = _replay_persisted_advice(persisted, locked=locked)
+        replay = _replay_persisted_advice(persisted)
         canonical = _canonical_planner_advice(replay, locked=locked)
         if canonical != dict(persisted):
             raise ValueError("persisted planner advice does not match locked portfolio")
@@ -655,8 +655,6 @@ def _resolve_planner_advice(
                 _deterministic_dispatch(role, assignments[role])
                 for role in BRANCH_ORDER
             ],
-            "benchmark_scope": list(evaluation_contract["benchmark_scope"]),
-            "evaluation_flow_commands": list(evaluation_contract["flow_commands"]),
             "risk_controls": [
                 "Keep Flow and Logic source ownership disjoint.",
                 "Require both reviews before promotion.",
@@ -670,37 +668,19 @@ def _resolve_planner_advice(
 
 def _replay_persisted_advice(
     persisted: Mapping[str, object],
-    *,
-    locked: Mapping[str, object],
 ) -> dict[str, object]:
-    branches = locked["branches"]
-    contract = locked["evaluation_contract"]
-    assert isinstance(branches, Mapping)
-    assert isinstance(contract, Mapping)
     persisted_dispatches = persisted.get("dispatches")
     if not isinstance(persisted_dispatches, Sequence):
         raise ValueError("persisted planner advice dispatches are invalid")
     dispatches: list[dict[str, object]] = []
-    for role, item in zip(BRANCH_ORDER, persisted_dispatches):
+    for item in persisted_dispatches:
         if not isinstance(item, Mapping):
             raise ValueError("persisted planner advice dispatch is invalid")
-        assignment = branches[role]
-        assert isinstance(assignment, Mapping)
-        dispatches.append(
-            {
-                **dict(item),
-                "source_patch_mode": assignment["source_patch_mode"],
-                "source_patch_allowed_roots": list(
-                    assignment.get("source_patch_allowed_roots", ())
-                ),
-            }
-        )
+        dispatches.append(dict(item))
     return {
         "source": persisted.get("source"),
         "cycle_objective": persisted.get("cycle_objective"),
         "dispatches": dispatches,
-        "benchmark_scope": list(contract["benchmark_scope"]),
-        "evaluation_flow_commands": list(contract["flow_commands"]),
         "risk_controls": persisted.get("risk_controls", ()),
         "rulebase_notes": persisted.get("rulebase_notes", ()),
     }
@@ -720,15 +700,9 @@ def _deterministic_dispatch(
         task_type = "optimization"
     return {
         "branch_role": branch_role,
-        "agent_name": assignment["agent_name"],
-        "candidate_id": assignment["candidate_id"],
         "task_type": task_type,
         "hypothesis": hypothesis,
         "coding_agent_task": hypothesis,
-        "source_patch_mode": assignment["source_patch_mode"],
-        "source_patch_allowed_roots": list(
-            assignment.get("source_patch_allowed_roots", ())
-        ),
         "acceptance_criteria": ["Build, exact-scope CEC, and frozen QoR gates pass."],
         "rollback_criteria": ["Any build, CEC, coverage, or regression gate fails."],
     }
@@ -745,68 +719,62 @@ def _canonical_planner_advice(
         "source",
         "cycle_objective",
         "dispatches",
-        "benchmark_scope",
-        "allowed_to_read",
-        "evaluation_flow_commands",
-        "evidence_summary",
-        "validation_evidence",
         "risk_controls",
         "rulebase_notes",
     }
-    unexpected = set(raw) - allowed_top
+    # Model output is untrusted.  A provider operating in plain json_object
+    # mode may echo coordinator-owned context or obsolete diagnostic metadata
+    # even though the current schema omits it.  Discard those non-authoritative
+    # fields: execution always uses the frozen evaluation contract and
+    # assignment capabilities created before Planning.
+    ignored_non_authoritative_fields = {
+        "allowed_to_read",
+        "benchmark_scope",
+        "evidence_summary",
+        "evaluation_flow_commands",
+        "validation_evidence",
+    }
+    unexpected = set(raw) - allowed_top - ignored_non_authoritative_fields
     if unexpected:
         raise ValueError(
             "Planning Agent advice contains unsupported fields: "
             + ", ".join(sorted(unexpected))
         )
-    contract = locked["evaluation_contract"]
-    assert isinstance(contract, Mapping)
-    if list(raw.get("benchmark_scope", ())) != list(contract["benchmark_scope"]):
-        raise ValueError("Planning Agent attempted to change benchmark scope")
-    if list(raw.get("evaluation_flow_commands", ())) != list(
-        contract["flow_commands"]
-    ):
-        raise ValueError("Planning Agent attempted to change evaluation flow")
     dispatches = raw.get("dispatches")
     if not isinstance(dispatches, Sequence) or isinstance(dispatches, (str, bytes)):
         raise ValueError("Planning Agent dispatches must be an array")
-    if [str(item.get("branch_role", "")) for item in dispatches if isinstance(item, Mapping)] != list(BRANCH_ORDER):
+    observed_order = [
+        str(item.get("branch_role", ""))
+        for item in dispatches
+        if isinstance(item, Mapping)
+    ]
+    if observed_order != list(BRANCH_ORDER):
         raise ValueError("Planning Agent dispatch order must be Flow then Logic")
-    locked_branches = locked["branches"]
-    assert isinstance(locked_branches, Mapping)
     canonical_dispatches: list[dict[str, object]] = []
     allowed_task_types = {"optimization", "repair", "instrumentation"}
     required_dispatch_fields = {
         "branch_role",
-        "agent_name",
-        "candidate_id",
         "task_type",
         "hypothesis",
         "coding_agent_task",
-        "source_patch_mode",
-        "source_patch_allowed_roots",
         "acceptance_criteria",
         "rollback_criteria",
+    }
+    ignored_dispatch_capabilities = {
+        "agent_name",
+        "candidate_id",
+        "source_patch_mode",
+        "source_patch_allowed_roots",
     }
     for role, item in zip(BRANCH_ORDER, dispatches):
         if not isinstance(item, Mapping):
             raise ValueError(f"Planning Agent {role} dispatch is not an object")
-        if set(item) != required_dispatch_fields:
+        if not required_dispatch_fields.issubset(item) or (
+            set(item) - required_dispatch_fields - ignored_dispatch_capabilities
+        ):
             raise ValueError(f"Planning Agent {role} dispatch fields are not exact")
-        locked_assignment = locked_branches[role]
-        assert isinstance(locked_assignment, Mapping)
-        identity_checks = {
-            "branch_role": role,
-            "agent_name": locked_assignment["agent_name"],
-            "candidate_id": locked_assignment["candidate_id"],
-            "source_patch_mode": locked_assignment["source_patch_mode"],
-            "source_patch_allowed_roots": list(
-                locked_assignment.get("source_patch_allowed_roots", ())
-            ),
-        }
-        for key, expected in identity_checks.items():
-            if item.get(key) != expected:
-                raise ValueError(f"Planning Agent attempted to change {role} {key}")
+        if item.get("branch_role") != role:
+            raise ValueError(f"Planning Agent attempted to change {role} branch role")
         task_type = str(item.get("task_type", ""))
         if task_type not in allowed_task_types:
             raise ValueError(f"Planning Agent {role} task_type is not executable")
@@ -815,8 +783,6 @@ def _canonical_planner_advice(
         canonical_dispatches.append(
             {
                 "branch_role": role,
-                "agent_name": str(item["agent_name"]),
-                "candidate_id": str(item["candidate_id"]),
                 "task_type": task_type,
                 "hypothesis": hypothesis,
                 "coding_agent_task": task,

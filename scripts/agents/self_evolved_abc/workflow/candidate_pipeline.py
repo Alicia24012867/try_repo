@@ -16,6 +16,10 @@ from scripts.agents.self_evolved_abc.flow.source_patch import (
     source_patch_diff_path,
     source_patch_plan_path,
 )
+from scripts.agents.self_evolved_abc.flow.review import (
+    review_impl_compare,
+    write_review_artifacts,
+)
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
     implementation_root,
     review_decision_path,
@@ -195,7 +199,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 2
         if not agent_succeeded:
             print("iteration_loop: coding agent did not produce a valid candidate")
-            return 1
+            # A rejected/invalid model proposal is still a settled branch
+            # result.  Materialize the existing REPAIR_VALIDATION review so
+            # the paired fan-in can feed the failure back to Planning instead
+            # of stopping with a permanently missing review.
+            return _write_agent_failure_review(context)
     if not args.skip_patch_apply:
         source_patch_command = [
             sys.executable,
@@ -337,6 +345,24 @@ def _reset_candidate_outputs(
 
 def _is_review_command(command: Sequence[str]) -> bool:
     return "scripts.agents.self_evolved_abc.flow.review" in command
+
+
+def _write_agent_failure_review(context: CycleContext) -> int:
+    """Persist a non-promoting review when coding ends before build/CEC."""
+
+    impl_root = implementation_root(context)
+    decision = review_impl_compare(context, impl_root)
+    if decision.decision != "REPAIR_VALIDATION":
+        raise RuntimeError(
+            "agent failure without build evidence must classify as "
+            f"REPAIR_VALIDATION, got {decision.decision}"
+        )
+    paths = write_review_artifacts(context, impl_root, decision)
+    print(f"review_decision: {paths['decision']}")
+    print(f"feedback: {paths['feedback']}")
+    print(f"rule_update: {paths['rule_update']}")
+    print(f"decision: {decision.decision}")
+    return 1
 
 
 if __name__ == "__main__":
