@@ -255,7 +255,7 @@ def batch_variant_command(variant_id: str) -> str:
 def next_probe_cycle_id(repo_root: Path) -> str:
     highest = 0
     for path in (repo_root / "experiments").glob("probe_*"):
-        suffix = path.name.removeprefix("probe_")
+        suffix = path.name[len("probe_") :]
         if path.is_dir() and suffix.isdigit():
             highest = max(highest, int(suffix))
     return f"probe_{highest + 1:03d}"

@@ -8,10 +8,9 @@ model-facing agents.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple, Type
 
 from scripts.agents.self_evolved_abc.flow.assignment import (
     normalize_flow_assignment_scope,
@@ -21,7 +20,7 @@ from scripts.agents.self_evolved_abc.logic.assignment import (
 )
 
 
-AssignmentNormalizer = Callable[[Mapping[str, Any]], dict[str, object]]
+AssignmentNormalizer = Callable[[Mapping[str, Any]], Dict[str, object]]
 
 
 @dataclass(frozen=True)
@@ -34,7 +33,7 @@ class AgentSpec:
     class_name: str
     coding_agent: bool = False
     candidate_prefix: str = "candidate"
-    normalizer: AssignmentNormalizer | None = None
+    normalizer: Optional[AssignmentNormalizer] = None
 
 
 _AGENT_SPECS = {
@@ -75,13 +74,13 @@ _AGENT_SPECS = {
 }
 
 
-def agent_names() -> tuple[str, ...]:
+def agent_names() -> Tuple[str, ...]:
     """Return all registered agent names in deterministic order."""
 
     return tuple(sorted(_AGENT_SPECS))
 
 
-def coding_agent_names() -> tuple[str, ...]:
+def coding_agent_names() -> Tuple[str, ...]:
     """Return agents supported by the source-patch candidate pipeline."""
 
     return tuple(
@@ -113,7 +112,7 @@ def get_coding_agent_spec(name: object) -> AgentSpec:
 
 def normalize_coding_assignment(
     assignment: Mapping[str, Any],
-) -> dict[str, object]:
+) -> Dict[str, object]:
     """Normalise an assignment according to its exact registered role."""
 
     spec = get_coding_agent_spec(assignment.get("agent_name"))
@@ -131,7 +130,7 @@ def normalize_coding_assignment(
     return normalized
 
 
-def resolve_agent_class(name: object) -> type[Any]:
+def resolve_agent_class(name: object) -> Type[Any]:
     """Load the registered concrete class only when execution needs it."""
 
     spec = get_agent_spec(name)

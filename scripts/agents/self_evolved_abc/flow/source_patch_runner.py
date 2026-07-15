@@ -659,12 +659,12 @@ def extract_source_patch_targets(patch_plan: Path) -> tuple[str, ...]:
     for line in lines:
         stripped = line.strip()
         if stripped.startswith("## "):
-            heading = stripped.removeprefix("## ").strip()
+            heading = stripped[len("## ") :].strip()
             in_section = heading == SOURCE_PATCH_TARGET_SECTION
             continue
         if not in_section or not stripped.startswith("- "):
             continue
-        target = stripped.removeprefix("- ").strip()
+        target = stripped[len("- ") :].strip()
         if target and target != "None.":
             targets.append(target)
 

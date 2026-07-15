@@ -180,6 +180,9 @@ try_repo/
 
 ## Local Development
 
+The remote workflow supports Python 3.8 or newer. `run.sh` uses `python3` by
+default; set `PYTHON_BIN=/path/to/python3.8` to select an explicit interpreter.
+
 Use local commands for small checks only:
 
 ```bash
@@ -195,6 +198,8 @@ PYTHONPATH=. python3 -B scripts/test_planning_agent.py
 PYTHONPATH=. python3 -B scripts/test_logic_minimization_agent.py
 
 PYTHONPATH=. python3 -B scripts/test_dual_agent_loop.py
+
+PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 
 PYTHONPATH=. python3 -B scripts/bootstrap_agent_context.py --check
 

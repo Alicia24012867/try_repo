@@ -160,13 +160,13 @@ def discover_designs(
 ) -> list[str]:
     designs = set(skipped)
     for path in logs_dir.glob("*.vanilla.log"):
-        designs.add(path.name.removesuffix(".vanilla.log"))
+        designs.add(path.name[: -len(".vanilla.log")])
     for path in logs_dir.glob("*.flowtune.log"):
-        designs.add(path.name.removesuffix(".flowtune.log"))
+        designs.add(path.name[: -len(".flowtune.log")])
     for path in outputs_dir.iterdir() if outputs_dir.exists() else ():
         for suffix in (".vanilla.aig", ".flowtune.aig", ".flowtune.script"):
             if path.name.endswith(suffix):
-                designs.add(path.name.removesuffix(suffix))
+                designs.add(path.name[: -len(suffix)])
     return sorted(designs)
 
 

@@ -13,6 +13,18 @@ if [[ -f .env ]]; then
   set +a
 fi
 
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+"$PYTHON_BIN" -B -c '
+import sys
+minimum = (3, 8)
+current = sys.version_info[:2]
+if current < minimum:
+    raise SystemExit(
+        "run.sh requires Python >= 3.8; found {}.{}".format(*current)
+    )
+print("python runtime ready: {}".format(sys.version.split()[0]))
+'
+
 # Source-patch JSON responses include code context, validation plans, and a
 # unified diff. Use a larger default while preserving provider-specific values
 # explicitly configured in .env.
@@ -21,7 +33,7 @@ export EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS="${EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS:-1
 # The paper front-loads repository profiling before cycle 0.  Fail before any
 # model call if a pinned prior-knowledge checkout is absent, dirty, incomplete,
 # or at the wrong revision.
-python3 -B scripts/bootstrap_agent_context.py --check
+"$PYTHON_BIN" -B scripts/bootstrap_agent_context.py --check
 
 # ----------------------------------------------------------------------------
 # Start the Planning -> (Flow || Logic) -> review loop.
@@ -33,7 +45,7 @@ python3 -B scripts/bootstrap_agent_context.py --check
 # Planning creates a frozen two-branch portfolio. Flow and Logic execute in
 # separate candidate lanes, are reviewed independently, and fan in before the
 # next Planning round is allowed to start.
-python3 -B -m scripts.agents.self_evolved_abc.workflow.dual_agent_loop \
+"$PYTHON_BIN" -B -m scripts.agents.self_evolved_abc.workflow.dual_agent_loop \
   --cycle-id cycle_001 \
   --previous-cycle cycle_000 \
   --max-workers 2 \

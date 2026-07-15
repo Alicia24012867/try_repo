@@ -133,6 +133,7 @@ python3 -B -m scripts.agents.self_evolved_abc.workflow.dual_agent_loop \
 PYTHONPATH=. python3 -B scripts/test_dual_agent_loop.py
 PYTHONPATH=. python3 -B scripts/test_logic_minimization_agent.py
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
+PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 ```
 
 `--max-workers 2` 是默认值，表示两个 coding agent 同时运行；`--max-workers 1` 仅用于
