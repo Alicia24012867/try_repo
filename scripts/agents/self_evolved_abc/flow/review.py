@@ -31,6 +31,9 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
 REVIEW_DECISIONS = frozenset(
     (
         "ACCEPT_FOR_NEXT_CYCLE",
+        "CODING_INFRASTRUCTURE_FAILURE",
+        "DEFERRED_BY_AGENT",
+        "NEEDS_PLANNER_APPROVAL",
         "REJECT_CEC",
         "REPAIR_BUILD",
         "REPAIR_COMPILE",

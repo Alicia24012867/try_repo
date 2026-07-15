@@ -56,8 +56,9 @@ and encode them in the JSON response:
 - Which metrics might regress and what rollback criterion catches that.
 
 If evidence is insufficient to justify an optimization, return
-`decision: "DEFER"` or `decision: "NEEDS_PLANNER_APPROVAL"` rather than inventing
-a broad change.
+`decision: "DEFER"` or `decision: "NEEDS_PLANNER_APPROVAL"` with
+`candidate_kind: "diagnostic_only"`, `files_to_write: []`, and no
+`source_patch` rather than inventing a broad change.
 
 ## Flow Agent Source-Patch Operating Procedure
 
@@ -147,8 +148,24 @@ You may inspect surrounding code, but you may edit only these files or paths:
 
 If a needed edit is outside the scope, stop and return:
 
-```text
-NEEDS_PLANNER_APPROVAL: <path and reason>
+```json
+{
+  "rationale": "The required path is outside the assignment scope: <path and reason>",
+  "candidate_kind": "diagnostic_only",
+  "candidate_steps": [],
+  "source_design": "",
+  "expected_effect": "No candidate is proposed until Planning authorizes the required scope.",
+  "entry_points": [],
+  "invariants": ["Do not edit outside the assignment scope."],
+  "risk_hotspots": ["The requested implementation point is not writable."],
+  "files_to_write": [],
+  "compatibility_notes": {},
+  "validation_plan": ["Ask Planning to approve or replace the out-of-scope path."],
+  "risks": ["Proceeding without approval would violate role ownership."],
+  "rollback_plan": "No files were changed.",
+  "rule_updates": [],
+  "decision": "NEEDS_PLANNER_APPROVAL"
+}
 ```
 
 ## Discouraged Targets From Recent Feedback
@@ -254,9 +271,9 @@ line context exactly.
 Act on the paper's AIG Syn / Logic Minimization Agent role:
 
 - Work in technology-independent optimization code. The default writable role
-  boundary is `third_party/FlowTune/src/src/base/abci`; an algorithm package
-  under `opt/rwr`, `opt/res`, or `opt/dar` is writable only when it appears in
-  `planner_approved_source_roots` as well as the assignment scope.
+  boundary is exactly `third_party/FlowTune/src/src/base/abci`. Reference
+  implementations under `opt/rwr`, `opt/res`, or `opt/dar` are read-only in
+  this Logic Agent reproduction and must never appear in the patch diff.
 - Focus on rewrite, refactor, resubstitution, balancing, `dc2`, and conservative
   orchestration of existing commands.
 - Preserve combinational semantics.
@@ -301,8 +318,9 @@ Logic Agent operating procedure:
    orchestration of already-correct passes. Preserve deterministic fallbacks,
    network ownership, AIG/logic conversion contracts, and all existing
    legality checks.
-4. Do not add/delete/rename a source file or touch `module.make`/other build
-   metadata. Do not introduce
+4. Touch at most three existing `.c`/`.h` files. `files_to_write` must equal the
+   unified-diff targets exactly. Do not add/delete/rename a source file or touch
+   `module.make`/other build metadata. Do not introduce
    retiming, latch/register transforms, sequential optimization, or a new
    unproved Boolean rewrite.
 5. Specify gates in this order: isolated patch application and compile; command
@@ -566,10 +584,14 @@ status as `not_run_local`.
 
 Respond only with one JSON object matching this schema:
 
+The object below is a `PROPOSE_CANDIDATE` example. For `DEFER`,
+`NEEDS_PLANNER_APPROVAL`, or `NEEDS_HUMAN_REVIEW`, follow the diagnostic-only
+rule below and omit `source_patch`.
+
 ```json
 {
   "rationale": "why this candidate tests the planner hypothesis",
-  "candidate_kind": "abc_flow | source_patch_todo | source_patch_diff | diagnostic_only",
+  "candidate_kind": "{{SOURCE_PATCH_MODE}}",
   "candidate_steps": ["ordered command, patch, or diagnostic steps"],
   "source_design": "optional source design or empty string",
   "expected_effect": "expected impact on primary and secondary metrics",
@@ -584,7 +606,7 @@ Respond only with one JSON object matching this schema:
   },
   "source_patch": {
     "patch_format": "unified_diff",
-    "target_scope": "flowtune_c_source | flow_python_infra",
+    "target_scope": "{{SOURCE_PATCH_TARGET_SCOPE}}",
     "apply_strategy": "isolated_workspace",
     "diff": "unified diff text"
   },
@@ -601,9 +623,11 @@ Respond only with one JSON object matching this schema:
 }
 ```
 
-**HARD REQUIREMENT — MODE SELECTION**: The assignment's ``source_patch_mode``
-dictates ``candidate_kind``. This is not a suggestion; using the wrong
-``candidate_kind`` will cause validation to fail.
+**HARD REQUIREMENT — MODE SELECTION**: When and only when `decision` is
+`"PROPOSE_CANDIDATE"`, the assignment's `source_patch_mode` dictates
+`candidate_kind`. For `DEFER`, `NEEDS_PLANNER_APPROVAL`, or
+`NEEDS_HUMAN_REVIEW`, use `candidate_kind: "diagnostic_only"`,
+`files_to_write: []`, and omit `source_patch` entirely.
 
 - ``source_patch_mode: source_patch_diff`` → MUST use ``candidate_kind:
   "source_patch_diff"``. Produce a unified diff under ``source_patch.diff`` that
@@ -611,8 +635,9 @@ dictates ``candidate_kind``. This is not a suggestion; using the wrong
   actual function names, line context, and indentation from the source code shown
   above exactly — do NOT invent function or variable names. List every patched
   source file in ``files_to_write``. ``validation_plan`` MUST contain at least
-  one entry (compile/smoke/CEC/QoR gate). Do NOT choose ``diagnostic_only`` or
-  ``source_patch_todo`` when ``source_patch_diff`` is required.
+  one entry (compile/smoke/CEC/QoR gate). For a proposed candidate, do not choose
+  ``diagnostic_only`` or ``source_patch_todo`` when ``source_patch_diff`` is
+  required. A non-proposal decision follows the diagnostic-only rule above.
 - ``source_patch_mode: abc_flow`` → MUST use ``candidate_kind: "abc_flow"``.
   Keep ``files_to_write`` inside ``configs/flows/`` and the active cycle's agent
   artifacts.

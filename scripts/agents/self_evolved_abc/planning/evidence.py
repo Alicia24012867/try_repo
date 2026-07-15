@@ -80,6 +80,7 @@ class CycleEvidence:
     @property
     def is_build_fail(self) -> bool:
         return self.review_decision in (
+            "CODING_INFRASTRUCTURE_FAILURE",
             "REPAIR_VALIDATION",
             "REPAIR_PATCH",
             "REPAIR_SMOKE",

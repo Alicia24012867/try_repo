@@ -293,6 +293,60 @@ class LogicMinimizationTests(unittest.TestCase):
         payload["source_patch"]["benchmark_override"] = "a"  # type: ignore[index]
         self.assertIn("unexpected", self._issues(payload))
 
+    def test_30_valid_defer_uses_diagnostic_only_without_patch(self) -> None:
+        payload = _reply()
+        payload.update(
+            {
+                "rationale": (
+                    "The evidence is insufficient because per-pass saturation "
+                    "counters are missing."
+                ),
+                "candidate_kind": "diagnostic_only",
+                "candidate_steps": [],
+                "files_to_write": [],
+                "validation_plan": [
+                    "Collect per-pass saturation counters before proposing a patch."
+                ],
+                "decision": "DEFER",
+            }
+        )
+        payload.pop("source_patch")
+        result = validate_logic_agent_response(payload, self.context)
+        self.assertTrue(result.ok, self._issues(payload))
+
+    def test_31_logic_patch_may_touch_at_most_three_files(self) -> None:
+        targets = [
+            f"{LOGIC_ABCI_ROOT}/abcRewrite.c",
+            f"{LOGIC_ABCI_ROOT}/abcResub.c",
+            f"{LOGIC_ABCI_ROOT}/abcRefactor.c",
+            f"{LOGIC_ABCI_ROOT}/abcBalance.c",
+        ]
+        for target in targets:
+            path = self.repo / target
+            path.write_text(
+                "int Abc_CommandRewrite( int fUseZeros )\n"
+                "{\n    return 0;\n}\n",
+                encoding="utf-8",
+            )
+        payload = _reply()
+        payload["files_to_write"] = targets
+        payload["source_patch"]["diff"] = "".join(  # type: ignore[index]
+            _diff(target) for target in targets
+        )
+        self.assertIn("at most 3 files", self._issues(payload))
+
+    def test_32_shared_prompt_matches_logic_validator_contract(self) -> None:
+        prompt = (
+            PROJECT_ROOT / "configs/agents/prompts/coding_agent_prompt.md"
+        ).read_text(encoding="utf-8")
+        self.assertNotIn("NEEDS_PLANNER_APPROVAL: <path and reason>", prompt)
+        self.assertNotIn(
+            "under `opt/rwr`, `opt/res`, or `opt/dar` is writable", prompt
+        )
+        self.assertIn("Touch at most three existing `.c`/`.h` files", prompt)
+        self.assertIn('candidate_kind: "diagnostic_only"', prompt)
+        self.assertIn("{{SOURCE_PATCH_TARGET_SCOPE}}", prompt)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

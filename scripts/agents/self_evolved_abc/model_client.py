@@ -48,7 +48,26 @@ class ModelConfigurationError(ModelClientError):
 
 
 class ModelResponseError(ModelClientError):
-    """Raised when model output is not a valid JSON object."""
+    """Raised when model output is not a usable JSON object."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        failure_kind: str = "model_response",
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.failure_kind = failure_kind
+        self.retryable = retryable
+
+
+class ModelProviderTransientError(ModelClientError):
+    """Raised for provider/network failures that may succeed on retry."""
+
+
+class ModelProviderRequestError(ModelClientError):
+    """Raised for non-retryable provider request/authentication failures."""
 
 
 class TodoModelClient:
@@ -87,7 +106,11 @@ class FixtureModelClient:
                 raise ModelConfigurationError(
                     f"Cannot read fixture JSON file: {path}"
                 ) from exc
-            payload = _parse_json_object(text, source=str(path))
+            payload = _parse_json_object(
+                text,
+                source=str(path),
+                retryable=False,
+            )
             return cls(payload)
 
         raise ModelConfigurationError(
@@ -172,6 +195,18 @@ class OpenAIModelClient:
         if not model or model in ("TODO_MODEL", "TODO_MODEL_NAME"):
             model = self.default_model
 
+        schema_instruction = ""
+        if invocation.response_schema:
+            schema_instruction = (
+                "\n\nThe following JSON Schema is authoritative. Match its "
+                "required fields and enums exactly:\n"
+                + json.dumps(
+                    dict(invocation.response_schema),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            )
+
         request_args: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -181,6 +216,7 @@ class OpenAIModelClient:
                         invocation.system_prompt
                         + "\n\nReturn exactly one valid JSON object. "
                         + "Do not wrap it in Markdown."
+                        + schema_instruction
                     ),
                 },
                 {"role": "user", "content": invocation.user_prompt},
@@ -203,10 +239,25 @@ class OpenAIModelClient:
         try:
             completion = self.client.chat.completions.create(**request_args)
         except Exception as exc:
-            raise ModelClientError(f"OpenAI-compatible API call failed: {exc}") from exc
+            status_code = _provider_status_code(exc)
+            transient = _is_transient_provider_error(exc, status_code)
+            error_type = (
+                ModelProviderTransientError
+                if transient
+                else ModelProviderRequestError
+            )
+            raise error_type(
+                "OpenAI-compatible API call failed "
+                f"({type(exc).__name__}, status={status_code}): "
+                f"{_bounded_exception_text(exc)}"
+            ) from exc
 
         raw_text = self._extract_text(completion)
-        parsed_json = _parse_json_object(raw_text, source="model response")
+        parsed_json = _parse_json_object(
+            raw_text,
+            source="model response",
+            retryable=True,
+        )
         return ModelReply(raw_text=raw_text, parsed_json=parsed_json)
 
     def _response_format(
@@ -223,6 +274,19 @@ class OpenAIModelClient:
         if mode == "json_schema":
             if not schema:
                 return {"type": "json_object"}
+
+            if self.strict_schema:
+                issues = _strict_schema_issues(schema)
+                if issues:
+                    preview = "; ".join(issues[:5])
+                    raise ModelConfigurationError(
+                        "EDA_AGENT_MODEL_STRICT_SCHEMA=true requires every JSON "
+                        "object to set additionalProperties=false and require "
+                        "all declared properties. The current agent schema is "
+                        f"not strict-compatible: {preview}. Use json_object or "
+                        "disable strict mode until the schema contract is made "
+                        "nullable/fully required."
+                    )
 
             json_schema: dict[str, Any] = {
                 "name": "agent_reply",
@@ -241,22 +305,48 @@ class OpenAIModelClient:
     def _extract_text(self, completion: Any) -> str:
         choices = getattr(completion, "choices", None)
         if not choices:
-            raise ModelResponseError("Provider response did not include choices.")
+            raise ModelProviderTransientError(
+                "Provider response did not include choices."
+            )
 
         choice = choices[0]
         finish_reason = getattr(choice, "finish_reason", None)
         if finish_reason == "length":
-            raise ModelResponseError("Model output hit the configured token limit.")
+            raise ModelResponseError(
+                "Model output hit the configured token/context limit.",
+                failure_kind="length",
+                retryable=True,
+            )
         if finish_reason == "content_filter":
-            raise ModelResponseError("Model output was blocked by content filtering.")
+            raise ModelResponseError(
+                "Model output was blocked by content filtering.",
+                failure_kind="content_filter",
+                retryable=False,
+            )
+        if finish_reason == "insufficient_system_resource":
+            raise ModelProviderTransientError(
+                "Provider stopped with insufficient_system_resource."
+            )
+        if finish_reason == "tool_calls":
+            raise ModelResponseError(
+                "Provider returned tool_calls instead of the required JSON object.",
+                failure_kind="unexpected_tool_calls",
+                retryable=False,
+            )
 
         message = getattr(choice, "message", None)
         if message is None:
-            raise ModelResponseError("Provider response missing choices[0].message.")
+            raise ModelProviderTransientError(
+                "Provider response missing choices[0].message."
+            )
 
         refusal = getattr(message, "refusal", None)
         if refusal:
-            raise ModelResponseError(f"Model refused the request: {refusal}")
+            raise ModelResponseError(
+                f"Model refused the request: {refusal}",
+                failure_kind="refusal",
+                retryable=False,
+            )
 
         return _content_to_text(getattr(message, "content", None))
 
@@ -407,19 +497,124 @@ def _content_to_text(content: Any) -> str:
         if text:
             return text
 
-    raise ModelResponseError("Model message content was empty or not text.")
+    raise ModelResponseError(
+        "Model message content was empty or not text.",
+        failure_kind="empty_content",
+        retryable=True,
+    )
 
 
-def _parse_json_object(text: str, *, source: str) -> Mapping[str, Any]:
+def _provider_status_code(error: BaseException) -> int | None:
+    value = getattr(error, "status_code", None)
+    if not isinstance(value, int):
+        response = getattr(error, "response", None)
+        value = getattr(response, "status_code", None)
+    return value if isinstance(value, int) else None
+
+
+def _is_transient_provider_error(
+    error: BaseException,
+    status_code: int | None,
+) -> bool:
+    class_name = type(error).__name__.lower()
+    return (
+        status_code in (408, 409, 429)
+        or (isinstance(status_code, int) and status_code >= 500)
+        or any(
+            marker in class_name
+            for marker in ("timeout", "connection", "ratelimit")
+        )
+    )
+
+
+def _bounded_exception_text(error: BaseException, max_chars: int = 2000) -> str:
+    text = " ".join(str(error).split())
+    for name, value in os.environ.items():
+        if "API_KEY" in name.upper() and len(value) >= 8:
+            text = text.replace(value, "[REDACTED_API_KEY]")
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 16].rstrip() + " ...[truncated]"
+
+
+def _strict_schema_issues(
+    schema: Mapping[str, Any],
+    *,
+    path: str = "$",
+) -> tuple[str, ...]:
+    """Return provider-strict incompatibilities without changing local semantics."""
+
+    issues: list[str] = []
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        properties = schema.get("properties", {})
+        if not isinstance(properties, Mapping):
+            issues.append(f"{path}.properties is not an object")
+            return tuple(issues)
+        if schema.get("additionalProperties") is not False:
+            issues.append(f"{path}.additionalProperties must be false")
+        required = schema.get("required", ())
+        required_names = (
+            set(required)
+            if isinstance(required, list)
+            and all(isinstance(item, str) for item in required)
+            else set()
+        )
+        property_names = set(properties)
+        if required_names != property_names:
+            missing = sorted(property_names - required_names)
+            extra = sorted(required_names - property_names)
+            detail = []
+            if missing:
+                detail.append("not required=" + ",".join(missing))
+            if extra:
+                detail.append("unknown required=" + ",".join(extra))
+            issues.append(f"{path}.required mismatch ({'; '.join(detail)})")
+        for name, child in properties.items():
+            if isinstance(child, Mapping):
+                issues.extend(
+                    _strict_schema_issues(child, path=f"{path}.{name}")
+                )
+    elif schema_type == "array":
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            issues.extend(_strict_schema_issues(items, path=f"{path}[]"))
+    else:
+        for keyword in ("anyOf", "oneOf", "allOf"):
+            branches = schema.get(keyword)
+            if isinstance(branches, list):
+                for index, branch in enumerate(branches):
+                    if isinstance(branch, Mapping):
+                        issues.extend(
+                            _strict_schema_issues(
+                                branch,
+                                path=f"{path}.{keyword}[{index}]",
+                            )
+                        )
+    return tuple(issues)
+
+
+def _parse_json_object(
+    text: str,
+    *,
+    source: str,
+    retryable: bool = False,
+) -> Mapping[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
         preview = text[:500].replace("\n", "\\n")
         raise ModelResponseError(
-            f"{source} was not valid JSON. Preview: {preview}"
+            f"{source} was not valid JSON. Preview: {preview}",
+            failure_kind="invalid_json",
+            retryable=retryable,
         ) from exc
 
     if not isinstance(parsed, dict):
-        raise ModelResponseError(f"{source} must be one JSON object.")
+        raise ModelResponseError(
+            f"{source} must be one JSON object.",
+            failure_kind="non_object_json",
+            retryable=retryable,
+        )
 
     return parsed

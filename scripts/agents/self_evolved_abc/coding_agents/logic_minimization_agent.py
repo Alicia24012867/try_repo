@@ -78,10 +78,12 @@ class LogicMinimizationAgent(FlowAgent):
         base = super().build_model_invocation(evidence)
         system_prompt = (
             "You are the paper's Logic Minimization Agent (AIG Syn), not the "
-            "Flow Agent. Propose at most one technology-independent, "
+            "Flow Agent. Either propose at most one technology-independent, "
             "combinational optimization hypothesis as a source_patch_diff over "
-            f"existing files strictly under {LOGIC_ABCI_ROOT}. Preserve Boolean "
-            "semantics; never alter retiming, latches, registers, initial state, "
+            f"existing files strictly under {LOGIC_ABCI_ROOT}, or return a "
+            "structured diagnostic-only DEFER/approval decision when evidence "
+            "or scope is insufficient. Preserve Boolean semantics; never alter "
+            "retiming, latches, registers, initial state, "
             "benchmarks, build metadata, or evaluation code. Use related "
             "open-source excerpts only as read-only design precedents and verify "
             "every symbol against the local FlowTune fork. The candidate remains "
@@ -154,13 +156,15 @@ class LogicMinimizationAgent(FlowAgent):
                     "logic_source_touchpoints", dict(LOGIC_SOURCE_TOUCHPOINTS)
                 ),
                 "FLOW_SCOPE": (
-                    f"Logic source_patch_diff only: edit existing .c/.h files under "
-                    f"{LOGIC_ABCI_ROOT}; do not add/delete/rename files or edit "
-                    "module.make. One deterministic combinational rewrite, resub, "
-                    "refactor, or orchestration hypothesis only. Materialize the "
-                    "diff as an agent artifact and apply it solely in the isolated "
-                    "candidate workspace. Compile must pass before all-design CEC; "
-                    "QoR (AIG/AND nodes and depth) is meaningful only after CEC."
+                    "For PROPOSE_CANDIDATE, use source_patch_diff only: edit at "
+                    f"most three existing .c/.h files under {LOGIC_ABCI_ROOT}; "
+                    "files_to_write must equal the diff targets. Do not "
+                    "add/delete/rename files or edit module.make. Use one "
+                    "deterministic combinational rewrite, resub, refactor, or "
+                    "orchestration hypothesis. Apply the diff solely in the "
+                    "isolated candidate workspace. Compile must pass before "
+                    "all-design CEC; QoR is meaningful only after CEC. For a "
+                    "non-proposal decision, use diagnostic_only with no patch."
                 ),
                 "RUNTIME_BUDGET": (
                     "bounded pass behavior over the frozen evaluation scope; record "
@@ -326,8 +330,10 @@ class LogicMinimizationAgent(FlowAgent):
         target = self._planned_target_command() or "rewrite"
         contract = (
             f"Target family: {target}. Trace its registered command/wrapper to "
-            "one reached local decision and test exactly one hypothesis. Return "
-            f"source_patch_diff only for existing files under {LOGIC_ABCI_ROOT}. "
+            "one reached local decision and test exactly one hypothesis. For a "
+            "proposal, return source_patch_diff for at most three existing files "
+            f"under {LOGIC_ABCI_ROOT}; otherwise return diagnostic_only with no "
+            "patch. "
             "State combinational equivalence plus explicit no-retiming and "
             "no-sequential-state invariants. Validation must be ordered as "
             "isolated compile, CEC/dsat over every design with immediate rejection "
@@ -350,8 +356,9 @@ class LogicMinimizationAgent(FlowAgent):
     def _logic_gate_contract() -> str:
         return (
             "## Enforced Logic proposal rules\n\n"
-            "- Candidate kind is source_patch_diff and target scope is the exact ABCI root.\n"
-            "- Existing .c/.h files only; no build metadata, add/delete/rename, or binary patches.\n"
+            "- PROPOSE_CANDIDATE uses source_patch_diff and the exact ABCI target scope; non-proposals use diagnostic_only with no source_patch.\n"
+            "- Touch at most three existing .c/.h files, and make files_to_write exactly equal the diff targets.\n"
+            "- No build metadata, add/delete/rename, or binary patches.\n"
             "- No retiming, latch, register, initial-state, or other sequential behavior changes.\n"
             "- Compile precedes CEC for every design; CEC precedes QoR.\n"
             "- A mismatch or counterexample rejects the iteration; QoR records AIG/AND nodes and depth.\n"

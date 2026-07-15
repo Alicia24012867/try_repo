@@ -12,6 +12,9 @@ from scripts.agents.self_evolved_abc.planning.portfolio import (
     PortfolioPlan,
 )
 from scripts.agents.self_evolved_abc.workflow.artifacts import safe_repo_path
+from scripts.agents.self_evolved_abc.workflow.failure_status import (
+    is_coding_infrastructure_failure_status,
+)
 
 
 BRANCH_RUN_SCHEMA_VERSION = 1
@@ -79,6 +82,20 @@ def load_valid_branch_run(
     except OSError:
         return None
     if payload.get("status") != "reviewed":
+        return None
+    try:
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(review, dict):
+        return None
+    build_status = str(review.get("build_status", "")).strip()
+    # Pre-classification runs used "missing" for provider, JSON, validation,
+    # and preparation failures alike.  Re-run that lane once under the new
+    # structured attempt contract instead of caching the ambiguous outcome.
+    if build_status == "missing" or is_coding_infrastructure_failure_status(
+        build_status
+    ):
         return None
     return payload
 

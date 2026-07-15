@@ -52,13 +52,18 @@ from scripts.agents.self_evolved_abc.workflow.dual_agent_loop import (
     _branch_execution_failed,
     _branch_log_path,
     _default_command_runner,
+    _load_or_create_next_plan,
     _print_branch_outcomes,
+    _run_campaign,
     execute_portfolio_plan,
+    parse_args,
 )
 from scripts.agents.self_evolved_abc.workflow.candidate_pipeline import (
+    AgentRunResult,
     main as candidate_pipeline_main,
 )
 from scripts.agents.self_evolved_abc.workflow.portfolio_review import (
+    BranchOutcome,
     collect_branch_outcome,
     write_portfolio_review,
 )
@@ -70,6 +75,7 @@ def _write_review(
     *,
     reward: int = 20,
     decision: str = "ACCEPT_FOR_NEXT_CYCLE",
+    build_status: str = "candidate_binary_build_passed",
 ) -> None:
     context = CycleContext.from_assignment_file(repo_root, assignment_path)
     path = impl_compare_root(context) / "comparison" / "review_decision.json"
@@ -94,7 +100,7 @@ def _write_review(
                 "decision": decision,
                 "promotion_allowed": accepted,
                 "champion_update": accepted,
-                "build_status": "candidate_binary_build_passed",
+                "build_status": build_status,
                 "cec_pass_count": 2,
                 "cec_total_count": 2,
                 "correctness_backed_rows": 2,
@@ -686,13 +692,151 @@ class DualAgentLoopTests(unittest.TestCase):
             ["flow", "logic"],
         )
 
+    def test_only_coding_infrastructure_statuses_fail_execution(self) -> None:
+        fatal_statuses = (
+            "agent_provider_transient_failed",
+            "agent_provider_permanent_failed",
+            "agent_provider_configuration_failed",
+            "agent_model_response_failed",
+            "agent_preparation_failed",
+        )
+        settled_statuses = (
+            "agent_deferred",
+            "agent_needs_planner_approval",
+            "agent_response_validation_failed",
+        )
+
+        def outcome(build_status: str) -> BranchOutcome:
+            return BranchOutcome(
+                branch_role="flow",
+                agent_name="flow_agent",
+                candidate_id="flow_candidate_001",
+                status="reviewed",
+                return_code=1,
+                decision=(
+                    "CODING_INFRASTRUCTURE_FAILURE"
+                    if build_status.startswith("agent_provider_")
+                    else "REPAIR_VALIDATION"
+                ),
+                eligible_for_promotion=False,
+                artifact_root="experiments/cycle_001/candidates/flow_candidate_001",
+                review_path="experiments/cycle_001/review_decision.json",
+                elapsed_seconds=0.0,
+                error="pipeline return code 1",
+                build_status=build_status,
+            )
+
+        for build_status in fatal_statuses:
+            with self.subTest(build_status=build_status):
+                self.assertTrue(_branch_execution_failed(outcome(build_status)))
+        for build_status in settled_statuses:
+            with self.subTest(build_status=build_status):
+                self.assertFalse(_branch_execution_failed(outcome(build_status)))
+
+    def test_campaign_persists_fan_in_then_stops_on_coding_infrastructure(self) -> None:
+        plan = self._plan()
+
+        def reviewed_outcome(branch_role: str, build_status: str) -> BranchOutcome:
+            branch = next(
+                item for item in plan.branches if item.branch_role == branch_role
+            )
+            return BranchOutcome(
+                branch_role=branch.branch_role,
+                agent_name=branch.agent_name,
+                candidate_id=branch.candidate_id,
+                status="reviewed",
+                return_code=1,
+                decision="REPAIR_VALIDATION",
+                eligible_for_promotion=False,
+                artifact_root=(
+                    f"experiments/cycle_001/candidates/{branch.candidate_id}"
+                ),
+                review_path=(
+                    "experiments/cycle_001/candidates/"
+                    f"{branch.candidate_id}/review_decision.json"
+                ),
+                elapsed_seconds=0.0,
+                error="pipeline return code 1",
+                expected_benchmark_count=2,
+                build_status=build_status,
+                review_reason="synthetic coding-agent result",
+                next_action="repair",
+            )
+
+        outcomes = (
+            reviewed_outcome("flow", "agent_provider_transient_failed"),
+            reviewed_outcome("logic", "agent_deferred"),
+        )
+        args = parse_args(
+            (
+                "--repo-root",
+                str(self.repo),
+                "--max-cycles",
+                "2",
+                "--planner-mode",
+                "deterministic",
+            )
+        )
+        output = StringIO()
+        with patch(
+            "scripts.agents.self_evolved_abc.workflow.dual_agent_loop."
+            "_load_or_create_initial_plan",
+            return_value=plan,
+        ):
+            with patch(
+                "scripts.agents.self_evolved_abc.workflow.dual_agent_loop."
+                "execute_portfolio_plan",
+                return_value=outcomes,
+            ):
+                with patch(
+                    "scripts.agents.self_evolved_abc.workflow.dual_agent_loop."
+                    "_print_plan",
+                ), patch.object(
+                    PlanningAgent,
+                    "create_next_parallel_coding_dispatch",
+                ) as next_planning:
+                    with redirect_stdout(output):
+                        return_code = _run_campaign(self.repo, args)
+
+        self.assertEqual(return_code, 1)
+        next_planning.assert_not_called()
+        self.assertTrue(
+            (
+                self.repo
+                / "experiments"
+                / "cycle_001"
+                / "planning"
+                / "portfolio_review.json"
+            ).is_file()
+        )
+        portfolio = json.loads(
+            (
+                self.repo
+                / "experiments/cycle_001/planning/portfolio_review.json"
+            ).read_text(encoding="utf-8")
+        )
+        self.assertEqual(portfolio["round_status"], "infrastructure_failed")
+        self.assertFalse(portfolio["quorum_reached"])
+        self.assertEqual(portfolio["reviewed_count"], 2)
+        self.assertEqual(portfolio["failed_count"], 1)
+        rendered = output.getvalue()
+        self.assertIn("coding-agent infrastructure failure", rendered)
+        self.assertIn("flow=agent_provider_transient_failed", rendered)
+        self.assertNotIn("reached --max-cycles", rendered)
+
     def test_invalid_coding_reply_materializes_a_settled_negative_review(self) -> None:
         plan = self._plan()
         logic_branch = plan.branches[1]
         with patch(
             "scripts.agents.self_evolved_abc.workflow.candidate_pipeline."
             "_run_agent_with_retry",
-            return_value=False,
+            return_value=AgentRunResult(
+                succeeded=False,
+                decision="NEEDS_HUMAN_REVIEW",
+                failure_kind="response_validation",
+                attempts=3,
+                detail="synthetic response validation failure",
+            ),
         ):
             return_code = candidate_pipeline_main(
                 (
@@ -713,7 +857,7 @@ class DualAgentLoopTests(unittest.TestCase):
         )
         self.assertEqual(outcome.status, "reviewed")
         self.assertEqual(outcome.decision, "REPAIR_VALIDATION")
-        self.assertEqual(outcome.build_status, "missing")
+        self.assertEqual(outcome.build_status, "agent_response_validation_failed")
         self.assertIn("response validation", outcome.review_reason)
         self.assertFalse(outcome.eligible_for_promotion)
         feedback = (
@@ -997,6 +1141,109 @@ class DualAgentLoopTests(unittest.TestCase):
         )
         self.assertEqual(called, ["logic"])
         self.assertEqual([item.status for item in outcomes], ["reviewed", "reviewed"])
+
+    def test_resume_retries_legacy_missing_coding_failure(self) -> None:
+        plan = self._plan()
+        first_calls: list[str] = []
+
+        def first_runner(command, cwd):
+            assignment = _assignment_from_command(cwd, command)
+            role = str(
+                json.loads(assignment.read_text(encoding="utf-8"))["branch_role"]
+            )
+            first_calls.append(role)
+            if role == "flow":
+                _write_review(
+                    cwd,
+                    assignment,
+                    decision="REPAIR_VALIDATION",
+                    build_status="missing",
+                )
+                return 1
+            _write_review(cwd, assignment)
+            return 0
+
+        execute_portfolio_plan(
+            repo_root=self.repo,
+            plan=plan,
+            command_runner=first_runner,
+        )
+        self.assertCountEqual(first_calls, ["flow", "logic"])
+
+        resumed_calls: list[str] = []
+
+        def resumed_runner(command, cwd):
+            assignment = _assignment_from_command(cwd, command)
+            role = str(
+                json.loads(assignment.read_text(encoding="utf-8"))["branch_role"]
+            )
+            resumed_calls.append(role)
+            _write_review(cwd, assignment)
+            return 0
+
+        outcomes = execute_portfolio_plan(
+            repo_root=self.repo,
+            plan=plan,
+            command_runner=resumed_runner,
+        )
+
+        self.assertEqual(resumed_calls, ["flow"])
+        self.assertEqual([item.status for item in outcomes], ["reviewed", "reviewed"])
+        self.assertEqual(outcomes[0].build_status, "candidate_binary_build_passed")
+
+    def test_changed_review_regenerates_stale_downstream_plan(self) -> None:
+        plan = self._plan()
+
+        def runner(command, cwd):
+            assignment = _assignment_from_command(cwd, command)
+            _write_review(
+                cwd,
+                assignment,
+                decision="REPAIR_QOR",
+                build_status="candidate_binary_build_passed",
+            )
+            return 1
+
+        outcomes = execute_portfolio_plan(
+            repo_root=self.repo,
+            plan=plan,
+            command_runner=runner,
+        )
+        review = write_portfolio_review(
+            repo_root=self.repo,
+            plan=plan,
+            outcomes=outcomes,
+        )
+        stale = create_next_portfolio_plan(
+            repo_root=self.repo,
+            current_plan=plan,
+            portfolio_review=review,
+            next_cycle_id="cycle_002",
+        )
+
+        review["selection_reason"] = "updated after re-running legacy failures"
+        review_path = (
+            self.repo / "experiments/cycle_001/planning/portfolio_review.json"
+        )
+        review_path.write_text(
+            json.dumps(review, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+        output = StringIO()
+        with redirect_stdout(output):
+            refreshed = _load_or_create_next_plan(
+                repo_root=self.repo,
+                current_plan=plan,
+                portfolio_review=review,
+                next_cycle_id="cycle_002",
+                timeout_seconds=300.0,
+                build_timeout_seconds=900.0,
+                planner_mode="deterministic",
+            )
+
+        self.assertNotEqual(refreshed.parent_review_hash, stale.parent_review_hash)
+        self.assertIn("regenerating stale downstream", output.getvalue())
 
     def test_resume_requires_matching_manifest_and_review_lineage(self) -> None:
         plan = self._plan()

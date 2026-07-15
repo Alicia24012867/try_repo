@@ -77,6 +77,31 @@ def review_decision_path(context: CycleContext) -> Path:
     return implementation_root(context) / "comparison" / "review_decision.json"
 
 
+def agent_attempt_path(
+    context: CycleContext,
+    attempt: int,
+    artifact: str,
+) -> Path:
+    """Return a safe generated path for one Coding Agent attempt."""
+
+    if attempt < 1:
+        raise ValueError("agent attempt must be >= 1")
+    if artifact not in ("assignment", "status"):
+        raise ValueError(f"unsupported agent attempt artifact: {artifact!r}")
+    cycle_id = validate_portfolio_cycle_id(context.cycle_id)
+    candidate_id = validate_candidate_id(context.candidate_id)
+    return safe_repo_path(
+        context.repo_root,
+        context.repo_root
+        / "experiments"
+        / cycle_id
+        / "agents"
+        / "attempts"
+        / candidate_id
+        / f"attempt_{attempt:02d}.{artifact}.json",
+    )
+
+
 def implementation_root_for(
     *,
     repo_root: Path,

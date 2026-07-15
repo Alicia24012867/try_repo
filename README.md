@@ -199,6 +199,10 @@ PYTHONPATH=. python3 -B scripts/test_logic_minimization_agent.py
 
 PYTHONPATH=. python3 -B scripts/test_dual_agent_loop.py
 
+PYTHONPATH=. python3 -B scripts/test_coding_agent_retry.py
+
+PYTHONPATH=. python3 -B scripts/test_planning_portfolio_evidence.py
+
 PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 
 PYTHONPATH=. python3 -B scripts/bootstrap_agent_context.py --check
@@ -248,7 +252,10 @@ bash run.sh
 
 `run.sh` wraps `workflow.dual_agent_loop`; branch manifests and content hashes
 allow a rerun to reuse only complete, lineage-valid work without overwriting or
-trusting stale reviews.
+trusting stale reviews. Legacy `build_status=missing` reviews and structured
+provider/model/runtime failures are deliberately non-resumable, so fixing the
+environment and rerunning retries only those lanes. If a retried review changes,
+stale downstream Planning dispatches are regenerated from the new lineage.
 
 After syncing a fresh tree, this quick sanity check should print `70 30 40`:
 
@@ -488,7 +495,8 @@ shared-winner continuation.
 
 ```
 F0  assignment.py     normalize source_patch_diff scope and active-cycle paths
-F1  cycle_driver      model proposes source_patch_diff (with retry on failure)
+F1  cycle_driver      model proposes source_patch_diff; each bounded attempt
+                      writes a typed status and an immutable repair assignment
 S4d source_patch_runner  apply diff to isolated workspace (git apply --recount)
 S4c source_patch_runner  Python smoke gate (py_compile + fixture validation)
 S4e source_patch_runner  compile candidate ABC binary in workspace
@@ -503,13 +511,29 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 
 | Decision | Meaning |
 |----------|---------|
-| `REPAIR_VALIDATION` | Model JSON failed schema/scope checks |
+| `CODING_INFRASTRUCTURE_FAILURE` | Provider/model/local runtime failed before an experiment; campaign stops |
+| `DEFERRED_BY_AGENT` | Valid evidence-insufficient non-proposal; no patch/build was expected |
+| `NEEDS_PLANNER_APPROVAL` | Valid request to change the frozen assignment scope |
+| `REPAIR_VALIDATION` | Parsed model JSON still failed local schema/scope checks after repair attempts |
 | `REPAIR_PATCH` | Diff context doesn't match real source |
 | `REPAIR_SMOKE` | Python smoke gate failed |
 | `REPAIR_COMPILE` | C compilation failed |
 | `REJECT_CEC` | CEC equivalence check failed |
 | `REPAIR_QOR` | CEC passed but QoR didn't improve |
 | `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — bootstrap or replacement champion |
+
+Before build/CEC, `build_status` distinguishes outcomes that previously all
+looked like `missing`:
+
+| Build status | Coordinator behavior |
+|--------------|----------------------|
+| `agent_deferred` | Valid evidence-insufficient result; fan in and let Planning narrow the next task |
+| `agent_needs_planner_approval` | Valid scope request; fan in without applying a patch |
+| `agent_response_validation_failed` | Local JSON/patch contract remained invalid; fan in exact feedback |
+| `agent_provider_transient_failed` | Retry budget exhausted; stop campaign and retry this lane on resume |
+| `agent_provider_permanent_failed` / `agent_provider_configuration_failed` | Stop before another Planning round; fix provider configuration |
+| `agent_model_response_failed` | Empty, truncated, invalid, refused, or filtered response; stop with typed attempt evidence |
+| `agent_preparation_failed` | Local coding runtime failed; stop and retry after repair |
 
 For `REPAIR_SMOKE`, inspect
 `experiments/<cycle>/candidates/<candidate>/impl_compare/candidate_modified/build.log`
@@ -532,6 +556,16 @@ EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384    # raise to 32768+ if JSON/diffs trunc
 
 The Python client and `run.sh` default to 16384 output tokens. Any explicit
 `.env` value is preserved because provider limits differ.
+
+In `json_object` mode the authoritative agent JSON Schema is appended to the
+system message. Empty/invalid/truncated responses and transient provider errors
+enter the same bounded three-attempt loop as local validation feedback. Auth,
+model, request-policy, and configuration errors fail fast. Each attempt is
+recorded under
+`experiments/<cycle>/agents/attempts/<candidate>/`; the frozen Planning
+assignment is never modified. `json_schema` strict mode fails locally with an
+actionable configuration error when an agent schema is not strict-compatible,
+instead of relying on a provider-side 400 response.
 
 Larger output budgets help when the model response is cut off, malformed, or
 missing part of a unified diff. They do not usually fix repeated `REPAIR_QOR`

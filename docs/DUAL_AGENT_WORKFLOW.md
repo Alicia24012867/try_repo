@@ -58,13 +58,21 @@ Planning 模型不直接生成 assignment。代码先锁定 baseline、benchmark
   只保存在 `diagnostic_flow_commands`。
 - 任一分支异常只会把该分支标为 `failed`，不会取消另一个 future。汇总必须等待全部
   future settled。
-- Coding Agent 未产出合法候选（包括模型响应连续校验失败）时，流水线会写入
-  `REPAIR_VALIDATION` 负评审；它不具备晋级资格，但属于已结算结果，因此仍可与另一
-  分支 fan-in 并把失败证据交给下一轮 Planning。
-- 晋级要求两个分支都产出有效 review（严格 quorum）。pipeline 非零、缺失 benchmark、
+- Coding Agent 只有在结构化 decision 为 `PROPOSE_CANDIDATE` 时才进入 patch、build、
+  CEC、QoR。合法 `DEFER` / `NEEDS_PLANNER_APPROVAL` 的 review decision 分别为
+  `DEFERRED_BY_AGENT` / `NEEDS_PLANNER_APPROVAL`，build status 分别为
+  `agent_deferred` / `agent_needs_planner_approval`，不会被误送入 source patch runner。
+  本地字段、路径或 diff 连续校验失败写成 `agent_response_validation_failed`，属于可交给
+  下一轮 Planning 的已结算负证据。
+- Provider 临时、永久或配置故障，空/截断/非法 JSON，refusal/filter，以及本地 agent
+  preparation 故障均有独立 `build_status`。这类结果不是论文实验负样本：两条 future
+  仍会 all-settled 并写 `CODING_INFRASTRUCTURE_FAILURE` review，但 round 标为
+  `infrastructure_failed`，且在下一轮 Planning 前停止。
+- 晋级要求两个分支都产出有效实验 review（严格 quorum）。pipeline 非零、缺失 benchmark、
   CEC/正确性行数不等于冻结 scope，或旧 review lineage 不匹配时，该候选不得晋级。
 - `REPAIR_QOR`、`REPAIR_VALIDATION` 等有效负评审的命令返回码可以非零；非零码本身
-  不等于分支缺失。只有没有有效且身份匹配的 review 时，round 才是 `incomplete`。
+  不等于分支缺失。Provider/model/runtime build status 会使 round 成为
+  `infrastructure_failed`；缺少有效且身份匹配的 review 才是 `incomplete`。
 - 单分支 `champion_update` 仅表示“具备晋升资格”。真正 champion 只由
   `planning/portfolio_review.json` 决定，且与完成顺序无关。
 - 不会隐式合并 Flow/Logic patch。组合方案必须作为第三个候选重新执行 build、CEC 和
@@ -84,6 +92,7 @@ scripts/agents/self_evolved_abc/
     engine.py                  Flow 的证据驱动策略引擎
   workflow/
     artifacts.py               candidate-safe 路径与 ID 校验
+    failure_status.py          实验负样本与 coding 基础设施故障分类
     evaluation_recipe.py       候选级 ABC recipe
     candidate_pipeline.py      内部单分支 agent→build→CEC→QoR→review
     portfolio_review.py        all-settled 汇总与确定性 champion 选择
@@ -109,6 +118,9 @@ experiments/cycle_NNN/
     assignments/logic_candidate_001.json
     plans/...
     feedback/...
+    attempts/<candidate>/
+      attempt_XX.assignment.json  原 hypothesis + 当前 repair hint
+      attempt_XX.status.json      typed failure/decision/retryable sidecar
   candidates/
     flow_candidate_001/impl_compare/...
     logic_candidate_001/impl_compare/...
@@ -140,12 +152,17 @@ python3 -B -m scripts.agents.self_evolved_abc.workflow.dual_agent_loop \
 PYTHONPATH=. python3 -B scripts/test_dual_agent_loop.py
 PYTHONPATH=. python3 -B scripts/test_logic_minimization_agent.py
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
+PYTHONPATH=. python3 -B scripts/test_coding_agent_retry.py
+PYTHONPATH=. python3 -B scripts/test_planning_portfolio_evidence.py
 PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 ```
 
 `--max-workers 2` 是默认值，表示两个 coding agent 同时运行；`--max-workers 1` 仅用于
 串行诊断。只有 review 与 coordinator 生成的 branch manifest、assignment hash、合同 hash
 及 baseline lineage 全部一致时才能 resume；裸 review 或被修改的 review 会重跑对应分支。
+旧版模糊的 `build_status=missing` 及新的 provider/model/runtime failure 不会从 manifest
+恢复；修复后直接重跑会重新执行该 lane。若新 review 使下游 plan 的 parent review hash
+失效，coordinator 会自动重建下游 Planning dispatch，而不会继续使用陈旧 hypothesis。
 终端会逐分支打印 `review_valid`、decision、reason、review 与 log 路径。若 round 仍为
 `incomplete`，先查看 `planning/portfolio_review.md` 和对应的
 `planning/branch_logs/<candidate>.log`；修复后直接重跑 `bash run.sh`，合法的另一分支会

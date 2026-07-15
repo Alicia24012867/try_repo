@@ -45,6 +45,9 @@ from scripts.agents.self_evolved_abc.workflow.branch_run import (
     load_valid_branch_run,
     write_branch_run_manifest,
 )
+from scripts.agents.self_evolved_abc.workflow.failure_status import (
+    is_coding_infrastructure_failure_status,
+)
 from scripts.agents.self_evolved_abc.workflow.evaluation_recipe import (
     ensure_evaluation_recipe,
 )
@@ -204,6 +207,21 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
             f"experiments/{current_plan.cycle_id}/planning/portfolio_review.json"
         )
 
+        infrastructure_failures = tuple(
+            item for item in outcomes if _coding_infrastructure_failed(item)
+        )
+        if infrastructure_failures:
+            details = ", ".join(
+                f"{item.branch_role}={item.build_status}"
+                for item in infrastructure_failures
+            )
+            print(
+                "dual_agent_loop: stopping — coding-agent infrastructure "
+                "failure must be repaired before the next Planning round: "
+                f"{details}"
+            )
+            break
+
         if not bool(review["quorum_reached"]):
             missing_roles = ", ".join(
                 item.branch_role for item in outcomes if item.status != "reviewed"
@@ -219,23 +237,62 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
             break
 
         next_cycle = _increment_cycle_id(current_plan.cycle_id)
-        next_plan_path = portfolio_plan_path(repo_root, next_cycle)
-        if next_plan_path.is_file():
-            current_plan = load_portfolio_plan(repo_root, next_cycle)
-        else:
-            current_plan = PlanningAgent.create_next_parallel_coding_dispatch(
-                repo_root=repo_root,
-                current_plan=current_plan,
-                portfolio_review=review,
-                next_cycle_id=next_cycle,
-                timeout_seconds=args.timeout_seconds,
-                build_timeout_seconds=args.build_timeout_seconds,
-                planner_mode=args.planner_mode,
-            )
-            assert isinstance(current_plan, PortfolioPlan)
+        current_plan = _load_or_create_next_plan(
+            repo_root=repo_root,
+            current_plan=current_plan,
+            portfolio_review=review,
+            next_cycle_id=next_cycle,
+            timeout_seconds=args.timeout_seconds,
+            build_timeout_seconds=args.build_timeout_seconds,
+            planner_mode=args.planner_mode,
+        )
         _print_plan(current_plan, repo_root)
 
     return 1 if had_failed_branch else 0
+
+
+def _load_or_create_next_plan(
+    *,
+    repo_root: Path,
+    current_plan: PortfolioPlan,
+    portfolio_review: dict[str, object],
+    next_cycle_id: str,
+    timeout_seconds: float,
+    build_timeout_seconds: float,
+    planner_mode: str,
+) -> PortfolioPlan:
+    """Reuse a lineage-matching plan or regenerate a stale downstream plan."""
+
+    path = portfolio_plan_path(repo_root, next_cycle_id)
+    overwrite = False
+    if path.is_file():
+        try:
+            return load_portfolio_plan(repo_root, next_cycle_id)
+        except ValueError as exc:
+            message = str(exc)
+            if message not in (
+                "portfolio parent plan lineage mismatch",
+                "portfolio parent review lineage mismatch",
+            ):
+                raise
+            overwrite = True
+            print(
+                "dual_agent_loop: regenerating stale downstream Planning "
+                f"dispatch {next_cycle_id}: {message}"
+            )
+
+    created = PlanningAgent.create_next_parallel_coding_dispatch(
+        repo_root=repo_root,
+        current_plan=current_plan,
+        portfolio_review=portfolio_review,
+        next_cycle_id=next_cycle_id,
+        timeout_seconds=timeout_seconds,
+        build_timeout_seconds=build_timeout_seconds,
+        planner_mode=planner_mode,
+        overwrite=overwrite,
+    )
+    assert isinstance(created, PortfolioPlan)
+    return created
 
 
 def _acquire_campaign_lock(repo_root: Path):
@@ -653,13 +710,20 @@ def _is_expected_negative_exit(outcome: BranchOutcome) -> bool:
         and outcome.return_code == 1
         and outcome.decision != "ACCEPT_FOR_NEXT_CYCLE"
         and outcome.error == "pipeline return code 1"
+        and not _coding_infrastructure_failed(outcome)
     )
+
+
+def _coding_infrastructure_failed(outcome: BranchOutcome) -> bool:
+    return is_coding_infrastructure_failure_status(outcome.build_status)
 
 
 def _branch_execution_failed(outcome: BranchOutcome) -> bool:
     """Separate settled negative candidates from infrastructure failures."""
 
     if outcome.status != "reviewed":
+        return True
+    if _coding_infrastructure_failed(outcome):
         return True
     if _is_expected_negative_exit(outcome):
         return False

@@ -69,7 +69,13 @@ The executable scaffold follows the paper's agent naming:
 - `scripts/agents/self_evolved_abc/model_client.py`: LLM API boundary, with
   provider integration intentionally isolated from agent role logic.
 - `scripts/agents/self_evolved_abc/cycle_driver.py`: internal single-branch
-  execution entry point used by the dual coordinator and diagnostics.
+  execution entry point used by the dual coordinator and diagnostics. It emits
+  a typed per-attempt provider/response/decision status.
+- `scripts/agents/self_evolved_abc/workflow/candidate_pipeline.py`: bounded
+  coding repair state machine. Attempt assignments are generated separately;
+  the frozen Planning assignment is byte-stable.
+- `scripts/agents/self_evolved_abc/workflow/failure_status.py`: shared boundary
+  between settled experimental negatives and provider/model/runtime failures.
 - `scripts/agents/self_evolved_abc/flow/`: Flow Agent loop implementation:
   assignment normalization, validation, materialization, isolated source-patch
   application, candidate workspace ABC build, CEC-first implementation

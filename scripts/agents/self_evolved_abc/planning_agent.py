@@ -7,6 +7,7 @@ the model is unavailable or too expensive.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
@@ -36,6 +37,7 @@ from scripts.agents.self_evolved_abc.schemas import AgentArtifacts, markdown_bul
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
     LEGACY_CYCLE_LAYOUT,
     implementation_root_for,
+    validate_portfolio_cycle_id,
 )
 
 
@@ -569,15 +571,85 @@ class PlanningAgent(PaperAgent):
         )
 
     def _rejected_candidates_text(self, previous_cycle: str) -> str:
+        try:
+            previous_cycle = validate_portfolio_cycle_id(previous_cycle)
+        except ValueError:
+            return "Previous cycle id is invalid; no branch outcomes were inferred."
+
+        portfolio_review_path = (
+            self.context.repo_root
+            / "experiments"
+            / previous_cycle
+            / "planning"
+            / "portfolio_review.json"
+        )
+        if portfolio_review_path.is_file():
+            try:
+                payload = json.loads(
+                    portfolio_review_path.read_text(encoding="utf-8")
+                )
+            except (json.JSONDecodeError, OSError):
+                return "Could not read the previous portfolio review."
+            if not isinstance(payload, Mapping):
+                return "Previous portfolio review is not a JSON object."
+            if str(payload.get("cycle_id", "")) != previous_cycle:
+                return "Previous portfolio review has a mismatched cycle id."
+            branches = payload.get("branches")
+            if not isinstance(branches, list):
+                return "Previous portfolio review has no branch outcomes."
+            by_role = {
+                str(item.get("branch_role", "")): item
+                for item in branches
+                if isinstance(item, Mapping)
+            }
+            if any(role not in by_role for role in ("flow", "logic")):
+                return (
+                    "Previous portfolio review does not contain both Flow and "
+                    "Logic branch outcomes."
+                )
+
+            def one_line(value: object, default: str = "missing") -> str:
+                rendered = " ".join(str(value or "").split())
+                return rendered or default
+
+            selected = one_line(
+                payload.get("selected_candidate_id"), default="none"
+            )
+            lines = [
+                f"Previous portfolio cycle {previous_cycle}: "
+                f"round_status={one_line(payload.get('round_status'))}; "
+                f"selected_candidate_id={selected}."
+            ]
+            for role, label in (("flow", "Flow"), ("logic", "Logic")):
+                branch = by_role[role]
+                reason = branch.get("review_reason", branch.get("reason"))
+                lines.append(
+                    f"- {label} branch "
+                    f"({one_line(branch.get('candidate_id'))}): "
+                    f"decision={one_line(branch.get('decision'))}; "
+                    f"build_status={one_line(branch.get('build_status'))}; "
+                    f"reason={one_line(reason)}; "
+                    f"next_action={one_line(branch.get('next_action'))}"
+                )
+            return "\n".join(lines)
+
+        # Paired campaigns must use the persisted portfolio review.  A Planning
+        # context deliberately has candidate_id=planner_dispatch, so it must
+        # never be treated as a real rejected coding candidate.
+        candidate_id = str(
+            self.context.assignment.get("champion_candidate_id", "")
+        ).strip()
+        if not candidate_id:
+            return (
+                "No previous portfolio review is available; no branch outcomes "
+                "were inferred."
+            )
+
         review_path = (
             implementation_root_for(
                 repo_root=self.context.repo_root,
                 cycle_id=previous_cycle,
-                candidate_id=str(
-                    self.context.assignment.get(
-                        "champion_candidate_id", self.context.candidate_id
-                    )
-                ),
+                candidate_id=candidate_id,
                 layout=str(
                     self.context.assignment.get(
                         "artifact_layout", LEGACY_CYCLE_LAYOUT
@@ -589,8 +661,6 @@ class PlanningAgent(PaperAgent):
         )
         if not review_path.is_file():
             return "No rejected candidates yet."
-
-        import json
 
         try:
             payload = json.loads(review_path.read_text(encoding="utf-8"))

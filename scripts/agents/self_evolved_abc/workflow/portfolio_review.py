@@ -21,6 +21,9 @@ from scripts.agents.self_evolved_abc.planning.portfolio import (
     validate_assignment_contract,
     validate_baseline_assignment,
 )
+from scripts.agents.self_evolved_abc.workflow.failure_status import (
+    is_coding_infrastructure_failure_status,
+)
 
 
 @dataclass(frozen=True)
@@ -144,10 +147,19 @@ def write_portfolio_review(
     ordered = _ordered_outcomes(outcomes)
     _validate_runtime_contracts(repo_root, plan)
     reviewed_count = sum(item.status == "reviewed" for item in ordered)
-    failed_count = len(ordered) - reviewed_count
-    quorum_reached = reviewed_count == len(BRANCH_ORDER)
+    infrastructure_failed_count = sum(
+        is_coding_infrastructure_failure_status(item.build_status)
+        for item in ordered
+    )
+    failed_count = len(ordered) - reviewed_count + infrastructure_failed_count
+    quorum_reached = (
+        reviewed_count == len(BRANCH_ORDER)
+        and infrastructure_failed_count == 0
+    )
     winner = _select_winner(ordered) if quorum_reached else None
-    if winner is not None:
+    if infrastructure_failed_count:
+        round_status = "infrastructure_failed"
+    elif winner is not None:
         round_status = "promotion_selected"
     elif not quorum_reached and reviewed_count:
         round_status = "incomplete"
@@ -175,11 +187,16 @@ def write_portfolio_review(
             "improvement breadth and average improvement."
             if winner
             else (
-                "No promotion is allowed until both branch reviews settle."
-                if not quorum_reached
+                "No promotion is allowed while a coding-agent infrastructure "
+                "failure is present. Repair it and resume the frozen dispatch."
+                if infrastructure_failed_count
                 else (
-                    "No unique winner: either no branch passed every hard gate "
-                    "or the eligible branches tied on all promotion metrics."
+                    "No promotion is allowed until both branch reviews settle."
+                    if not quorum_reached
+                    else (
+                        "No unique winner: either no branch passed every hard gate "
+                        "or the eligible branches tied on all promotion metrics."
+                    )
                 )
             )
         ),

@@ -236,6 +236,7 @@ def _previous_evidence_paths(context: CycleContext) -> tuple[str, ...]:
     root = impl_compare_root(context).relative_to(context.repo_root).as_posix()
     shared = f"experiments/{context.cycle_id}/agents"
     return (
+        f"experiments/{context.cycle_id}/planning/portfolio_review.json",
         f"{root}/comparison/impl_compare_summary.md",
         f"{root}/comparison/review_decision.json",
         f"{root}/comparison/cec_summary.csv",

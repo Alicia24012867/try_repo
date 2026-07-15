@@ -7,8 +7,9 @@ import json
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.roles.registry import get_coding_agent_spec
@@ -21,9 +22,33 @@ from scripts.agents.self_evolved_abc.flow.review import (
     write_review_artifacts,
 )
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    agent_attempt_path,
     implementation_root,
     review_decision_path,
 )
+from scripts.agents.self_evolved_abc.workflow.failure_status import (
+    is_coding_infrastructure_failure_status,
+)
+
+
+PROPOSAL_DECISION = "PROPOSE_CANDIDATE"
+SETTLED_NONPROPOSAL_DECISIONS = frozenset(("DEFER", "NEEDS_PLANNER_APPROVAL"))
+
+
+@dataclass(frozen=True)
+class AgentRunResult:
+    """Structured outcome of the bounded coding-agent repair loop."""
+
+    succeeded: bool
+    decision: str
+    failure_kind: str
+    attempts: int
+    retryable: bool = False
+    detail: str = ""
+
+    @property
+    def should_evaluate(self) -> bool:
+        return self.succeeded and self.decision == PROPOSAL_DECISION
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -83,88 +108,241 @@ def _run_agent_with_retry(
     repo_root: Path,
     assignment: Path,
     max_retries: int,
-) -> bool:
-    """Run cycle_driver, retrying on NEEDS_HUMAN_REVIEW with validation feedback."""
+) -> AgentRunResult:
+    """Run bounded attempts without mutating the frozen Planning assignment."""
 
-    agent_name = _assignment_agent_name(repo_root, assignment)
+    if max_retries < 0:
+        raise ValueError("max_retries must be >= 0")
+    canonical = assignment if assignment.is_absolute() else repo_root / assignment
+    canonical = canonical.resolve()
+    original_bytes = canonical.read_bytes()
+    original_payload = json.loads(original_bytes.decode("utf-8"))
+    if not isinstance(original_payload, dict):
+        raise ValueError("assignment must contain one JSON object")
+    agent_name = _assignment_agent_name(repo_root, canonical)
+    context = CycleContext.from_assignment_file(repo_root, canonical)
+    feedback_path = context.artifact_paths().feedback
+    repair_hint = ""
+    total_attempts = max_retries + 1
 
-    agent_cmd = (
-        sys.executable,
-        "-B",
-        "-m",
-        "scripts.agents.self_evolved_abc.cycle_driver",
-        "--repo-root",
-        str(repo_root),
-        "--assignment",
-        str(assignment),
-        "--agent",
-        agent_name,
+    for attempt in range(1, total_attempts + 1):
+        attempt_assignment = agent_attempt_path(context, attempt, "assignment")
+        attempt_status = agent_attempt_path(context, attempt, "status")
+        attempt_status.unlink(missing_ok=True)
+        payload = _attempt_assignment_payload(
+            original_payload,
+            repair_hint=repair_hint,
+        )
+        _write_json_atomic(attempt_assignment, payload)
+
+        agent_cmd = (
+            sys.executable,
+            "-B",
+            "-m",
+            "scripts.agents.self_evolved_abc.cycle_driver",
+            "--repo-root",
+            str(repo_root),
+            "--assignment",
+            str(attempt_assignment),
+            "--agent",
+            agent_name,
+            "--attempt-index",
+            str(attempt),
+        )
+        print(
+            f"running: {' '.join(agent_cmd)}  "
+            f"(attempt {attempt}/{total_attempts})"
+        )
+        try:
+            completed = subprocess.run(agent_cmd, cwd=repo_root, check=False)
+        except OSError as exc:
+            return AgentRunResult(
+                succeeded=False,
+                decision="",
+                failure_kind="agent_preparation",
+                attempts=attempt,
+                detail=f"could not start cycle_driver: {exc}",
+            )
+        status = _read_attempt_status(
+            attempt_status,
+            context=context,
+            attempt=attempt,
+        )
+
+        if canonical.read_bytes() != original_bytes:
+            raise RuntimeError("frozen Planning assignment changed during agent retry")
+
+        if completed.returncode != 0:
+            failure_kind = str(status.get("failure_kind", "")).strip()
+            retryable = bool(status.get("retryable", False))
+            detail = str(status.get("error_message", "")).strip()
+            if not failure_kind:
+                failure_kind = "agent_preparation"
+                detail = detail or (
+                    "cycle_driver exited without a valid attempt status "
+                    f"(return_code={completed.returncode})"
+                )
+                retryable = False
+            if retryable and attempt < total_attempts:
+                repair_hint = _provider_repair_hint(failure_kind, detail)
+                print(
+                    "iteration_loop: retrying transient/response failure "
+                    f"kind={failure_kind}"
+                )
+                continue
+            return AgentRunResult(
+                succeeded=False,
+                decision="",
+                failure_kind=failure_kind,
+                attempts=attempt,
+                retryable=retryable,
+                detail=detail,
+            )
+
+        if status.get("status") != "completed":
+            detail = "cycle_driver returned zero without a completed attempt status"
+            if attempt < total_attempts:
+                repair_hint = _provider_repair_hint("missing_attempt_status", detail)
+                continue
+            return AgentRunResult(
+                succeeded=False,
+                decision="",
+                failure_kind="agent_preparation",
+                attempts=attempt,
+                detail=detail,
+            )
+
+        decision = str(status.get("decision", "")).strip()
+        if decision == "NEEDS_HUMAN_REVIEW":
+            feedback_text = _read_bounded_text(feedback_path, max_chars=5000)
+            if attempt < total_attempts:
+                repair_hint = _validation_repair_hint(feedback_text)
+                print(
+                    "iteration_loop: retrying with structured validation feedback"
+                )
+                continue
+            return AgentRunResult(
+                succeeded=False,
+                decision=decision,
+                failure_kind="response_validation",
+                attempts=attempt,
+                detail=feedback_text or "model response failed local validation",
+            )
+
+        if decision == PROPOSAL_DECISION or decision in SETTLED_NONPROPOSAL_DECISIONS:
+            return AgentRunResult(
+                succeeded=True,
+                decision=decision,
+                failure_kind="",
+                attempts=attempt,
+                detail=(
+                    _read_agent_rationale(context.artifact_paths().plan)
+                    if decision in SETTLED_NONPROPOSAL_DECISIONS
+                    else ""
+                ),
+            )
+
+        detail = f"unexpected coding-agent decision: {decision or '<empty>'}"
+        if attempt < total_attempts:
+            repair_hint = _provider_repair_hint("unexpected_decision", detail)
+            continue
+        return AgentRunResult(
+            succeeded=False,
+            decision=decision,
+            failure_kind="response_validation",
+            attempts=attempt,
+            detail=detail,
+        )
+
+    raise AssertionError("unreachable coding-agent retry state")
+
+
+def _attempt_assignment_payload(
+    original: Mapping[str, Any],
+    *,
+    repair_hint: str,
+) -> dict[str, Any]:
+    payload = json.loads(json.dumps(dict(original)))
+    if repair_hint:
+        original_hypothesis = str(original.get("planner_hypothesis", "")).strip()
+        payload["planner_hypothesis"] = (
+            repair_hint.rstrip()
+            + "\n\n--- ORIGINAL PLANNING HYPOTHESIS ---\n"
+            + original_hypothesis
+        ).strip()
+    return payload
+
+
+def _validation_repair_hint(feedback_text: str) -> str:
+    detail = feedback_text.strip() or "No validation detail was materialized."
+    return (
+        "PREVIOUS ATTEMPT FAILED LOCAL RESPONSE VALIDATION. Return a fresh JSON "
+        "object that preserves the original hypothesis while fixing only these "
+        "contract issues:\n\n"
+        + detail[:5000]
     )
 
-    for attempt in range(max_retries + 1):
-        print(f"running: {' '.join(agent_cmd)}  (attempt {attempt + 1}/{max_retries + 1})")
-        completed = subprocess.run(agent_cmd, cwd=repo_root, check=False)
-        if completed.returncode != 0:
-            return False
 
-        # Derive cycle id from assignment path
-        cycle_id = assignment.parent.parent.parent.name
-        candidate = assignment.stem
-        feedback_path = (
-            repo_root
-            / "experiments"
-            / cycle_id
-            / "agents"
-            / "feedback"
-            / f"{candidate}.md"
-        )
-        candidate_path = (
-            repo_root
-            / "experiments"
-            / cycle_id
-            / "agents"
-            / "candidate_changes"
-            / f"{candidate}.md"
-        )
+def _provider_repair_hint(failure_kind: str, detail: str) -> str:
+    return (
+        "PREVIOUS MODEL ATTEMPT DID NOT PRODUCE A USABLE JSON RESPONSE. Preserve "
+        "the original hypothesis, emit exactly one complete JSON object, and "
+        "keep the patch concise enough to finish within the output budget.\n\n"
+        f"failure_kind: {failure_kind}\n"
+        f"detail: {detail[:2000]}"
+    )
 
-        if not candidate_path.is_file():
-            return False  # model call crashed, don't evaluate stale artifacts
 
-        decision_text = candidate_path.read_text(encoding="utf-8", errors="replace")
-        if "NEEDS_HUMAN_REVIEW" not in decision_text:
-            return True  # accepted or deferred — let hard gates decide
+def _read_attempt_status(
+    path: Path,
+    *,
+    context: CycleContext,
+    attempt: int,
+) -> Mapping[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    expected = {
+        "cycle_id": context.cycle_id,
+        "candidate_id": context.candidate_id,
+        "agent_name": context.agent_name,
+        "attempt": attempt,
+    }
+    if any(payload.get(key) != value for key, value in expected.items()):
+        return {}
+    return payload
 
-        if attempt >= max_retries:
-            print(
-                f"iteration_loop: NEEDS_HUMAN_REVIEW after "
-                f"{max_retries + 1} attempts — giving up"
-            )
-            return False
 
-        # Gather validation errors for the retry
-        feedback_text = ""
-        if feedback_path.is_file():
-            feedback_text = feedback_path.read_text(encoding="utf-8", errors="replace")
+def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(dict(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
-        # Patch assignment with validation feedback as a repair hint
-        try:
-            payload = json.loads(assignment.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return False
 
-        hint = (
-            "PREVIOUS ATTEMPT FAILED VALIDATION. Fix the following issues "
-            "in your JSON response and try again:\n\n"
-            f"{feedback_text[:3000]}"
-        )
-        original = str(payload.get("planner_hypothesis", ""))
-        payload["planner_hypothesis"] = hint + "\n---\n" + original
-        assignment.write_text(
-            json.dumps(payload, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        print("iteration_loop: retrying with validation feedback in planner_hypothesis")
-    return False
+def _read_bounded_text(path: Path, *, max_chars: int) -> str:
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")[:max_chars]
+
+
+def _read_agent_rationale(path: Path) -> str:
+    text = _read_bounded_text(path, max_chars=4000)
+    marker = "## Rationale"
+    if marker not in text:
+        return ""
+    body = text.split(marker, 1)[1].lstrip("\n")
+    if "\n## " in body:
+        body = body.split("\n## ", 1)[0]
+    return " ".join(body.split())[:1500]
 
 
 def _assignment_agent_name(repo_root: Path, assignment: Path) -> str:
@@ -189,21 +367,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands: list[tuple[tuple[str, ...], bool]] = []
     if not args.skip_agent:
         try:
-            agent_succeeded = _run_agent_with_retry(
+            agent_result = _run_agent_with_retry(
                 repo_root=repo_root,
-                assignment=assignment,
+                assignment=assignment_path,
                 max_retries=2,
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"iteration_loop: invalid assignment: {exc}", file=sys.stderr)
             return 2
-        if not agent_succeeded:
-            print("iteration_loop: coding agent did not produce a valid candidate")
-            # A rejected/invalid model proposal is still a settled branch
-            # result.  Materialize the existing REPAIR_VALIDATION review so
-            # the paired fan-in can feed the failure back to Planning instead
-            # of stopping with a permanently missing review.
-            return _write_agent_failure_review(context)
+        if not agent_result.should_evaluate:
+            if agent_result.succeeded:
+                print(
+                    "iteration_loop: coding agent settled without a patch "
+                    f"decision={agent_result.decision}"
+                )
+            else:
+                print(
+                    "iteration_loop: coding agent failed before candidate "
+                    f"evaluation kind={agent_result.failure_kind} "
+                    f"attempts={agent_result.attempts}"
+                )
+            return _write_agent_failure_review(context, agent_result)
     if not args.skip_patch_apply:
         source_patch_command = [
             sys.executable,
@@ -347,8 +531,11 @@ def _is_review_command(command: Sequence[str]) -> bool:
     return "scripts.agents.self_evolved_abc.flow.review" in command
 
 
-def _write_agent_failure_review(context: CycleContext) -> int:
-    """Persist a non-promoting review when coding ends before build/CEC."""
+def _write_agent_failure_review(
+    context: CycleContext,
+    result: AgentRunResult,
+) -> int:
+    """Persist a precise non-promoting review when no patch is evaluated."""
 
     impl_root = implementation_root(context)
     decision = review_impl_compare(context, impl_root)
@@ -357,12 +544,114 @@ def _write_agent_failure_review(context: CycleContext) -> int:
             "agent failure without build evidence must classify as "
             f"REPAIR_VALIDATION, got {decision.decision}"
         )
+    build_status, reason, next_action = _agent_failure_review_fields(result)
+    review_decision = {
+        "DEFER": "DEFERRED_BY_AGENT",
+        "NEEDS_PLANNER_APPROVAL": "NEEDS_PLANNER_APPROVAL",
+    }.get(result.decision, decision.decision)
+    if is_coding_infrastructure_failure_status(build_status):
+        review_decision = "CODING_INFRASTRUCTURE_FAILURE"
+    decision = replace(
+        decision,
+        decision=review_decision,
+        build_status=build_status,
+        reason=reason,
+        next_action=next_action,
+    )
     paths = write_review_artifacts(context, impl_root, decision)
     print(f"review_decision: {paths['decision']}")
     print(f"feedback: {paths['feedback']}")
     print(f"rule_update: {paths['rule_update']}")
     print(f"decision: {decision.decision}")
     return 1
+
+
+def _agent_failure_review_fields(
+    result: AgentRunResult,
+) -> tuple[str, str, str]:
+    attempts = max(1, result.attempts)
+    if result.succeeded and result.decision == "DEFER":
+        rationale = " ".join(result.detail.split())[:1000]
+        detail = f" Agent rationale: {rationale}" if rationale else ""
+        return (
+            "agent_deferred",
+            "The coding agent explicitly deferred because the supplied evidence "
+            "did not justify a safe candidate; no source patch was expected."
+            f"{detail}",
+            "Give Planning the agent rationale and the exact missing evidence, "
+            "then dispatch a narrower evidence-backed hypothesis.",
+        )
+    if result.succeeded and result.decision == "NEEDS_PLANNER_APPROVAL":
+        rationale = " ".join(result.detail.split())[:1000]
+        detail = f" Agent rationale: {rationale}" if rationale else ""
+        return (
+            "agent_needs_planner_approval",
+            "The coding agent found that the smallest valid change lies outside "
+            "the frozen assignment scope; no source patch was expected."
+            f"{detail}",
+            "Planning must approve the requested path or replace the hypothesis "
+            "without weakening the role boundary.",
+        )
+
+    detail = " ".join(result.detail.split())[:1000]
+    suffix = f" Last error: {detail}" if detail else ""
+    mapping = {
+        "provider_configuration": (
+            "agent_provider_configuration_failed",
+            "The model provider configuration failed before a coding response "
+            f"was available after {attempts} attempt(s).{suffix}",
+            "Fix the API key, model, endpoint, or response-format configuration "
+            "before resuming the campaign.",
+        ),
+        "provider_transient": (
+            "agent_provider_transient_failed",
+            "The model provider remained unavailable after the bounded retry "
+            f"budget ({attempts} attempt(s)).{suffix}",
+            "Inspect the attempt status and provider availability, then resume "
+            "the same frozen Planning dispatch.",
+        ),
+        "provider_permanent": (
+            "agent_provider_permanent_failed",
+            "The provider rejected the coding request as non-retryable after "
+            f"{attempts} attempt(s).{suffix}",
+            "Fix authentication, request parameters, model access, or provider "
+            "policy before resuming the campaign.",
+        ),
+        "agent_preparation": (
+            "agent_preparation_failed",
+            "The coding agent could not prepare or record a complete attempt "
+            f"after {attempts} attempt(s).{suffix}",
+            "Inspect the attempt assignment/status and repair the local agent "
+            "runtime before resuming.",
+        ),
+        "response_validation": (
+            "agent_response_validation_failed",
+            "The model returned JSON, but the coding response still violated "
+            f"the local role/patch contract after {attempts} attempt(s).{suffix}",
+            "Feed the exact validation issues to Planning and narrow the next "
+            "hypothesis or patch scope.",
+        ),
+    }
+    if result.failure_kind.startswith("model_response_"):
+        return (
+            "agent_model_response_failed",
+            "The provider returned an unusable coding response after the "
+            f"bounded retry budget ({attempts} attempt(s)); this is not a QoR "
+            f"experiment result.{suffix}",
+            "Inspect the attempt status, output limit, and JSON response mode "
+            "before resuming the frozen dispatch.",
+        )
+    return mapping.get(
+        result.failure_kind,
+        (
+            "agent_preparation_failed",
+            "The coding-agent lifecycle ended without an evaluable patch after "
+            f"{attempts} attempt(s), failure_kind={result.failure_kind or 'unknown'}."
+            f"{suffix}",
+            "Inspect the structured attempt status and repair the local coding "
+            "pipeline before resuming.",
+        ),
+    )
 
 
 if __name__ == "__main__":

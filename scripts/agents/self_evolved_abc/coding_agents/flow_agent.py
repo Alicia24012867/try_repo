@@ -202,6 +202,9 @@ class FlowAgent(CodingAgent):
             "SUBSYSTEM": str(assignment.get("subsystem", "FlowTune / ABC flow scheduling")),
             "DRY_RUN": str(assignment.get("dry_run", False)).lower(),
             "SOURCE_PATCH_MODE": str(assignment.get("source_patch_mode", "abc_flow")),
+            "SOURCE_PATCH_TARGET_SCOPE": self._source_patch_target_scope(
+                assignment
+            ),
             "PLANNER_TASK": assignment.get("planner_hypothesis", ""),
             "ALLOWED_FILES": assignment.get("allowed_to_edit", ()),
             "PROGRAMMING_GUIDANCE": load_template(
@@ -278,6 +281,19 @@ class FlowAgent(CodingAgent):
                 "benchmark in scope, including failures and skipped designs."
             ),
         }
+
+    @staticmethod
+    def _source_patch_target_scope(assignment: Mapping[str, Any]) -> str:
+        roots = assignment.get("source_patch_allowed_roots", ())
+        if isinstance(roots, str):
+            normalized = [roots.strip()] if roots.strip() else []
+        else:
+            normalized = [str(root).strip() for root in roots if str(root).strip()]
+        if len(normalized) == 1:
+            return normalized[0]
+        if normalized:
+            return ",".join(normalized)
+        return "not_applicable"
 
     def _cec_context(self, previous_cycle: str) -> str:
         """Read actual CEC summary from the previous cycle's impl_compare."""
@@ -402,16 +418,19 @@ class FlowAgent(CodingAgent):
             "",
         ]
         try:
-            reader = csv.DictReader(summary_path.open("r", encoding="utf-8", newline=""))
-            for row in reader:
-                design = row.get("design", "")
-                if design in stem_to_benchmark:
-                    lines.append(
-                        f"- {design}:  vanilla={row.get('vanilla_and','?')}  "
-                        f"flowtune={row.get('flowtune_and','?')}  "
-                        f"(improvement={row.get('and_improve_pct','?')}%)  "
-                        f"depth={row.get('flowtune_lev','?')}"
-                    )
+            with summary_path.open(
+                "r", encoding="utf-8", newline=""
+            ) as handle:
+                reader = csv.DictReader(handle)
+                for row in reader:
+                    design = row.get("design", "")
+                    if design in stem_to_benchmark:
+                        lines.append(
+                            f"- {design}:  vanilla={row.get('vanilla_and','?')}  "
+                            f"flowtune={row.get('flowtune_and','?')}  "
+                            f"(improvement={row.get('and_improve_pct','?')}%)  "
+                            f"depth={row.get('flowtune_lev','?')}"
+                        )
         except Exception:
             return "Failed to parse baseline summary.csv."
         if len(lines) == 2:
@@ -455,11 +474,8 @@ class FlowAgent(CodingAgent):
             if not path.is_file():
                 continue
             try:
-                rows = list(
-                    csv.DictReader(
-                        path.open("r", encoding="utf-8", newline="")
-                    )
-                )
+                with path.open("r", encoding="utf-8", newline="") as handle:
+                    rows = list(csv.DictReader(handle))
             except Exception:
                 continue
 

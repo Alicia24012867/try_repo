@@ -33,6 +33,8 @@ from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
 CONTINUE_DECISIONS = frozenset(
     (
         "ACCEPT_FOR_NEXT_CYCLE",
+        "DEFERRED_BY_AGENT",     # valid evidence-insufficient non-proposal
+        "NEEDS_PLANNER_APPROVAL",  # valid frozen-scope request
         "REPAIR_QOR",
         "REPAIR_BUILD",          # legacy / fallback
         "REPAIR_VALIDATION",     # model JSON validation failed
