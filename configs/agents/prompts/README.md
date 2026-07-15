@@ -33,15 +33,17 @@ unfinished configuration.
 
 ## Recommended Use Order
 
-1. Fill `planner_prompt.md` with the current champion, feedback, rulebase, and
-   cycle budget.
-2. Convert the planner JSON into an assignment under
-   `experiments/{{CYCLE_ID}}/agents/assignments/`.
-3. Render `coding_agent_prompt.md` for the selected paper role.
-4. If validation, patch application, compile, smoke, CEC, or runtime fails,
-   render `repair_prompt.md`.
-5. If validation completes, render `review_prompt.md`.
-6. Store model-derived artifacts under `experiments/{{CYCLE_ID}}/agents/`.
+1. Fill `planner_prompt.md` with the current champion, both prior branch
+   results, rulebase, pinned prior knowledge, and cycle budget.
+2. Validate the planner JSON against the locked envelope and freeze exactly
+   two assignments under `experiments/{{CYCLE_ID}}/agents/assignments/`: Flow
+   first and Logic second.
+3. Render `coding_agent_prompt.md` independently for both isolated roles.
+4. Run validation, patch application, compile, smoke, full-scope CEC, QoR, and
+   branch review in each lane; one failure does not cancel the sibling.
+5. Require both reviews and write one centralized portfolio review.
+6. Store model-derived artifacts under `experiments/{{CYCLE_ID}}/agents/` and
+   candidate evaluation data under `experiments/{{CYCLE_ID}}/candidates/`.
 
 ## Output Protocol
 
@@ -54,6 +56,8 @@ For the current scaffold:
 
 - Planning Agent JSON is consumed by `planning_agent.py`.
 - Coding Agent JSON is consumed by `coding_agents/base_coding_agent.py`.
+- Flow and Logic source-patch JSON is validated and materialized through the
+  shared strict `flow/validation.py` and `flow/materialization.py` path.
 - Repair and review JSON are reserved for the next harness step.
 - Any non-JSON prose should be treated as a model-format error.
 
@@ -76,9 +80,9 @@ For the current scaffold:
 
 The active Flow Agent reproduction path is source-code feedback iteration:
 
-- Planner output should set `source_patch_mode: source_patch_diff` and
-  include `source_patch_allowed_roots` for `third_party/FlowTune/src/src/opt`
-  and `third_party/FlowTune/src/src/base/abci`.
+- Planner output contains two `source_patch_diff` dispatches with disjoint
+  roots: Flow gets only `third_party/FlowTune/src/src/opt`; Logic gets only
+  `third_party/FlowTune/src/src/base/abci`.
 - The default evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`,
   `csweep`, and `refactor`; use this as a reachability hint when choosing
   source targets.
@@ -105,6 +109,22 @@ Each prompt works best when the following artifacts are available:
 - QoR summary table
 - runtime budget
 - previous accepted and rejected candidate summaries
+- pinned related-repository profiles and query-relevant source excerpts
+
+The related-repository layer is configured by
+`configs/agents/context/repositories.json` and provisioned with
+`scripts/bootstrap_agent_context.py`. It injects commit-labelled, bounded,
+read-only context. Missing checkouts fall back to checked-in profiles for
+diagnostics, but Planning, Flow, and Logic assignments all enforce their full
+role-routed exact-revision/profile count before any model call.
+
+The role budgets are 96,000 characters for Planning, 72,000 for Logic, and
+60,000 for Flow, normally with two or three ranked files per trusted
+repository; assignments may bound the layer between 2,000 and 160,000
+characters and one to ten files. Snippets are emitted round-robin across
+repositories and carry explicit truncation markers. Prompt authors must not
+silently replace a missing checkout with unpinned web text or copy entire
+repositories into one model call.
 
 ## First-Cycle Prompt Bundle
 

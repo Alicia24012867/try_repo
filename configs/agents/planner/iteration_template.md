@@ -1,62 +1,42 @@
-# Iteration Record Template
+# Paired Iteration Record Template
 
-Use this record format for every cycle-level plan. The Planning Agent may emit
-it directly, or the driver may reconstruct it from the model's JSON response.
+Use this record for every Planning round. The runtime freezes the security and
+evaluation envelope; the model supplies only the round objective and two
+subsystem-local hypotheses/tasks.
 
-## Cycle
+## Round identity
 
 - cycle_id: `<cycle_id>`
 - previous_cycle_id: `<previous_cycle_id>`
-- candidate_id: `<candidate_id>`
-- selected_agent: `<flow_agent | logic_minimization_agent | mapper_agent>`
+- baseline_ref: `<immutable winner/source reference>`
+- evaluation_contract_hash: `<sha256>`
+- planner_advice_hash: `<sha256>`
 
-## Planner Objective
+## Ordered dispatches
 
-State one measurable objective. Example: "Use cycle_000 FlowTune evidence to
-propose one conservative flow candidate for three EPFL designs."
+1. `flow_candidate_001`
+   - agent: `flow_agent`
+   - source root: `third_party/FlowTune/src/src/opt`
+   - hypothesis/task: `<one reached flow mechanism>`
+2. `logic_candidate_001`
+   - agent: `logic_minimization_agent`
+   - source root: `third_party/FlowTune/src/src/base/abci`
+   - hypothesis/task: `<one reached technology-independent mechanism>`
 
-## Hypothesis
+## Shared metrics and stop conditions
 
-Describe the causal mechanism, not only the desired metric movement. Example:
-"A script derived from a stable positive-improvement EPFL design may reduce AIG
-node count on related arithmetic/control designs without changing depth."
+- primary: AIG/AND node count; auxiliary: depth, runtime, skipped designs.
+- compile must pass before CEC; every frozen evaluation design must have
+  correctness evidence before QoR is eligible.
+- stop a branch on invalid scope/diff, crash, timeout, compile failure, missing
+  coverage, or CEC mismatch; allow the sibling branch to settle.
+- do not merge patches. Require two valid reviews before centralized ranking.
 
-## Allowed Scope
+## Required artifacts
 
-- allowed_to_read:
-  - previous-cycle results
-  - previous-cycle outputs
-  - current prompt/config files
-- allowed_to_edit:
-  - current-cycle agent artifacts
-  - current-cycle logs/outputs/results
-  - `configs/flows/` for flow-only candidates
-
-## Metrics
-
-- primary_metric: AIG AND count
-- secondary_metrics: AIG depth, runtime, skipped designs, crash/assertion count
-- correctness_metric: CEC status when available
-
-## Stop Conditions
-
-- Stop on compile failure.
-- Stop on ABC assertion, crash, or missing output.
-- Stop on CEC mismatch.
-- Stop on repeated timeout.
-- Stop if the candidate requires a path outside `allowed_to_edit`.
-
-## Rollback Criteria
-
-- Roll back on correctness failure.
-- Roll back on broad QoR regression without a compensating primary-metric gain.
-- Roll back if the candidate is not attributable to one hypothesis.
-- Roll back if generated artifacts cannot be reproduced from the assignment.
-
-## Required Artifacts
-
-- `experiments/<cycle>/agents/plans/<candidate_id>.md`
-- `experiments/<cycle>/agents/candidate_changes/<candidate_id>.md`
-- `experiments/<cycle>/agents/feedback/<candidate_id>.md`
-- `experiments/<cycle>/agents/rule_updates/<candidate_id>.md`
-
+- `experiments/<cycle>/planning/portfolio_plan.json`
+- `experiments/<cycle>/planning/planner_advice.json`
+- `experiments/<cycle>/planning/branch_runs/<candidate_id>.json`
+- `experiments/<cycle>/planning/portfolio_review.json`
+- `experiments/<cycle>/agents/{plans,candidate_changes,feedback,rule_updates}/<candidate_id>.md`
+- `experiments/<cycle>/candidates/<candidate_id>/impl_compare/`

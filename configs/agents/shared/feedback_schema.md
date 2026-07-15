@@ -1,72 +1,60 @@
-# Feedback Schema
+# Paired Feedback Schema
 
-Use these fields when converting agent outputs and benchmark results into
-machine-readable JSON. Markdown artifacts may contain the same information in
-human-readable form.
+Each candidate lane writes an independent, candidate-scoped review. The
+coordinator then writes one portfolio review only after both lane reviews pass
+lineage and coverage validation.
 
-## Cycle Feedback
+## Branch feedback
 
 ```json
 {
   "cycle_id": "cycle_001",
-  "candidate_id": "candidate_001",
-  "selected_agent": "flow_agent",
+  "candidate_id": "flow_candidate_001",
+  "agent_name": "flow_agent",
   "candidate_kind": "source_patch_diff",
-  "benchmark_scope": ["benchmarks/epfl/epfl_adder.blif"],
+  "assignment_hash": "<sha256>",
+  "evaluation_contract_hash": "<sha256>",
+  "planner_advice_hash": "<sha256>",
   "patch_status": "PASS",
   "compile_status": "PASS",
-  "smoke_status": "PASS",
   "cec_status": "PASS",
+  "cec_pass_count": 30,
+  "cec_total_count": 30,
+  "correctness_backed_rows": 30,
   "qor_status": "PASS",
-  "primary_metric": "and_count",
-  "primary_metric_delta": -127,
-  "secondary_metric_delta": {"depth": 0, "runtime_seconds": 1.0},
-  "accepted": true,
+  "scalar_and_reward": 127,
+  "improved_benchmark_count": 4,
+  "regressed_benchmark_count": 0,
   "decision": "ACCEPT_FOR_NEXT_CYCLE",
-  "rollback_reason": "",
-  "notes": "QoR is accepted only because the matching CEC rows passed."
+  "promotion_allowed": true
 }
 ```
 
-## Agent Feedback
+## Portfolio feedback
 
 ```json
 {
-  "agent_name": "flow_agent",
-  "paper_role": "Flow Agent",
-  "hypothesis": "A conservative FlowTune source patch may improve one flow decision point without changing semantics.",
-  "candidate_artifacts": ["experiments/cycle_001/agents/source_patches/candidate_001/patch.diff"],
-  "changed_files": ["third_party/FlowTune/src/src/opt/nwk/nwkFlow.c"],
-  "validation_summary": "Patch applied in isolation; candidate build, smoke, CEC, and QoR gates passed remotely.",
-  "observed_regressions": [],
-  "next_suggestion": "Use CEC-backed QoR rows as feedback for the next Flow Agent assignment."
+  "cycle_id": "cycle_001",
+  "status": "complete",
+  "quorum_required": 2,
+  "quorum_observed": 2,
+  "winner_candidate_id": "flow_candidate_001",
+  "winner_source_root": "experiments/cycle_001/candidates/flow_candidate_001/impl_compare/candidate_modified/workspace/third_party/FlowTune/src",
+  "decision": "PROMOTE_ONE",
+  "implicit_merge": false
 }
 ```
 
-## Rulebase Feedback
+`winner_candidate_id` is empty when neither candidate is eligible or when all
+ranking metrics tie exactly. A failed/missing branch, stale hash, incomplete
+CEC coverage, or nonzero pipeline result prevents quorum and therefore prevents
+promotion and next-cycle generation.
 
-```json
-{
-  "rule_id": "R-FLOW-003",
-  "action": "add",
-  "reason": "The source patch produced correctness-backed QoR evidence on the small subset.",
-  "evidence": "experiments/cycle_001/impl_compare/comparison/review_decision.json",
-  "approved_by": "human_review"
-}
-```
+## Status vocabulary
 
-## Status Vocabulary
-
-- `PASS`: gate succeeded.
-- `FAIL`: gate failed and requires rejection or repair.
-- `SKIPPED`: gate did not run and must be explained.
-- `TIMEOUT`: gate exceeded its budget.
-- `NEEDS_HUMAN_REVIEW`: model or parser produced ambiguous output.
-- `REPAIR_VALIDATION`: model JSON, mode, or path-scope contract failed.
-- `REPAIR_PATCH`: source patch failed to apply in the isolated workspace.
-- `REPAIR_SMOKE`: smoke or lightweight runner gate failed.
-- `REPAIR_COMPILE`: candidate binary build failed.
-- `REPAIR_EVALUATION`: remote comparison artifacts are missing or unparseable.
-- `REJECT_CEC`: correctness failed or was skipped, so QoR is invalid.
-- `REPAIR_QOR`: correctness passed but target QoR did not improve.
-- `ACCEPT_FOR_NEXT_CYCLE`: build, CEC, and correctness-backed QoR passed.
+- `PASS`, `FAIL`, `SKIPPED`, `TIMEOUT`: gate results.
+- `REPAIR_VALIDATION`, `REPAIR_PATCH`, `REPAIR_SMOKE`, `REPAIR_COMPILE`:
+  candidate construction failures.
+- `REPAIR_EVALUATION`, `REJECT_CEC`, `REPAIR_QOR`: evidence/QoR failures.
+- `ACCEPT_FOR_NEXT_CYCLE`: branch is eligible for portfolio ranking only.
+- `PROMOTE_ONE`, `NO_WINNER`, `QUORUM_FAILED`: centralized outcomes.

@@ -1,4 +1,4 @@
-"""CEC-first implementation comparison for Flow Agent source evolution."""
+"""CEC-first implementation comparison for coding-agent candidates."""
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     ABC_RC_PATH,
     CANDIDATE_BUILD_READY_STATUSES,
     DEFAULT_ABC_BIN,
+    FLOW_CANDIDATE_ABC_FLOW,
+    FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
     IMPL_BASELINE_LABEL as BASELINE_LABEL,
     IMPL_CANDIDATE_LABEL as CANDIDATE_LABEL,
 )
@@ -151,6 +153,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     ensure_compare_dirs(output_root)
 
     build_status = read_candidate_build_status(output_root)
+    candidate_mode = str(context.assignment.get("source_patch_mode", "")).strip()
+    if args.allow_missing_build_gate and candidate_mode != FLOW_CANDIDATE_ABC_FLOW:
+        write_blocked_summary(context, output_root, build_status)
+        print(
+            "blocked: --allow-missing-build-gate is restricted to abc_flow "
+            "candidates"
+        )
+        return 2
     if (
         not args.allow_missing_build_gate
         and build_status not in CANDIDATE_BUILD_READY_STATUSES
@@ -170,6 +180,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         implementation_label=CANDIDATE_LABEL,
         explicit=args.candidate_abc_bin,
     )
+    if (
+        candidate_mode == FLOW_CANDIDATE_SOURCE_PATCH_DIFF
+        and same_binary_identity(context, baseline_abc_bin, candidate_abc_bin)
+    ):
+        write_blocked_summary(
+            context,
+            output_root,
+            "candidate_binary_not_distinct",
+        )
+        print(
+            "blocked: source_patch_diff must compare a separately built "
+            "candidate binary"
+        )
+        return 2
 
     baseline_results: list[ImplRunResult] = []
     candidate_results: list[ImplRunResult] = []
@@ -913,6 +937,25 @@ def read_candidate_build_status(output_root: Path) -> str | None:
     except json.JSONDecodeError:
         return None
     return str(payload.get("status", "")).strip() or None
+
+
+def same_binary_identity(
+    context: CycleContext,
+    baseline_abc_bin: str,
+    candidate_abc_bin: str,
+) -> bool:
+    """Return whether both comparison sides resolve to the same executable."""
+
+    if baseline_abc_bin == candidate_abc_bin:
+        return True
+
+    def resolved(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = context.repo_root / path
+        return path.resolve()
+
+    return resolved(baseline_abc_bin) == resolved(candidate_abc_bin)
 
 
 def ensure_compare_dirs(output_root: Path) -> None:

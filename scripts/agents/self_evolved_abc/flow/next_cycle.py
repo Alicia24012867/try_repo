@@ -1,9 +1,4 @@
-"""Generate the next Flow Agent assignment from reviewed cycle feedback.
-
-Uses the deterministic PlanningEngine to select strategy, target command,
-and adaptive thresholds.  The engine overrides hard-coded planner logic
-when cycle evidence is available.
-"""
+"""Create the next role-specific coding assignment from reviewed evidence."""
 
 from __future__ import annotations
 
@@ -11,8 +6,9 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 from scripts.agents.self_evolved_abc.benchmarks import (
     apply_benchmark_suite,
@@ -22,24 +18,34 @@ from scripts.agents.self_evolved_abc.benchmarks import (
     with_abc_native_evaluation_scope,
 )
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
-from scripts.agents.self_evolved_abc.flow.assignment import (
-    FLOW_CYCLE_DIRS,
-    normalize_flow_assignment_scope,
-)
+from scripts.agents.self_evolved_abc.flow.assignment import FLOW_CYCLE_DIRS
 from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
-    FLOWTUNE_SOURCE_SCOPE_PRIMARY,
     IMPL_CANDIDATE_LABEL,
 )
+from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root
 from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
+from scripts.agents.self_evolved_abc.roles.registry import (
+    get_coding_agent_spec,
+    normalize_coding_assignment,
+)
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    CANDIDATE_SCOPED_LAYOUT,
+    LEGACY_CYCLE_LAYOUT,
+    SUPPORTED_LAYOUTS,
+    implementation_root_for,
+    validate_candidate_id,
+)
 
 
-CYCLE_RE = re.compile(r"^cycle_(?P<number>\d{3,})$")
+CYCLE_RE = re.compile(r"^cycle_(?P<number>[0-9]{3,})$")
+FLOW_AGENT_NAME = "flow_agent"
+LOGIC_AGENT_NAME = "logic_minimization_agent"
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Create a next-cycle Flow Agent assignment from review evidence."
+        description="Create a next-cycle coding-agent assignment from review evidence."
     )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--assignment", type=Path, required=True)
@@ -49,10 +55,6 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--benchmark-suite",
         choices=benchmark_suite_names(),
         default=None,
-        help=(
-            "Override the next assignment benchmark scope. "
-            "Use large_70 to evaluate the full local benchmark sample."
-        ),
     )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args(argv)
@@ -60,9 +62,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    context = CycleContext.from_assignment_file(args.repo_root.resolve(), args.assignment)
+    repo_root = args.repo_root.resolve()
+    assignment_path = (
+        args.assignment
+        if args.assignment.is_absolute()
+        else repo_root / args.assignment
+    )
+    context = CycleContext.from_assignment_file(repo_root, assignment_path)
     next_cycle = args.next_cycle or increment_cycle_id(context.cycle_id)
-    candidate_id = args.candidate_id or context.candidate_id
+    candidate_id = validate_candidate_id(
+        args.candidate_id or context.candidate_id
+    )
     assignment = build_next_assignment(
         context,
         next_cycle,
@@ -86,84 +96,204 @@ def build_next_assignment(
     candidate_id: str,
     benchmark_suite: str | None = None,
 ) -> dict[str, object]:
-    previous_base = f"experiments/{context.cycle_id}"
+    """Dispatch next-assignment policy by the assignment's registered role."""
+
+    if not CYCLE_RE.fullmatch(next_cycle):
+        raise ValueError(f"invalid cycle id: {next_cycle!r}")
+    candidate_id = validate_candidate_id(candidate_id)
+    spec = get_coding_agent_spec(context.agent_name)
+    if context.paper_role != spec.paper_role:
+        raise ValueError(
+            f"assignment paper_role does not match {spec.name}: "
+            f"{context.paper_role!r}"
+        )
+
     current = dict(context.assignment)
     review = _read_previous_review(context)
-    champion = _build_champion_payload(context, review)
-    evidence = [
-        f"{previous_base}/impl_compare/comparison/impl_compare_summary.md",
-        f"{previous_base}/impl_compare/comparison/review_decision.json",
-        f"{previous_base}/impl_compare/comparison/cec_summary.csv",
-        f"{previous_base}/impl_compare/comparison/qor_delta.csv",
-        f"{previous_base}/impl_compare/{IMPL_CANDIDATE_LABEL}/patch.diff",
-        f"{previous_base}/agents/feedback/{context.candidate_id}.md",
-        f"{previous_base}/agents/rule_updates/{context.candidate_id}.md",
-    ]
     benchmark_payload = _next_benchmark_payload(
         context,
         current,
         benchmark_suite,
     )
+    common = _base_next_assignment(
+        context=context,
+        next_cycle=next_cycle,
+        candidate_id=candidate_id,
+        current=current,
+        review=review,
+        benchmark_payload=benchmark_payload,
+    )
+    if spec.name == FLOW_AGENT_NAME:
+        assignment = _build_next_flow_assignment(
+            context=context,
+            current=current,
+            common=common,
+            benchmark_payload=benchmark_payload,
+        )
+    elif spec.name == LOGIC_AGENT_NAME:
+        assignment = _build_next_logic_assignment(
+            context=context,
+            current=current,
+            common=common,
+            review=review,
+        )
+    else:  # registry currently exposes exactly the two coding roles
+        raise ValueError(f"unsupported next-cycle coding role: {spec.name!r}")
+    return normalize_coding_assignment(assignment)
 
-    # --- Planning engine integration (always active) ---
+
+def _base_next_assignment(
+    *,
+    context: CycleContext,
+    next_cycle: str,
+    candidate_id: str,
+    current: Mapping[str, Any],
+    review: Mapping[str, Any],
+    benchmark_payload: Mapping[str, object],
+) -> dict[str, object]:
+    evidence = _previous_evidence_paths(context)
+    assignment: dict[str, object] = {
+        "agent_name": context.agent_name,
+        "paper_role": context.paper_role,
+        "cycle_id": next_cycle,
+        "previous_cycle_id": context.cycle_id,
+        "candidate_id": candidate_id,
+        "subsystem": current.get("subsystem", ""),
+        "previous_review_decision": review.get("decision", "missing"),
+        "target_metric": current.get("target_metric", "and_count"),
+        "secondary_metrics": list(
+            current.get("secondary_metrics", ("depth", "runtime", "stability"))
+        ),
+        **benchmark_payload,
+        "allowed_to_read": list(evidence),
+        "recent_evidence": list(evidence),
+        "source_patch_mode": current.get(
+            "source_patch_mode", FLOW_CANDIDATE_SOURCE_PATCH_DIFF
+        ),
+        **_carried_role_fields(current),
+        **_carried_workflow_metadata(current),
+        **_build_champion_payload(context, review),
+    }
+    return assignment
+
+
+def _build_next_flow_assignment(
+    *,
+    context: CycleContext,
+    current: Mapping[str, Any],
+    common: Mapping[str, object],
+    benchmark_payload: Mapping[str, object],
+) -> dict[str, object]:
     engine = PlanningEngine(context.repo_root)
     plan_result = engine.plan(
         context.cycle_id,
         benchmark_count=promotion_benchmark_count(benchmark_payload) or None,
+        candidate_id=context.candidate_id,
+        artifact_layout=str(
+            context.assignment.get("artifact_layout", LEGACY_CYCLE_LAYOUT)
+        ),
     )
-    # Engine always returns a result — uses default strategy when no evidence.
-    assert plan_result is not None, "PlanningEngine.plan() must not return None"
-    planning_updates = engine.next_assignment_updates(plan_result)
+    if plan_result is None:
+        raise RuntimeError("PlanningEngine did not return a Flow planning result")
     if plan_result.strategy.should_skip_llm:
         print(
-            f"\n*** PLANNING ENGINE: recommend skipping LLM cycle {next_cycle}. "
+            "\n*** PLANNING ENGINE: recommend skipping this Flow model call. "
             f"Run batch_search targeting `{plan_result.strategy.target_command}` "
-            f"instead.\n"
+            "and feed measured evidence into Planning.\n"
         )
-
-    assignment = {
-        "agent_name": current.get("agent_name", "flow_agent"),
-        "paper_role": current.get("paper_role", "Flow Agent"),
-        "cycle_id": next_cycle,
-        "previous_cycle_id": context.cycle_id,
-        "candidate_id": candidate_id,
-        "subsystem": FLOWTUNE_SOURCE_SCOPE_PRIMARY,
-        "previous_review_decision": review.get("decision", "missing"),
-        "target_metric": current.get("target_metric", "and_count"),
-        "secondary_metrics": current.get(
-            "secondary_metrics", ["depth", "runtime", "stability"]
-        ),
-        **benchmark_payload,
-        "allowed_to_read": evidence,
-        "recent_evidence": evidence,
-        "source_patch_mode": FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+    return {
+        **common,
         "evolved_rules": _next_evolved_rules(current, plan_result),
-        **planning_updates,
-        **champion,
+        **engine.next_assignment_updates(plan_result),
     }
-    return normalize_flow_assignment_scope(assignment)
+
+
+def _build_next_logic_assignment(
+    *,
+    context: CycleContext,
+    current: Mapping[str, Any],
+    common: Mapping[str, object],
+    review: Mapping[str, Any],
+) -> dict[str, object]:
+    decision = str(review.get("decision", "missing"))
+    previous = str(current.get("planner_hypothesis", "")).strip()
+    hypothesis = (
+        f"Previous Logic candidate {context.candidate_id} finished with "
+        f"review decision {decision}. Trace one technology-independent "
+        "rewrite, refactor, or resubstitution decision and propose one narrow "
+        "source patch that is evaluated under the frozen CEC/QoR contract."
+    )
+    if previous:
+        hypothesis += f"\n\nPrevious Planning hypothesis:\n{previous}"
+    return {
+        **common,
+        "planner_hypothesis": hypothesis,
+        "evolved_rules": _next_logic_rules(current, review),
+    }
+
+
+def _previous_evidence_paths(context: CycleContext) -> tuple[str, ...]:
+    root = impl_compare_root(context).relative_to(context.repo_root).as_posix()
+    shared = f"experiments/{context.cycle_id}/agents"
+    return (
+        f"{root}/comparison/impl_compare_summary.md",
+        f"{root}/comparison/review_decision.json",
+        f"{root}/comparison/cec_summary.csv",
+        f"{root}/comparison/qor_delta.csv",
+        f"{root}/{IMPL_CANDIDATE_LABEL}/patch.diff",
+        f"{shared}/feedback/{context.candidate_id}.md",
+        f"{shared}/rule_updates/{context.candidate_id}.md",
+    )
+
+
+def _carried_role_fields(current: Mapping[str, Any]) -> dict[str, object]:
+    carried: dict[str, object] = {}
+    for key in (
+        "source_patch_allowed_roots",
+        "planner_approved_source_roots",
+        "planner_approved_new_source_files",
+        "planner_approved_build_metadata",
+        "evaluation_flow_commands",
+        "diagnostic_flow_commands",
+        "promotion_thresholds",
+        "flow_source_touchpoints",
+        "logic_source_touchpoints",
+        "planner_task_type",
+    ):
+        value = current.get(key)
+        if value not in (None, ""):
+            carried[key] = value
+    return carried
+
+
+def _carried_workflow_metadata(current: Mapping[str, Any]) -> dict[str, object]:
+    carried: dict[str, object] = {}
+    for key in (
+        "artifact_layout",
+        "portfolio_id",
+        "planner_dispatch_id",
+        "branch_role",
+        "evaluation_contract",
+        "evaluation_contract_hash",
+        "planner_advice_hash",
+        "planner_advice_source",
+        "baseline_ref",
+    ):
+        value = current.get(key)
+        if value not in (None, ""):
+            carried[key] = value
+    return carried
 
 
 def _next_benchmark_payload(
     context: CycleContext,
-    current: dict[str, Any],
+    current: Mapping[str, Any],
     benchmark_suite: str | None,
 ) -> dict[str, object]:
     suite = benchmark_suite or str(current.get("benchmark_suite", "")).strip()
     if suite and suite not in ("custom", "explicit"):
         scoped = apply_benchmark_suite(context.repo_root, current, suite)
-        return {
-            "benchmark_suite": suite,
-            "benchmark_scope": list(scoped.get("benchmark_scope", ())),
-            "evaluation_benchmark_scope": list(
-                scoped.get("evaluation_benchmark_scope", ())
-            ),
-            "unsupported_benchmark_scope": list(
-                scoped.get("unsupported_benchmark_scope", ())
-            ),
-            "benchmark_frontend": scoped.get("benchmark_frontend", "abc_native"),
-        }
-    if benchmark_suite:
+    elif benchmark_suite:
         scoped = with_abc_native_evaluation_scope(
             {
                 "benchmark_suite": benchmark_suite,
@@ -173,18 +303,8 @@ def _next_benchmark_payload(
                 ),
             }
         )
-        return {
-            "benchmark_suite": benchmark_suite,
-            "benchmark_scope": list(scoped.get("benchmark_scope", ())),
-            "evaluation_benchmark_scope": list(
-                scoped.get("evaluation_benchmark_scope", ())
-            ),
-            "unsupported_benchmark_scope": list(
-                scoped.get("unsupported_benchmark_scope", ())
-            ),
-            "benchmark_frontend": scoped.get("benchmark_frontend", "abc_native"),
-        }
-    scoped = with_abc_native_evaluation_scope(current)
+    else:
+        scoped = with_abc_native_evaluation_scope(current)
     return {
         "benchmark_suite": suite or "custom",
         "benchmark_scope": list(scoped.get("benchmark_scope", ())),
@@ -200,29 +320,21 @@ def _next_benchmark_payload(
 
 def _build_champion_payload(
     context: CycleContext,
-    review: dict[str, Any],
+    review: Mapping[str, Any],
 ) -> dict[str, object]:
-    """Return next-cycle baseline/champion fields.
-
-    Accepted candidates become the next cycle's source and binary baseline.
-    Non-promoted cycles keep the incoming champion, if one already exists.
-    """
-
     if str(review.get("decision", "")).strip() == "ACCEPT_FOR_NEXT_CYCLE":
         workspace = (
-            f"experiments/{context.cycle_id}/impl_compare/"
-            f"{IMPL_CANDIDATE_LABEL}/workspace"
-        )
+            impl_compare_root(context) / IMPL_CANDIDATE_LABEL / "workspace"
+        ).relative_to(context.repo_root).as_posix()
         source_root = f"{workspace}/third_party/FlowTune/src"
-        abc_bin = f"{source_root}/abc"
         return {
             "baseline_kind": "champion",
             "champion_cycle_id": context.cycle_id,
             "champion_candidate_id": context.candidate_id,
             "champion_source_root": source_root,
             "base_source_root": source_root,
-            "champion_abc_bin": abc_bin,
-            "baseline_abc_bin": abc_bin,
+            "champion_abc_bin": f"{source_root}/abc",
+            "baseline_abc_bin": f"{source_root}/abc",
         }
 
     carried: dict[str, object] = {}
@@ -244,14 +356,7 @@ def _build_champion_payload(
 
 
 def _read_previous_review(context: CycleContext) -> dict[str, Any]:
-    path = (
-        context.repo_root
-        / "experiments"
-        / context.cycle_id
-        / "impl_compare"
-        / "comparison"
-        / "review_decision.json"
-    )
+    path = impl_compare_root(context) / "comparison" / "review_decision.json"
     if not path.is_file():
         return {}
     try:
@@ -262,39 +367,63 @@ def _read_previous_review(context: CycleContext) -> dict[str, Any]:
 
 
 def _next_evolved_rules(
-    current: dict[str, Any],
+    current: Mapping[str, Any],
     plan_result: object,
 ) -> list[str]:
-    """Carry concise, evaluation-backed lessons into the active prompt."""
-
-    rules = [
-        str(item).strip()
-        for item in current.get("evolved_rules", ())
-        if str(item).strip()
-    ]
+    rules = _clean_rules(current.get("evolved_rules", ()))
     history = getattr(plan_result, "history", ())
     evidence = history[-1] if history else None
     if evidence is not None:
         target = getattr(evidence, "previous_patch_target", "") or "the prior target"
         if getattr(evidence, "is_champion", False):
             rules.append(
-                f"Preserve the correctness-backed champion mechanism from "
-                f"{getattr(evidence, 'cycle_id', 'the prior cycle')}; follow-up "
+                "Preserve the correctness-backed champion mechanism; follow-up "
                 "edits must compare against that incumbent."
             )
         elif getattr(evidence, "all_deltas_zero", False):
             rules.append(
                 f"The evaluated edit to {target} produced zero AND/depth "
-                "movement. Do not repeat the same mechanism without call-chain "
-                "or batch sensitivity evidence showing a changed decision."
+                "movement. Do not repeat it without changed-decision evidence."
             )
         elif int(getattr(evidence, "regressed_benchmark_count", 0)) > 0:
             rules.append(
-                f"The evaluated edit to {target} regressed at least one AND "
-                "row. Keep it out of the champion lineage and change the "
+                f"The evaluated edit to {target} regressed AND QoR. Change the "
                 "mechanism or add a general circuit-feature guard."
             )
+    return _deduplicate_tail(rules)
 
+
+def _next_logic_rules(
+    current: Mapping[str, Any],
+    review: Mapping[str, Any],
+) -> list[str]:
+    rules = _clean_rules(current.get("evolved_rules", ()))
+    decision = str(review.get("decision", ""))
+    if decision == "ACCEPT_FOR_NEXT_CYCLE":
+        rules.append(
+            "Preserve the accepted technology-independent optimization and "
+            "keep every follow-up change CEC-backed."
+        )
+    elif int(review.get("regressed_benchmark_count", 0) or 0) > 0:
+        rules.append(
+            "Do not repeat the regressing Logic mechanism without a structural "
+            "guard that is independent of benchmark identity."
+        )
+    elif int(review.get("unchanged_benchmark_count", 0) or 0) > 0:
+        rules.append(
+            "Demonstrate that the targeted Logic decision is reached and changes "
+            "the final AIG before repeating a zero-delta patch."
+        )
+    return _deduplicate_tail(rules)
+
+
+def _clean_rules(value: object) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _deduplicate_tail(rules: Sequence[str]) -> list[str]:
     deduplicated: list[str] = []
     for rule in rules:
         if rule not in deduplicated:
@@ -309,19 +438,53 @@ def write_next_assignment(
     assignment: dict[str, object],
     *,
     overwrite: bool,
+    allow_identical: bool = False,
 ) -> Path:
+    """Persist one normalized assignment without exposing a shared impl lane."""
+
+    repo_root = repo_root.resolve()
+    if not CYCLE_RE.fullmatch(cycle_id):
+        raise ValueError(f"invalid cycle id: {cycle_id!r}")
+    candidate_id = validate_candidate_id(candidate_id)
+    if str(assignment.get("cycle_id", "")) != cycle_id:
+        raise ValueError("assignment cycle_id does not match output cycle")
+    if str(assignment.get("candidate_id", "")) != candidate_id:
+        raise ValueError("assignment candidate_id does not match output path")
+    normalized = normalize_coding_assignment(assignment)
+    if str(normalized.get("cycle_id", "")) != cycle_id:
+        raise ValueError("assignment normalizer changed cycle_id")
+    if str(normalized.get("candidate_id", "")) != candidate_id:
+        raise ValueError("assignment normalizer changed candidate_id")
+    layout = str(normalized.get("artifact_layout", LEGACY_CYCLE_LAYOUT)).strip()
+    if layout not in SUPPORTED_LAYOUTS:
+        raise ValueError(f"unsupported artifact_layout: {layout!r}")
+
     cycle_dir = repo_root / "experiments" / cycle_id
     for relative in FLOW_CYCLE_DIRS:
+        if relative == "impl_compare" and layout == CANDIDATE_SCOPED_LAYOUT:
+            continue
         (cycle_dir / relative).mkdir(parents=True, exist_ok=True)
+    implementation_root_for(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        candidate_id=candidate_id,
+        layout=layout,
+    ).mkdir(parents=True, exist_ok=True)
+
     path = cycle_dir / "agents" / "assignments" / f"{candidate_id}.json"
+    serialized = json.dumps(normalized, indent=2, sort_keys=True) + "\n"
     if path.exists() and not overwrite:
+        if allow_identical and path.read_text(encoding="utf-8") == serialized:
+            return path
         raise FileExistsError(f"next assignment already exists: {path}")
-    path.write_text(json.dumps(assignment, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(serialized, encoding="utf-8")
+    temporary.replace(path)
     return path
 
 
 def increment_cycle_id(cycle_id: str) -> str:
-    match = CYCLE_RE.match(cycle_id)
+    match = CYCLE_RE.fullmatch(cycle_id)
     if not match:
         raise ValueError(f"invalid cycle id: {cycle_id}")
     width = len(match.group("number"))

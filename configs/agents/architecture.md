@@ -24,24 +24,29 @@ reproduction small enough to complete locally and then run remotely.
 - `scripts/agents/self_evolved_abc/coding_agents/flow_agent.py`: Flow Agent
   scaffold.
 - `scripts/agents/self_evolved_abc/coding_agents/logic_minimization_agent.py`:
-  Logic Minimization Agent scaffold.
+  executable Logic Minimization Agent with strict source-patch validation.
 - `scripts/agents/self_evolved_abc/coding_agents/mapper_agent.py`: Mapper Agent
   scaffold.
 - `scripts/agents/self_evolved_abc/shared/rulebase.py`: rulebase scaffold.
 - `scripts/agents/self_evolved_abc/model_client.py`: LLM API boundary.
-- `scripts/agents/self_evolved_abc/cycle_driver.py`: one-agent execution
-  entry point for a rendered assignment.
+- `scripts/agents/self_evolved_abc/workflow/dual_agent_loop.py`: primary
+  Planning -> (Flow || Logic) -> portfolio-review loop.
+- `scripts/agents/self_evolved_abc/cycle_driver.py`: legacy single-assignment
+  execution entry point used inside a candidate lane and by diagnostics.
 
 ## Data Flow
 
-1. `scripts/summarize_cycle.py` converts raw logs into structured evidence.
-2. `scripts/init_cycle.py` creates the next cycle assignment.
-3. `cycle_driver.py` loads the assignment and selects the paper-role agent.
-4. The selected agent reads evidence and renders a prompt from `configs/agents`.
-5. `model_client.py` sends the prompt to the configured model and returns JSON.
-6. The agent validates the JSON and writes cycle artifacts.
-7. The benchmark harness runs the candidate and stores logs/outputs/results.
-8. The review prompt decides acceptance, repair, rejection, or deferral.
+1. Planning reads the previous centralized review and frozen champion lineage.
+2. It writes one immutable Flow assignment and one immutable Logic assignment
+   with the same baseline and evaluation-contract hash.
+3. The two candidate pipelines render role prompts and call their coding agents
+   concurrently in non-overlapping source workspaces.
+4. Each lane validates its JSON/diff, compiles, runs full-scope CEC, evaluates
+   QoR, and writes a lineage-bound review plus branch manifest.
+5. The coordinator waits for both lanes and requires a strict review quorum.
+6. `portfolio_review.py` deterministically selects at most one winner; it never
+   merges the two source patches.
+7. Only the centralized winner may seed the next Planning round.
 
 ## Subsystem Boundaries
 
@@ -55,10 +60,10 @@ reproduction small enough to complete locally and then run remotely.
   - Legacy flow-recipe write: `configs/flows/` when `source_patch_mode` is
     `abc_flow`.
 - Logic Minimization Agent:
-  - Later-cycle source boundary: ABC/FlowTune AIG and command orchestration
-    modules under `third_party/FlowTune/src/`.
-  - No sequential behavior changes unless the planner creates a dedicated
-    sequential experiment.
+  - Default source boundary: `third_party/FlowTune/src/src/base/abci`.
+  - `opt/rwr`, `opt/res`, and `opt/dar` require explicit planner approval;
+    mapping and sequential roots are outside the role ceiling.
+  - No retiming, latch/register, initial-state, or other sequential changes.
 - Mapper Agent:
   - Later-cycle source boundary: mapper modules under
     `third_party/FlowTune/src/map/`.
@@ -75,3 +80,28 @@ reproduction small enough to complete locally and then run remotely.
 - Any skipped design must be listed with an explicit reason.
 - A candidate that improves one design by hard-coding names is rejected.
 - Rulebase updates must cite evidence from a cycle artifact.
+- Related repositories are pinned, profiled, indexed, and injected as read-only
+  prompt evidence; their paths never enter `allowed_to_edit`.
+
+## Pre-Evolution Knowledge Boundary
+
+```text
+repositories.json + checked-in profiles
+                 │
+                 ├─ bootstrap_agent_context.py ─ exact/clean/complete check
+                 │
+                 └─ repository_context.py ─ role/query ranking ─ hard budget
+                                                   │
+                                      EXTERNAL_REPOSITORY_CONTEXT
+```
+
+The manifest has a ten-repository bootstrap minimum. Planning receives all ten
+pinned profiles/code indexes, including the local FlowTune build source; Logic
+routes nine external references; Flow routes six. Coding prompts keep FlowTune
+in their separate local source index because it is also the compiled candidate
+tree. A checkout may
+contribute code only when its HEAD equals the full pinned commit, its focus
+paths exist, and `git status --porcelain` is empty. Otherwise the prompt labels
+the exact failure and includes only the tracked profile; strict minimum policy
+may stop model invocation. Repository text is untrusted data and cannot alter
+the agent role, edit scope, or validation gates.

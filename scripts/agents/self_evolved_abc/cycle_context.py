@@ -59,8 +59,15 @@ class CycleContext:
         return tuple(str(item) for item in self.assignment.get("recent_evidence", ()))
 
     def artifact_paths(self) -> AgentArtifactPaths:
+        # Imported lazily because workflow.artifacts uses CycleContext for its
+        # type-level path helpers.  Candidate ids become filenames here, so
+        # validate them before any artifact path is constructed.
+        from scripts.agents.self_evolved_abc.workflow.artifacts import (
+            validate_candidate_id,
+        )
+
         base = self.repo_root / "experiments" / self.cycle_id / "agents"
-        name = f"{self.candidate_id}.md"
+        name = f"{validate_candidate_id(self.candidate_id)}.md"
         return AgentArtifactPaths(
             plan=base / "plans" / name,
             candidate_change=base / "candidate_changes" / name,

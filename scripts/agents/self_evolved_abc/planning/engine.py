@@ -34,6 +34,7 @@ from scripts.agents.self_evolved_abc.planning.thresholds import (
     AdaptiveThresholds,
     propose_thresholds,
 )
+from scripts.agents.self_evolved_abc.workflow.artifacts import LEGACY_CYCLE_LAYOUT
 
 
 @dataclass
@@ -69,6 +70,8 @@ class PlanningEngine:
         previous_cycle_id: str,
         *,
         benchmark_count: int | None = None,
+        candidate_id: str = "candidate_001",
+        artifact_layout: str = LEGACY_CYCLE_LAYOUT,
     ) -> PlanningResult | None:
         """Plan the next cycle based on the previous cycle's evidence.
 
@@ -77,7 +80,10 @@ class PlanningEngine:
         cycles are correctly detected.
         """
         evidence = read_cycle_evidence(
-            self._repo_root, previous_cycle_id
+            self._repo_root,
+            previous_cycle_id,
+            candidate_id=candidate_id,
+            artifact_layout=artifact_layout,
         )
 
         next_cycle_id = _increment_cycle_id(previous_cycle_id)
@@ -85,13 +91,18 @@ class PlanningEngine:
 
         # Reconstruct cross-cycle history from persisted data
         history = _reconstruct_evidence_history(
-            self._repo_root, previous_cycle_id
+            self._repo_root,
+            previous_cycle_id,
+            candidate_id=candidate_id,
+            artifact_layout=artifact_layout,
         )
         if evidence is not None:
             history.append(evidence)
 
         strategies = _reconstruct_strategy_history(
-            self._repo_root, previous_cycle_id
+            self._repo_root,
+            previous_cycle_id,
+            candidate_id=candidate_id,
         )
 
         effective_benchmark_count = (
@@ -293,6 +304,9 @@ def planning_meta_from_result(result: PlanningResult) -> dict[str, object]:
 def _reconstruct_evidence_history(
     repo_root: Path,
     up_to_cycle: str,
+    *,
+    candidate_id: str = "candidate_001",
+    artifact_layout: str = LEGACY_CYCLE_LAYOUT,
 ) -> list[CycleEvidence]:
     """Read review decisions from all prior cycles to count champions."""
     history: list[CycleEvidence] = []
@@ -300,7 +314,12 @@ def _reconstruct_evidence_history(
     # Scan cycles before the current one
     for num in range(1, cycle_num):
         prior = _format_cycle_id(up_to_cycle, num)
-        ev = read_cycle_evidence(repo_root, prior)
+        ev = read_cycle_evidence(
+            repo_root,
+            prior,
+            candidate_id=candidate_id,
+            artifact_layout=artifact_layout,
+        )
         if ev is not None:
             history.append(ev)
     return history
@@ -309,13 +328,15 @@ def _reconstruct_evidence_history(
 def _reconstruct_strategy_history(
     repo_root: Path,
     up_to_cycle: str,
+    *,
+    candidate_id: str = "candidate_001",
 ) -> list[Strategy]:
     """Read _planning_meta through ``up_to_cycle`` to know tried commands."""
     strategies: list[Strategy] = []
     cycle_num = _cycle_number(up_to_cycle)
     for num in range(1, cycle_num + 1):
         prior = _format_cycle_id(up_to_cycle, num)
-        meta = _read_planning_meta(repo_root, prior)
+        meta = _read_planning_meta(repo_root, prior, candidate_id=candidate_id)
         if meta:
             strategies.append(
                 Strategy(
@@ -340,7 +361,10 @@ def _reconstruct_strategy_history(
 
 
 def _read_planning_meta(
-    repo_root: Path, cycle_id: str
+    repo_root: Path,
+    cycle_id: str,
+    *,
+    candidate_id: str = "candidate_001",
 ) -> dict[str, Any] | None:
     """Read _planning_meta from a cycle's assignment JSON."""
     path = (
@@ -349,7 +373,7 @@ def _read_planning_meta(
         / cycle_id
         / "agents"
         / "assignments"
-        / "candidate_001.json"
+        / f"{candidate_id}.json"
     )
     if not path.is_file():
         return None

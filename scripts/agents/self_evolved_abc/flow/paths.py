@@ -10,6 +10,7 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     IMPL_CANDIDATE_LABEL,
     IMPL_COMPARISON_LABEL,
 )
+from scripts.agents.self_evolved_abc.workflow.artifacts import implementation_root
 
 
 def cycle_dir(context: CycleContext) -> Path:
@@ -33,7 +34,7 @@ def results_dir(context: CycleContext) -> Path:
 
 
 def impl_compare_root(context: CycleContext) -> Path:
-    return cycle_dir(context) / "impl_compare"
+    return implementation_root(context)
 
 
 def impl_baseline_dir(context: CycleContext) -> Path:

@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize one experiment cycle skeleton.
-
-Without --benchmark flags, the assignment expands the selected benchmark
-suite.  The default suite is standard_30 (EPFL + ISCAS85 + ISCAS89, 30
-BLIF designs).  Use --benchmark-suite large_70 to include the Verilog slices
-under ISCAS99/ITC99/VTR/arithmetic as tracked benchmark scope as well.  The
-current direct-ABC evaluator records those Verilog paths as frontend-pending
-and uses the ABC-native subset for CEC-backed promotion.
-
-Example with explicit scope:
-    python3 -B scripts/init_cycle.py cycle_001 \\
-        --previous-cycle cycle_000 \\
-        --candidate-id candidate_001 \\
-        --agent-name flow_agent \\
-        --benchmark benchmarks/epfl/epfl_adder.blif \\
-        --benchmark benchmarks/epfl/epfl_bar.blif
-"""
+"""Create one role-scoped coding-agent cycle assignment."""
 
 from __future__ import annotations
 
@@ -24,6 +8,8 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Sequence
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -31,180 +17,168 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.agents.self_evolved_abc.benchmarks import (
     DEFAULT_BENCHMARK_SUITE,
-    apply_benchmark_suite,
     benchmark_suite_names,
-    expand_benchmark_suite,
-    promotion_benchmark_count,
-    with_abc_native_evaluation_scope,
 )
-from scripts.agents.self_evolved_abc.flow.assignment import (
-    FLOW_CYCLE_DIRS,
-    normalize_flow_assignment_scope,
-)
-from scripts.agents.self_evolved_abc.flow.promotion import (
-    DEFAULT_PROMOTION_THRESHOLDS,
-)
+from scripts.agents.self_evolved_abc.flow.assignment import FLOW_CYCLE_DIRS
 from scripts.agents.self_evolved_abc.flow.contracts import (
-    DEFAULT_EVAL_FLOW_COMMANDS,
-    FLOW_SOURCE_TOUCHPOINTS,
-    FLOWTUNE_ABCI_SCOPE,
-    FLOWTUNE_SOURCE_SCOPE_PRIMARY,
+    FLOW_CANDIDATE_ABC_FLOW,
+    FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+    FLOW_CANDIDATE_SOURCE_PATCH_TODO,
 )
-from scripts.agents.self_evolved_abc.planning.engine import PlanningEngine
+from scripts.agents.self_evolved_abc.planning.assignment_factory import (
+    build_initial_assignment,
+)
+from scripts.agents.self_evolved_abc.roles.registry import (
+    coding_agent_names,
+    get_coding_agent_spec,
+)
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    CANDIDATE_SCOPED_LAYOUT,
+    implementation_root_for,
+    validate_candidate_id,
+)
 
-CYCLE_RE = re.compile(r"^cycle_\d{3,}$")
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Initialize an experiment cycle.")
+CYCLE_RE = re.compile(r"^cycle_[0-9]{3,}$")
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Initialize a candidate-scoped coding-agent cycle."
+    )
     parser.add_argument("cycle_id", help="Cycle id such as cycle_001.")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--previous-cycle", default="cycle_000")
-    parser.add_argument("--candidate-id", default="candidate_001")
-    parser.add_argument("--agent-name", default="flow_agent")
-    parser.add_argument("--paper-role", default="Flow Agent")
-    parser.add_argument("--subsystem", default="configs/flows")
+    parser.add_argument(
+        "--candidate-id",
+        default=None,
+        help="Defaults to the registered role's candidate prefix plus _001.",
+    )
+    parser.add_argument(
+        "--agent-name",
+        choices=coding_agent_names(),
+        default="flow_agent",
+    )
     parser.add_argument("--target-metric", default="and_count")
     parser.add_argument(
         "--source-patch-mode",
-        default="source_patch_diff",
-        choices=("source_patch_diff", "abc_flow", "source_patch_todo"),
-        help="Which candidate kind the Flow Agent should produce.",
+        default=FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+        choices=(
+            FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+            FLOW_CANDIDATE_ABC_FLOW,
+            FLOW_CANDIDATE_SOURCE_PATCH_TODO,
+        ),
     )
     parser.add_argument(
         "--source-patch-allowed-root",
         dest="source_patch_allowed_roots",
         action="append",
         default=[],
-        help="Repository paths the model is allowed to patch. Repeatable.",
+        help="Repository path the coding agent may patch. Repeatable.",
     )
-    parser.add_argument("--with-assignment", action="store_true", default=True)
-    parser.add_argument("--no-assignment", dest="with_assignment", action="store_false")
-    parser.add_argument("--force", action="store_true")
-    parser.add_argument("--benchmark", action="append", default=())
+    parser.add_argument("--benchmark", action="append", default=[])
     parser.add_argument(
         "--benchmark-suite",
         choices=benchmark_suite_names(),
         default=DEFAULT_BENCHMARK_SUITE,
-        help=(
-            "Benchmark suite used when --benchmark is not supplied. "
-            "Use large_70 for the full local benchmark sample."
-        ),
     )
-    return parser.parse_args()
+    parser.add_argument("--no-assignment", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    return parser.parse_args(sys.argv[1:] if argv is None else argv)
+
 
 def validate_cycle_id(value: str) -> str:
-    if not CYCLE_RE.match(value):
-        raise ValueError(f"invalid cycle id: {value!r}; expected cycle_001 style")
-    return value
-
-def create_cycle_dirs(cycle_dir: Path) -> None:
-    for relative in FLOW_CYCLE_DIRS:
-        path = cycle_dir / relative
-        path.mkdir(parents=True, exist_ok=True)
-        gitkeep = path / ".gitkeep"
-        gitkeep.touch(exist_ok=True)
-        
-def build_assignment(args: argparse.Namespace) -> dict[str, object]:
-    previous = f"experiments/{args.previous_cycle}"
-    explicit_benchmarks = list(args.benchmark)
-    benchmarks = explicit_benchmarks or expand_benchmark_suite(
-        args.repo_root,
-        args.benchmark_suite,
-    )
-    source_patch_roots = list(args.source_patch_allowed_roots) or [
-        FLOWTUNE_SOURCE_SCOPE_PRIMARY,
-        FLOWTUNE_ABCI_SCOPE,
-    ]
-
-    assignment = {
-        "agent_name": args.agent_name,
-        "paper_role": args.paper_role,
-        "cycle_id": args.cycle_id,
-        "candidate_id": args.candidate_id,
-        "subsystem": args.subsystem,
-        "planner_hypothesis": (
-            "Use the previous cycle's QoR and skipped-case evidence to propose "
-            "one conservative flow candidate for a small benchmark subset."
-        ),
-        "target_metric": args.target_metric,
-        "secondary_metrics": ["depth", "runtime", "stability"],
-        "promotion_thresholds": DEFAULT_PROMOTION_THRESHOLDS.as_dict(),
-        "benchmark_suite": "custom" if explicit_benchmarks else args.benchmark_suite,
-        "benchmark_scope": benchmarks,
-        "allowed_to_read": [
-            f"{previous}/results/summary.csv",
-            f"{previous}/results/skipped.csv",
-            f"{previous}/results/run_notes.md",
-            f"{previous}/outputs",
-        ],
-        "recent_evidence": [
-            f"{previous}/results/summary.csv",
-            f"{previous}/results/skipped.csv",
-            f"{previous}/results/run_notes.md",
-        ],
-        "source_patch_mode": args.source_patch_mode,
-        "source_patch_allowed_roots": source_patch_roots,
-        "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
-        "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
-    }
-    if not explicit_benchmarks:
-        assignment = apply_benchmark_suite(
-            args.repo_root,
-            assignment,
-            args.benchmark_suite,
+    cycle_id = str(value).strip()
+    if not CYCLE_RE.fullmatch(cycle_id):
+        raise ValueError(
+            f"invalid cycle id: {value!r}; expected cycle_001 style"
         )
-    else:
-        assignment = with_abc_native_evaluation_scope(assignment)
-    assignment = normalize_flow_assignment_scope(assignment)
-    return _apply_initial_planning(args.repo_root, args.previous_cycle, assignment)
+    return cycle_id
 
 
-def _apply_initial_planning(
+def create_cycle_dirs(
     repo_root: Path,
-    previous_cycle_id: str,
-    assignment: dict[str, object],
-) -> dict[str, object]:
-    """Seed new Flow Agent assignments with deterministic planner output."""
+    *,
+    cycle_id: str,
+    candidate_id: str,
+) -> None:
+    """Create shared cycle directories and one isolated candidate lane."""
 
-    if assignment.get("agent_name") != "flow_agent":
-        return assignment
-    engine = PlanningEngine(repo_root)
-    result = engine.plan(
-        previous_cycle_id,
-        benchmark_count=promotion_benchmark_count(assignment) or None,
-    )
-    if result is None:
-        return assignment
-
-    planned = {
-        **assignment,
-        "previous_cycle_id": previous_cycle_id,
-        **engine.next_assignment_updates(result),
-    }
-    return normalize_flow_assignment_scope(planned)
-    
-def write_json(path: Path, payload: dict[str, object], *, overwrite: bool) -> None:
-    if path.exists() and not overwrite:
-        raise FileExistsError(f"assignment already exists: {path}")
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-def main() -> int:
-    args = parse_args()
-    repo_root = args.repo_root.resolve()
-    cycle_id = validate_cycle_id(args.cycle_id)
     cycle_dir = repo_root / "experiments" / cycle_id
+    for relative in FLOW_CYCLE_DIRS:
+        if relative == "impl_compare":
+            continue
+        (cycle_dir / relative).mkdir(parents=True, exist_ok=True)
+    implementation_root_for(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        candidate_id=candidate_id,
+        layout=CANDIDATE_SCOPED_LAYOUT,
+    ).mkdir(parents=True, exist_ok=True)
 
-    create_cycle_dirs(cycle_dir)
 
-    if args.with_assignment:
+def build_assignment(args: argparse.Namespace) -> dict[str, object]:
+    return build_initial_assignment(
+        repo_root=args.repo_root.resolve(),
+        cycle_id=args.cycle_id,
+        previous_cycle_id=args.previous_cycle,
+        candidate_id=args.candidate_id,
+        agent_name=args.agent_name,
+        target_metric=args.target_metric,
+        source_patch_mode=args.source_patch_mode,
+        source_patch_allowed_roots=args.source_patch_allowed_roots,
+        benchmarks=args.benchmark,
+        benchmark_suite=args.benchmark_suite,
+        extra_fields={"artifact_layout": CANDIDATE_SCOPED_LAYOUT},
+    )
+
+
+def write_json(
+    path: Path,
+    payload: dict[str, object],
+    *,
+    overwrite: bool,
+) -> None:
+    serialized = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if path.exists() and not overwrite:
+        if path.read_text(encoding="utf-8") == serialized:
+            return
+        raise FileExistsError(f"assignment already exists: {path}")
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(serialized, encoding="utf-8")
+    temporary.replace(path)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    args.repo_root = args.repo_root.resolve()
+    args.cycle_id = validate_cycle_id(args.cycle_id)
+    args.previous_cycle = validate_cycle_id(args.previous_cycle)
+    spec = get_coding_agent_spec(args.agent_name)
+    args.candidate_id = validate_candidate_id(
+        args.candidate_id or f"{spec.candidate_prefix}_001"
+    )
+    create_cycle_dirs(
+        args.repo_root,
+        cycle_id=args.cycle_id,
+        candidate_id=args.candidate_id,
+    )
+
+    if not args.no_assignment:
         assignment = build_assignment(args)
-        assignment_path = (
-            cycle_dir / "agents" / "assignments" / f"{args.candidate_id}.json"
+        path = (
+            args.repo_root
+            / "experiments"
+            / args.cycle_id
+            / "agents"
+            / "assignments"
+            / f"{args.candidate_id}.json"
         )
-        write_json(assignment_path, assignment, overwrite=args.force)
+        write_json(path, assignment, overwrite=args.force)
 
-    print(f"initialized: {cycle_dir}")
+    print(f"initialized: {args.repo_root / 'experiments' / args.cycle_id}")
     return 0
-    
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

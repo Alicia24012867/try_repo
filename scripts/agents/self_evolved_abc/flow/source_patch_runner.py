@@ -1,4 +1,4 @@
-"""Source patch implementation setup, patch recording, and smoke gating.
+"""Coding-agent source patch setup, patch recording, and smoke gating.
 
 S4a records the baseline and candidate implementation identities. S4b records a
 reviewed source patch already present in the working tree as a patch diff. S4c
@@ -10,10 +10,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -39,6 +41,7 @@ from scripts.agents.self_evolved_abc.flow.lineage import (
 )
 from scripts.agents.self_evolved_abc.flow.paths import (
     candidate_workspace_root,
+    impl_candidate_dir,
     impl_compare_root,
     repo_path,
     repo_relative_path,
@@ -676,10 +679,11 @@ def validate_source_patch_targets(
     context: CycleContext,
     target_paths: tuple[str, ...],
 ) -> None:
-    """Validate S4b target files stay in the first source-patch scope."""
+    """Validate S4b targets against the exact assignment-owned source roots."""
 
-    allowed_roots = tuple(
-        context.resolve_repo_path(root) for root in SOURCE_PATCH_ALLOWED_ROOTS
+    allowed_roots = _assignment_source_roots(
+        context,
+        fallback=SOURCE_PATCH_ALLOWED_ROOTS,
     )
     assignment_roots = tuple(
         context.resolve_repo_path(str(root))
@@ -916,10 +920,11 @@ def validate_source_patch_diff_targets(
     context: CycleContext,
     target_paths: tuple[str, ...],
 ) -> None:
-    """Validate S4d target files stay in Flow Agent source-patch scope."""
+    """Validate S4d targets against the exact assignment-owned source roots."""
 
-    allowed_roots = tuple(
-        context.resolve_repo_path(root) for root in SOURCE_PATCH_DIFF_ALLOWED_ROOTS
+    allowed_roots = _assignment_source_roots(
+        context,
+        fallback=SOURCE_PATCH_DIFF_ALLOWED_ROOTS,
     )
     assignment_roots = tuple(
         context.resolve_repo_path(str(root))
@@ -942,13 +947,7 @@ def validate_source_patch_diff_targets(
 
 
 def validate_workspace_root(context: CycleContext, workspace_root: Path) -> None:
-    expected_root = (
-        context.repo_root
-        / "experiments"
-        / context.cycle_id
-        / "impl_compare"
-        / "candidate_modified"
-    ).resolve()
+    expected_root = impl_candidate_dir(context).resolve()
     resolved = workspace_root.resolve()
     if not _path_is_under_or_equal(resolved, expected_root):
         raise ValueError(
@@ -1158,14 +1157,20 @@ def run_python_smoke_gate(context: CycleContext) -> BuildGateResult:
         *(str(path) for path in relative_files),
     )
     log_lines.append(f"command: {shlex.join(command)}")
-    completed = subprocess.run(
-        command,
-        cwd=context.repo_root,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
+    # macOS system Python may redirect bytecode into a protected user cache
+    # even with ``-B`` when ``py_compile`` is invoked explicitly.  Give the
+    # syntax gate a disposable cache so it is hermetic in sandboxes and leaves
+    # neither the repository nor the user's global cache dirty.
+    with tempfile.TemporaryDirectory(prefix="self_evolved_abc_pycache_") as cache:
+        completed = subprocess.run(
+            command,
+            cwd=context.repo_root,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            env={**os.environ, "PYTHONPYCACHEPREFIX": cache},
+        )
     log_lines.append(f"return_code: {completed.returncode}")
     if completed.stdout:
         log_lines.extend(completed.stdout.rstrip().splitlines())
@@ -1298,6 +1303,24 @@ def _absolute_maybe_repo_path(context: CycleContext, path: Path) -> Path:
 def _path_text_is_under(path_text: str, root: Path) -> bool:
     path = Path(path_text)
     return path == root or root in path.parents
+
+
+def _assignment_source_roots(
+    context: CycleContext,
+    *,
+    fallback: Sequence[str],
+) -> tuple[Path, ...]:
+    """Resolve role-owned patch roots, falling back only for old assignments."""
+
+    configured = tuple(
+        str(value).strip()
+        for value in context.assignment.get("source_patch_allowed_roots", ())
+        if str(value).strip()
+    )
+    values = configured or tuple(fallback)
+    if not values:
+        raise ValueError("assignment does not declare source_patch_allowed_roots")
+    return tuple(context.resolve_repo_path(value) for value in values)
 
 
 def _path_is_under_or_equal(path: Path, allowed_root: Path) -> bool:

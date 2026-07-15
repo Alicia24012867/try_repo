@@ -39,7 +39,6 @@ SOURCE_PATCH_TARGET_SECTION = "Proposed Target Files"
 SMOKE_GATE_COMMAND_LABEL = "python_smoke_gate"
 CANDIDATE_BINARY_BUILD_COMMAND_LABEL = "flowtune_candidate_make"
 CANDIDATE_BUILD_READY_STATUSES = (
-    "build_smoke_passed",
     "candidate_binary_build_passed",
 )
 
@@ -128,11 +127,24 @@ PYTHON_SMOKE_FILES = (
     "scripts/agents/self_evolved_abc/flow/iteration_loop.py",
     "scripts/agents/self_evolved_abc/flow/next_cycle.py",
     "scripts/agents/self_evolved_abc/flow/review.py",
+    "scripts/agents/self_evolved_abc/logic/contracts.py",
+    "scripts/agents/self_evolved_abc/logic/assignment.py",
+    "scripts/agents/self_evolved_abc/roles/registry.py",
+    "scripts/agents/self_evolved_abc/planning/assignment_factory.py",
+    "scripts/agents/self_evolved_abc/planning/portfolio.py",
+    "scripts/agents/self_evolved_abc/workflow/artifacts.py",
+    "scripts/agents/self_evolved_abc/workflow/branch_run.py",
+    "scripts/agents/self_evolved_abc/workflow/candidate_pipeline.py",
+    "scripts/agents/self_evolved_abc/workflow/dual_agent_loop.py",
+    "scripts/agents/self_evolved_abc/workflow/evaluation_recipe.py",
+    "scripts/agents/self_evolved_abc/workflow/portfolio_review.py",
     "scripts/agents/self_evolved_abc/flow_runner.py",
     "scripts/agents/self_evolved_abc/flow_evaluation.py",
     "scripts/agents/self_evolved_abc/cycle_context.py",
     "scripts/agents/self_evolved_abc/coding_agents/flow_agent.py",
+    "scripts/agents/self_evolved_abc/coding_agents/logic_minimization_agent.py",
     "scripts/agents/self_evolved_abc/cycle_driver.py",
+    "scripts/agents/self_evolved_abc/planning_agent.py",
 )
 
 VALIDATION_FIXTURE_EXPECTATIONS = (

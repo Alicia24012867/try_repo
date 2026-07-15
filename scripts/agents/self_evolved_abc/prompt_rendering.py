@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Mapping
 
 PLACEHOLDER_RE = re.compile(r"{{\s*([A-Z0-9_]+)\s*}}")
+DOTENV_PATH_RE = re.compile(r"(?<![A-Za-z0-9_])\.env(?:\b|/)")
+EXPLICIT_SECRET_MARKERS = ("EDA_AGENT_MODEL_API_KEY", "API_KEY")
 
 def load_template(repo_root: Path, relative_path: str) -> str:
     path = (repo_root / relative_path).resolve()
@@ -27,6 +29,20 @@ def render_template(template: str, values: Mapping[str, object]) -> str:
 
 def find_unresolved_placeholders(text: str) -> tuple[str, ...]:
     return tuple(sorted(set(PLACEHOLDER_RE.findall(text))))
+
+def find_forbidden_secret_markers(text: str) -> tuple[str, ...]:
+    """Find configuration-secret markers without matching ``os.environ``.
+
+    A literal ``.env`` path is forbidden in a rendered prompt.  A substring
+    search was too broad once pinned EQY code introduced legitimate
+    ``os.environ`` calls into the prior-knowledge index.
+    """
+
+    leaked: list[str] = []
+    if DOTENV_PATH_RE.search(text):
+        leaked.append(".env")
+    leaked.extend(marker for marker in EXPLICIT_SECRET_MARKERS if marker in text)
+    return tuple(leaked)
 
 def compact_text_block(label: str, text: str, max_chars: int = 6000) -> str:
     cleaned = text.strip()

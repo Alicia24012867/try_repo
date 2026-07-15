@@ -18,6 +18,12 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
 from scripts.agents.self_evolved_abc.flow.promotion import (
     DEFAULT_PROMOTION_THRESHOLDS,
 )
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    CANDIDATE_SCOPED_LAYOUT,
+    LEGACY_CYCLE_LAYOUT,
+    SUPPORTED_LAYOUTS,
+    validate_candidate_id,
+)
 
 
 FLOW_CYCLE_DIRS = (
@@ -41,15 +47,28 @@ FLOW_SOURCE_PATCH_MODES = (
 )
 
 
-def flow_cycle_write_roots(cycle_id: str) -> tuple[str, ...]:
+def flow_cycle_write_roots(
+    cycle_id: str,
+    *,
+    candidate_id: str = "",
+    artifact_layout: str = LEGACY_CYCLE_LAYOUT,
+) -> tuple[str, ...]:
     """Return roots the runner may populate for one active cycle."""
 
+    if artifact_layout not in SUPPORTED_LAYOUTS:
+        raise ValueError(f"unsupported artifact_layout: {artifact_layout!r}")
+    implementation_root = f"experiments/{cycle_id}/impl_compare"
+    if artifact_layout == CANDIDATE_SCOPED_LAYOUT:
+        implementation_root = (
+            f"experiments/{cycle_id}/candidates/"
+            f"{validate_candidate_id(candidate_id)}/impl_compare"
+        )
     return (
         f"experiments/{cycle_id}/agents",
         f"experiments/{cycle_id}/logs",
         f"experiments/{cycle_id}/outputs",
         f"experiments/{cycle_id}/results",
-        f"experiments/{cycle_id}/impl_compare",
+        implementation_root,
     )
 
 
@@ -83,12 +102,28 @@ def build_flow_allowed_to_edit(
     subsystem: object | None,
     source_patch_allowed_roots: Iterable[object] = (),
     existing: Iterable[object] = (),
+    candidate_id: str = "",
+    artifact_layout: str = LEGACY_CYCLE_LAYOUT,
 ) -> tuple[str, ...]:
     """Build an ordered, de-duplicated edit scope for Flow Agent work."""
 
-    existing_paths = tuple(existing)
+    legacy_impl_root = f"experiments/{cycle_id}/impl_compare"
+    candidate_impl_prefix = f"experiments/{cycle_id}/candidates/"
+    existing_paths = tuple(
+        path
+        for path in existing
+        if str(path).rstrip("/") != legacy_impl_root
+        and not (
+            str(path).startswith(candidate_impl_prefix)
+            and str(path).rstrip("/").endswith("/impl_compare")
+        )
+    )
     roots: list[object] = [
-        *flow_cycle_write_roots(cycle_id),
+        *flow_cycle_write_roots(
+            cycle_id,
+            candidate_id=candidate_id,
+            artifact_layout=artifact_layout,
+        ),
         "configs/flows",
         canonical_flow_subsystem(mode, subsystem),
     ]
@@ -123,6 +158,10 @@ def normalize_flow_assignment_scope(
         payload.get("source_patch_allowed_roots", ()),
     )
     subsystem = canonical_flow_subsystem(mode, payload.get("subsystem"))
+    candidate_id = str(payload.get("candidate_id", "")).strip()
+    artifact_layout = str(
+        payload.get("artifact_layout", LEGACY_CYCLE_LAYOUT)
+    ).strip()
 
     payload["source_patch_mode"] = mode
     payload["subsystem"] = subsystem
@@ -131,6 +170,15 @@ def normalize_flow_assignment_scope(
     payload.setdefault("evaluation_flow_commands", list(DEFAULT_EVAL_FLOW_COMMANDS))
     payload.setdefault("flow_source_touchpoints", dict(FLOW_SOURCE_TOUCHPOINTS))
     payload.setdefault("promotion_thresholds", DEFAULT_PROMOTION_THRESHOLDS.as_dict())
+    payload.setdefault(
+        "repository_context_manifest",
+        "configs/agents/context/repositories.json",
+    )
+    payload.setdefault("repository_context_max_repositories", 6)
+    payload.setdefault("repository_context_files_per_repository", 3)
+    payload.setdefault("repository_context_max_chars", 60_000)
+    payload.setdefault("repository_context_min_available", 6)
+    payload.setdefault("repository_context_enforce_minimum", True)
 
     if cycle_id:
         payload["allowed_to_edit"] = list(
@@ -140,6 +188,8 @@ def normalize_flow_assignment_scope(
                 subsystem=subsystem,
                 source_patch_allowed_roots=source_roots,
                 existing=payload.get("allowed_to_edit", ()),
+                candidate_id=candidate_id,
+                artifact_layout=artifact_layout,
             )
         )
     return payload

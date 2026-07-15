@@ -13,6 +13,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    LEGACY_CYCLE_LAYOUT,
+    implementation_root_for,
+)
+
 
 @dataclass(frozen=True)
 class CycleEvidence:
@@ -152,12 +157,18 @@ def read_cycle_evidence(
     cycle_id: str,
     *,
     candidate_id: str = "candidate_001",
+    artifact_layout: str = LEGACY_CYCLE_LAYOUT,
 ) -> CycleEvidence | None:
     """Read structured evidence from one completed cycle's impl_compare directory.
 
     Returns None when the review_decision.json is missing (cycle not yet evaluated).
     """
-    impl_dir = repo_root / "experiments" / cycle_id / "impl_compare"
+    impl_dir = implementation_root_for(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        candidate_id=candidate_id,
+        layout=artifact_layout,
+    )
     review_path = impl_dir / "comparison" / "review_decision.json"
     if not review_path.is_file():
         return None

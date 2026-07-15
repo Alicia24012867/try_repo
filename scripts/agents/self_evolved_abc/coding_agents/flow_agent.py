@@ -12,6 +12,7 @@ from scripts.agents.self_evolved_abc.flow.artifacts import (
 from scripts.agents.self_evolved_abc.flow.contracts import (
     DEFAULT_EVAL_FLOW_COMMANDS,
     FLOW_SOURCE_TOUCHPOINTS,
+    IMPL_CANDIDATE_LABEL,
 )
 from scripts.agents.self_evolved_abc.flow.lineage import source_context_path
 from scripts.agents.self_evolved_abc.flow.materialization import (
@@ -24,17 +25,25 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
 from scripts.agents.self_evolved_abc.model_client import ModelInvocation, ModelReply
 from scripts.agents.self_evolved_abc.prompt_rendering import (
     compact_text_block,
+    find_forbidden_secret_markers,
     find_unresolved_placeholders,
     load_template,
     render_template,
     summarize_csv,
     summarize_flow_scripts,
 )
+from scripts.agents.self_evolved_abc.repository_context import (
+    build_repository_context,
+)
 from scripts.agents.self_evolved_abc.flow.validation import (
     flow_response_json_schema,
     validate_flow_agent_response,
 )
 from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
+from scripts.agents.self_evolved_abc.workflow.artifacts import (
+    LEGACY_CYCLE_LAYOUT,
+    implementation_root_for,
+)
 
 
 FLOW_SOURCE_CONTEXT_COMMON_KEY_SUFFIXES = (
@@ -168,6 +177,21 @@ class FlowAgent(CodingAgent):
         summary_path = repo_root / "experiments" / previous_cycle / "results/summary.csv"
         skipped_path = repo_root / "experiments" / previous_cycle / "results/skipped.csv"
         run_notes_path = repo_root / "experiments" / previous_cycle / "results/run_notes.md"
+        repository_context = build_repository_context(
+            repo_root,
+            assignment,
+            role=self.agent_name,
+        )
+        minimum_context = int(assignment.get("repository_context_min_available", 0))
+        if (
+            bool(assignment.get("repository_context_enforce_minimum", False))
+            and repository_context.available_count < minimum_context
+        ):
+            raise ValueError(
+                "Flow Agent repository context is incomplete: "
+                f"{repository_context.available_count}/{minimum_context} pinned "
+                "repositories are ready; run scripts/bootstrap_agent_context.py"
+            )
 
         return {
             "REPO_ROOT": repo_root,
@@ -183,6 +207,7 @@ class FlowAgent(CodingAgent):
             "PROGRAMMING_GUIDANCE": load_template(
                 repo_root, "configs/agents/shared/programming_guidance.md"
             ),
+            "EXTERNAL_REPOSITORY_CONTEXT": repository_context.text,
             "RULEBASE": self._format_rulebase(assignment),
             "COMPILE_OR_RUNTIME_LOGS": self._runtime_context(evidence),
             "SOURCE_FILES": self._source_file_context(),
@@ -256,22 +281,9 @@ class FlowAgent(CodingAgent):
 
     def _cec_context(self, previous_cycle: str) -> str:
         """Read actual CEC summary from the previous cycle's impl_compare."""
-        cec_path = (
-            self.context.repo_root
-            / "experiments"
-            / previous_cycle
-            / "impl_compare"
-            / "comparison"
-            / "cec_summary.csv"
-        )
-        review_path = (
-            self.context.repo_root
-            / "experiments"
-            / previous_cycle
-            / "impl_compare"
-            / "comparison"
-            / "review_decision.json"
-        )
+        comparison = self._previous_impl_root(previous_cycle) / "comparison"
+        cec_path = comparison / "cec_summary.csv"
+        review_path = comparison / "review_decision.json"
         parts: list[str] = []
         if cec_path.exists():
             parts.append(summarize_csv(cec_path, max_rows=20, max_chars=6000))
@@ -425,20 +437,21 @@ class FlowAgent(CodingAgent):
             )
         }
         champion_cycle = str(assignment.get("champion_cycle_id", "")).strip()
-        sources: list[tuple[str, str]] = []
+        sources: list[tuple[str, str, str]] = []
         if champion_cycle:
-            sources.append((champion_cycle, "candidate"))
-        sources.append((previous_cycle, "baseline"))
-
-        for cycle_id, side in sources:
-            path = (
-                self.context.repo_root
-                / "experiments"
-                / cycle_id
-                / "impl_compare"
-                / "comparison"
-                / "qor_delta.csv"
+            sources.append(
+                (
+                    champion_cycle,
+                    "candidate",
+                    str(assignment.get("champion_candidate_id", self.context.candidate_id)),
+                )
             )
+        sources.append((previous_cycle, "baseline", self.context.candidate_id))
+
+        for cycle_id, side, candidate_id in sources:
+            path = self._previous_impl_root(
+                cycle_id, candidate_id=candidate_id
+            ) / "comparison" / "qor_delta.csv"
             if not path.is_file():
                 continue
             try:
@@ -502,13 +515,7 @@ class FlowAgent(CodingAgent):
         legacy_skipped_path: Path,
         legacy_run_notes_path: Path,
     ) -> str:
-        comparison = (
-            self.context.repo_root
-            / "experiments"
-            / previous_cycle
-            / "impl_compare"
-            / "comparison"
-        )
+        comparison = self._previous_impl_root(previous_cycle) / "comparison"
         qor_delta = comparison / "qor_delta.csv"
         review = comparison / "review_decision.json"
         if qor_delta.is_file():
@@ -530,20 +537,22 @@ class FlowAgent(CodingAgent):
 
     def _previous_candidate_context(self, previous_cycle: str) -> str:
         base = self.context.repo_root / "experiments" / previous_cycle
+        impl_root = self._previous_impl_root(previous_cycle)
+        candidate_id = self.context.candidate_id
         paths = (
             (
                 "applied_patch",
-                base / "impl_compare" / "candidate_modified" / "patch.diff",
+                impl_root / IMPL_CANDIDATE_LABEL / "patch.diff",
                 10000,
             ),
             (
                 "agent_source_patch",
-                base / "agents" / "source_patches" / "candidate_001.diff",
+                base / "agents" / "source_patches" / f"{candidate_id}.diff",
                 10000,
             ),
             (
                 "agent_feedback",
-                base / "agents" / "feedback" / "candidate_001.md",
+                base / "agents" / "feedback" / f"{candidate_id}.md",
                 7000,
             ),
         )
@@ -555,6 +564,23 @@ class FlowAgent(CodingAgent):
         if blocks:
             return "\n\n".join(blocks)
         return self._previous_flow_context(previous_cycle)
+
+    def _previous_impl_root(
+        self,
+        cycle_id: str,
+        *,
+        candidate_id: str | None = None,
+    ) -> Path:
+        return implementation_root_for(
+            repo_root=self.context.repo_root,
+            cycle_id=cycle_id,
+            candidate_id=candidate_id or self.context.candidate_id,
+            layout=str(
+                self.context.assignment.get(
+                    "artifact_layout", LEGACY_CYCLE_LAYOUT
+                )
+            ),
+        )
 
     def _format_regression_threshold(self, assignment: Mapping[str, Any]) -> str:
         thresholds = normalize_promotion_thresholds(
@@ -796,8 +822,7 @@ class FlowAgent(CodingAgent):
                 + ", ".join(unresolved)
             )
 
-        forbidden = (".env", "API_KEY", "EDA_AGENT_MODEL_API_KEY")
-        leaked = [item for item in forbidden if item in prompt]
+        leaked = find_forbidden_secret_markers(prompt)
         if leaked:
             raise ValueError("rendered prompt contains forbidden secret markers.")
 

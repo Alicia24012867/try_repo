@@ -3,11 +3,11 @@
 Small-scale reproduction workspace for the paper "Autonomous Evolution of EDA
 Tools: Multi-Agent Self-Evolved ABC".
 
-The current objective is to reproduce the paper's closed-loop Flow Agent
-self-evolution: an LLM proposes source-level changes to the FlowTune ABC
-subsystem, the candidate binary is built in an isolated workspace, CEC-first
-implementation comparison validates correctness, and structured feedback drives
-the next iteration — all without human intervention.
+The project reproduces the paper's closed-loop coding-agent evolution. The
+current phase implements the Logic Minimization Agent alongside the existing
+Flow Agent: an LLM proposes a scoped source diff, the candidate binary is built
+in an isolated workspace, CEC-first comparison validates correctness, and
+structured feedback drives the next iteration.
 
 ## Current Status
 
@@ -16,39 +16,75 @@ the next iteration — all without human intervention.
   across EPFL, ISCAS, ITC/VTR, and arithmetic families. The current ABC-native
   S5/F7 runner evaluates the 30 BLIF designs for CEC-backed promotion and
   records the 40 Verilog designs as frontend-pending.
-- **Planning Agent implemented** — deterministic planning engine selects strategy,
-  target command, source directory, and adaptive thresholds for each cycle.
-- **Planning Agent wired into execution** — `init_cycle.py`, `cycle_loop
-  --auto-resume`, and `next_cycle.py` now seed assignments with deterministic
-  planning metadata before the Flow Agent is called.
-- The Flow Agent source-patch feedback loop is wired and locally smoke-tested:
-  - Model proposes `source_patch_diff` targeting real FlowTune C source.
-  - Patch is applied in an isolated workspace, binary built, CEC run.
-  - Review decision is generated, and evidence feeds into the next cycle.
-  - Planning Engine generates `planner_hypothesis` with adaptive thresholds.
-  - Prompt source context follows the planner-selected command and includes
-    targeted source excerpts around reachable command functions.
-  - Multi-cycle loop (`cycle_loop.py`) auto-resumes from the last completed
-    cycle — no manual trigger needed.
-- Assignment scope is normalized through `flow/assignment.py`, so
-  `source_patch_diff` cycles consistently allow FlowTune `opt/`, the relevant
-  `base/abci/` command wrappers, and active-cycle artifact directories while
-  blocking model-written changes to prompts or evaluation harness code.
-- `run.sh` is the one-command entry point: `bash run.sh` on a Linux/ABC host
-  starts the full autonomous loop. Planner skip decisions now trigger a
-  deterministic `flow_wide` probe batch automatically; the winner and
-  sensitivity table are written back into the pending assignment before any
-  further model call.
-- Validation failures are retried with diagnostic feedback, and review
-  decisions distinguish *why* a build failed (validation, patch, smoke,
-  compile) rather than collapsing everything into `REPAIR_BUILD`.
-- Logic Minimization Agent and Mapper Agent are placeholders for later phases.
+- **Planning Agent implemented as the round coordinator** — one model or
+  deterministic Planning call freezes exactly two assignments on one baseline:
+  `flow_candidate_001` and `logic_candidate_001`. Planner advice is persisted
+  and hash-bound to both assignments.
+- **Flow and Logic run concurrently in isolated candidate lanes** — Flow owns
+  `third_party/FlowTune/src/src/opt`; Logic owns
+  `third_party/FlowTune/src/src/base/abci`. Neither lane can write the other's
+  source or silently merge patches.
+- **All-settled fan-in and strict quorum are implemented** — one branch failure
+  does not cancel its sibling, but both candidate reviews must be complete,
+  lineage-valid, full-scope CEC-backed results before the centralized portfolio
+  review can select a winner or generate the next Planning round.
+- `run.sh` is the one-command Linux entry point. It first checks all pinned
+  prior-knowledge repositories, then launches the resumable
+  `Planning -> (Flow || Logic) -> portfolio review` loop.
+- **Logic Minimization Agent implemented** — strict `src/base/abci` role
+  boundary, reachable rewrite/refactor/resub/balance/`dc2` source context,
+  isolated diff materialization, distinct-binary compile→CEC→QoR contract,
+  dynamic cycle dispatch, and reviewer-driven next-cycle rules. Upstream
+  `orchestrate` remains profiled but is not auto-targeted because the pinned
+  FlowTune fork does not register that command.
+- **Paper-style repository profiling expanded to ten pinned repositories** —
+  Berkeley ABC, FlowTune, mockturtle, LSOracle, Yosys,
+  OpenROAD-flow-scripts, kitty, alice, CUDD, and EQY provide complementary
+  source/API, Boolean reasoning, orchestration, metrics, and equivalence priors.
+  Planning receives all ten; Logic receives nine external references; Flow
+  receives six. Dirty, incomplete, or wrong-revision checkouts cannot inject
+  code, and bootstrap verification requires all ten trees.
+- Mapper Agent remains a placeholder for a later phase.
 - Diagnostic script (`scripts/diagnose_cycles.py`) collects per-cycle
   evidence (review, CEC, QoR deltas) into a JSON bundle for local analysis.
 
 Local macOS development is used for editing, prompt/schema validation, and
 Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
 QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
+
+## Repository Knowledge Bootstrap
+
+The paper makes repository knowledge a first-class cycle-0 input: it profiles
+ABC and related repositories before evolution, supplies the resulting profile
+and structured Markdown tutorial to the agents, and reports that 68% of token
+use went to ABC profiling plus 11% to external repositories. This project uses
+a reproducible bounded version of that process rather than relying on repository
+names or live web search.
+
+- Ten repositories are pinned by full commit in
+  `configs/agents/context/repositories.json`.
+- The added priors cover truth-table/decomposition (`kitty`), command/state
+  interfaces (`alice`), BDD/cofactor/resource discipline (`CUDD`), and formal
+  proof orchestration (`EQY`) in addition to the original ABC/flow references.
+- Role-specific hard budgets are 96,000 characters for Planning, 72,000 for
+  Logic, and 60,000 for Flow. Source windows are query-ranked and emitted
+  round-robin so one repository cannot consume the whole budget.
+- Source text is accepted only from an exact, clean checkout with complete
+  focus paths. Missing, dirty, incomplete, or wrong-revision repositories use
+  their tracked profile only; strict minimum enforcement stops the model call.
+- All manifest, profile, checkout, focus, and scanned-file paths are confined
+  to this project. Reference paths never enter candidate write scope.
+
+```bash
+# Provision exact commits (network access required only when absent).
+python3 -B scripts/bootstrap_agent_context.py
+
+# Read-only reproducibility preflight.
+python3 -B scripts/bootstrap_agent_context.py --check
+```
+
+See `configs/agents/context/README.md` for the repository matrix, licenses,
+budget controls, failure modes, and one-repository check/refresh commands.
 
 ## Why No Champion Happens
 
@@ -119,21 +155,24 @@ try_repo/
   requirements.txt            Python dependencies
   benchmarks/                 sampled benchmark suites (70 tracked, 30 ABC-native evaluated)
   configs/                    prompts, rules, checklists, flows, evaluation config
+    agents/context/           pinned repo manifest + read-only code profiles
   docs/                       structure notes and local paper copy
   experiments/                per-cycle logs, outputs, results, and agent artifacts
   scripts/                    cycle automation, LLM-agent scaffold, diagnostics
     init_cycle.py             bootstrap a new experiment cycle
+    bootstrap_agent_context.py provision/check pinned prompt context repos
     diagnose_cycles.py        collect per-cycle evidence for local analysis
     agents/self_evolved_abc/
-      planning/               **Planning Agent** (deterministic engine)
+      planning/               Planning policy and frozen portfolio contracts
         evidence.py             structured cycle evidence reader
-        strategy.py             command/source targeting + strategy selection
-        thresholds.py           adaptive promotion threshold management
-        engine.py               deterministic planning engine
+        portfolio.py            paired assignments, advice hashes, lineage
+        assignment_factory.py   role-normalized assignment construction
       planning_agent.py       LLM-based planner (renders planner_prompt.md)
-      coding_agents/          Flow/Logic/Mapper Agent implementations
-      flow/                   pipeline stages (S4/S5/review/next_cycle)
-        planner_batch.py        planner skip → probe batch → evidence integration
+      coding_agents/          Flow and Logic Agent implementations
+      roles/                  exact role registry and lazy dispatch
+      workflow/               concurrent branches, manifests, portfolio review
+      logic/                  Logic Agent scope and assignment policy
+      flow/                   compile/CEC/QoR/review domain stages
   third_party/                external source trees (FlowTune)
   .env                        ignored local model-provider environment
   .local/                     ignored local scratch/archive/run dumps
@@ -144,24 +183,8 @@ try_repo/
 Use local commands for small checks only:
 
 ```bash
-python3 -B -m py_compile \
-  scripts/agents/self_evolved_abc/benchmarks.py \
-  scripts/agents/self_evolved_abc/cycle_context.py \
-  scripts/init_cycle.py \
-  scripts/agents/self_evolved_abc/flow/assignment.py \
-  scripts/agents/self_evolved_abc/flow/lineage.py \
-  scripts/agents/self_evolved_abc/flow/promotion.py \
-  scripts/agents/self_evolved_abc/flow/validation.py \
-  scripts/agents/self_evolved_abc/flow/source_patch_runner.py \
-  scripts/agents/self_evolved_abc/flow/review.py \
-  scripts/agents/self_evolved_abc/flow/next_cycle.py \
-  scripts/agents/self_evolved_abc/flow/batch_search.py \
-  scripts/agents/self_evolved_abc/flow/implementation_compare.py \
-  scripts/agents/self_evolved_abc/flow/cycle_loop.py \
-  scripts/agents/self_evolved_abc/planning/engine.py \
-  scripts/agents/self_evolved_abc/planning/strategy.py \
-  scripts/agents/self_evolved_abc/planning_agent.py \
-  scripts/agents/self_evolved_abc/coding_agents/flow_agent.py
+PYTHONPYCACHEPREFIX=.local/pycache python3 -m compileall -q \
+  scripts/agents/self_evolved_abc scripts/init_cycle.py
 ```
 
 Planning and fixture smoke checks:
@@ -169,11 +192,31 @@ Planning and fixture smoke checks:
 ```bash
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
 
+PYTHONPATH=. python3 -B scripts/test_logic_minimization_agent.py
+
+PYTHONPATH=. python3 -B scripts/test_dual_agent_loop.py
+
+PYTHONPATH=. python3 -B scripts/bootstrap_agent_context.py --check
+
 PYTHONPATH=. python3 -B -c "from pathlib import Path; from scripts.agents.self_evolved_abc.cycle_context import CycleContext; from scripts.agents.self_evolved_abc.flow.source_patch_runner import run_validation_fixture_smoke; ctx=CycleContext.from_assignment_file(Path('.').resolve(), Path('experiments/cycle_001/agents/assignments/candidate_001.json')); lines=[]; code=run_validation_fixture_smoke(ctx, lines); print('\n'.join(lines)); raise SystemExit(code)"
 ```
 
 The checked-in FlowTune binary is a Linux executable. On macOS it may fail with
 `exec format error`; that is expected and is not a local test failure.
+
+Initialize a Logic Agent cycle after provisioning its read-only context:
+
+```bash
+python3 -B scripts/bootstrap_agent_context.py
+python3 -B scripts/init_cycle.py cycle_006 \
+  --previous-cycle cycle_005 \
+  --agent-name logic_minimization_agent \
+  --paper-role "Logic Minimization Agent" \
+  --source-patch-mode source_patch_diff
+```
+
+See `docs/LOGIC_MINIMIZATION_AGENT.md` for the scope, context matrix, gate
+ordering, and Linux execution handoff.
 
 ## Remote Quickstart
 
@@ -191,12 +234,16 @@ pip install -r requirements.txt
 #    EDA_AGENT_MODEL_NAME=deepseek-chat
 #    EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS=16384  # 32768 is also supported
 
-# 3. Launch the autonomous loop (from cycle_001, max 5 cycles)
+# 3. Provision and verify the ten pinned cycle-0 knowledge repositories
+python3 -B scripts/bootstrap_agent_context.py
+
+# 4. Launch the autonomous loop (from cycle_001, max 5 cycles)
 bash run.sh
 ```
 
-`run.sh` wraps `cycle_loop.py --auto-resume`, so running it again continues
-from the last completed cycle without overwriting any data.
+`run.sh` wraps `workflow.dual_agent_loop`; branch manifests and content hashes
+allow a rerun to reuse only complete, lineage-valid work without overwriting or
+trusting stale reviews.
 
 After syncing a fresh tree, this quick sanity check should print `70 30 40`:
 
@@ -311,7 +358,8 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.next_cycle \
 ## Configs
 
 `configs/agents/` is the paper-facing agent configuration layer:
-- `prompts/coding_agent_prompt.md`: Flow/Logic/Mapper Agent prompt with
+
+- `prompts/coding_agent_prompt.md`: Flow/Logic Agent prompt with
   paper-aligned instructions, validation schema, mode selection rules.
 - `shared/`: programming guidance, rulebase, evaluation contract, feedback
   schema.
@@ -323,9 +371,16 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.next_cycle \
 
 ```text
 scripts/agents/self_evolved_abc/
-  cycle_driver.py              single-cycle agent entry point
+  planning_agent.py            one paired Planning call
+  planning/portfolio.py        frozen dispatch + lineage contracts
+  roles/registry.py            exact Flow/Logic role registry
+  workflow/dual_agent_loop.py  concurrent multi-cycle coordinator
+  workflow/branch_run.py       hash-bound branch resume manifest
+  workflow/portfolio_review.py strict quorum + deterministic winner
+  cycle_driver.py              internal single-branch entry point
   model_client.py              LLM API boundary (OpenAI-compatible)
   coding_agents/flow_agent.py  Flow Agent with source-file context injection
+  coding_agents/logic_minimization_agent.py  strict ABCI Logic Agent
   flow/
     assignment.py            assignment scope normalization + cycle directories
     validation.py              strict JSON schema + scope validation
@@ -333,9 +388,9 @@ scripts/agents/self_evolved_abc/
     source_patch_runner.py     S4: isolated workspace, git-apply, smoke, make
     implementation_compare.py  S5/F7: CEC-first baseline vs candidate
     review.py                  structured review and promotion gate
-    next_cycle.py              evidence-chain handoff to next cycle
-    iteration_loop.py          one-cycle pipeline orchestrator
-    cycle_loop.py              multi-cycle autonomous driver (--auto-resume)
+    next_cycle.py              legacy focused handoff helper
+    iteration_loop.py          thin compatibility wrapper to dual coordinator
+    cycle_loop.py              legacy single-role diagnostic driver
     batch_search.py            deterministic low-API source-patch batches
     lineage.py                 champion source/binary path resolution
     promotion.py               shared QoR promotion threshold logic
@@ -348,92 +403,70 @@ and log-parsing utilities, respectively.
 
 ## Experiments
 
-Each cycle keeps the same structure:
+Each paired cycle uses candidate-scoped artifacts:
 
 ```text
 experiments/cycle_NNN/
+  planning/
+    portfolio_plan.json        frozen paired dispatch
+    planner_advice.json        model/deterministic semantic advice + hash
+    portfolio_review.json      sole winner decision
+    branch_runs/*.json         resume provenance
   agents/
-    assignments/               planner input for this cycle
+    assignments/               Flow and Logic assignments
     plans/                     model rationale and entry points
     candidate_changes/         materialization summary + decision
     source_patches/            machine-applicable unified diff
     feedback/                  validation errors + review gate
     rule_updates/              agent-proposed + review rule proposals
-  impl_compare/
-    baseline_unmodified/       S4 manifest + build log
-    candidate_modified/        S4 manifest + patch.diff + workspace/
-    comparison/                CEC/QoR CSVs, review_decision.json, summary
+  candidates/
+    flow_candidate_001/impl_compare/
+    logic_candidate_001/impl_compare/
   logs/ outputs/ results/      generated data (gitignored bulk)
 ```
 
-`cycle_000` is the baseline evidence cycle. All subsequent cycles are generated
-automatically by `next_cycle.py` at the end of each iteration.
+`cycle_000` is the baseline evidence cycle. A subsequent cycle is generated
+only after both branch reviews settle and the centralized portfolio review is
+persisted.
 
-`cycle_001` starts in `source_patch_diff` mode. Its assignment is seeded by the
-deterministic Planning Engine, targets `csweep` first, and evaluates the 30
-design EPFL + ISCAS85 + ISCAS89 scope. Source edits are limited to
-`third_party/FlowTune/src/src/opt` plus the relevant
-`third_party/FlowTune/src/src/base/abci` command wrappers. The default
-evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and
-`refactor` so source patches have a better chance to be exercised before
-CEC-backed QoR review.
+`cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair.
+The Flow lane is limited to `third_party/FlowTune/src/src/opt`; the Logic lane
+is limited to existing `.c`/`.h` files in
+`third_party/FlowTune/src/src/base/abci`. Both use the same benchmark and
+promotion flow, which reaches FlowTune and rewrite/resub/refactor families
+before CEC-backed QoR review.
 
 ## Planning Agent
 
-The Planning Agent drives Flow Agent self-evolution through a deterministic
-rule-based engine. It is wired into `init_cycle.py`, `cycle_loop --auto-resume`,
-and `next_cycle.py`, so both first-cycle and follow-up assignments carry the
-same planner contract.
+The Planning Agent runs once per new cycle. In `auto`/`model` mode it uses the
+LLM to formulate two hypotheses and tasks; deterministic mode supplies stable
+fallback advice. Code, not the model, locks the candidate identities, source
+ownership, baseline, benchmark/evaluation contract, and artifact layout.
 
 ### Architecture
 
+```text
+previous centralized review + both branch evidence + pinned cycle-0 priors
+                               │
+                               ▼
+                    one Planning Agent call
+                               │
+                   frozen advice + content hash
+                         ┌─────┴─────┐
+                         ▼           ▼
+                  Flow candidate  Logic candidate
+                         └─────┬─────┘
+                               ▼
+              strict-quorum deterministic portfolio review
+                               │
+                               ▼
+                      next shared winner baseline
 ```
-Evidence (review_decision.json, qor_delta.csv, cec_summary.csv)
-    │
-    ▼
-PlanningEngine.plan()
-    ├── read_cycle_evidence()     → CycleEvidence
-    ├── reconstruct history       → prior commands tried, champion count
-    ├── propose_thresholds()      → adaptive (scope-aware, early-cycle lenient)
-    ├── select_strategy()         → Strategy (task_type, target_command, …)
-    └── _build_hypothesis()       → planner_hypothesis text
-    │
-    ▼
-next_cycle assignment  (planner_hypothesis, thresholds, discouraged_targets, _planning_meta)
-```
 
-Auto-resume also backfills this metadata for older checked-in assignments, so
-`cycle_001` no longer starts from a generic, unplanned Flow Agent task.
-
-### Strategy Routing
-
-| Evidence | Strategy | Action |
-|----------|----------|--------|
-| No prior cycles | `optimization` | Default: csweep, execute first planned LLM cycle |
-| Build/CEC failure | `repair` | Fix the gate, carry discouraged targets |
-| Champion promoted | `optimization` | Exploit same command, vary parameter |
-| REPAIR_QOR + zero delta | `batch_search` | Probe an untried command before another LLM call |
-| REPAIR_QOR + partial improvement | `optimization` | Amplify same command, may relax thresholds |
-| REPAIR_QOR + regressions | `optimization` | Switch command, force batch_search |
-
-### Adaptive Thresholds
-
-Thresholds scale with the evaluated benchmark scope and tighten as champions
-accumulate. Promotion requires zero AND-regressed rows, the improved-row
-breadth threshold, and **either** the average-percentage threshold **or** the
-absolute total-reduction threshold. With today's `abc_native` frontend,
-`large_70` still uses the
-30-design row because only those 30 designs are CEC-backed; the 70-design row is
-for a future Verilog-capable frontend.
-
-| Scope | Cycle | avg≥ | total≥ | improved≥ |
-|-------|-------|------|--------|-----------|
-| 10 designs | early | 3.0% | 10 | 1 |
-| 30 designs | early | 1.8% | 15 | 3 |
-| 30 designs | normal | 3.0% | 15 | 3 |
-| 30 designs | 3+ champs | 3.6% | 15 | 3 |
-| 70 evaluated designs | early | 1.2% | 20 | 5 |
-| 70 evaluated designs | normal | 2.0% | 20 | 5 |
+Planning receives the ten-repository prior-knowledge bundle described above.
+The generated advice can change hypotheses and coding tasks only. Any drift in
+benchmark scope, evaluation commands, role, candidate ID, or source root is
+rejected before a portfolio plan is written.
 
 ### Local Validation
 
@@ -441,11 +474,10 @@ for a future Verilog-capable frontend.
 PYTHONPATH=. python3 -B scripts/test_planning_agent.py
 ```
 
-Covers 173 assertions across 15 sections: paper compliance, evidence reading,
-strategy routing (all 7 branches), threshold adaptation (all branches),
-engine operations, next_cycle integration, LLM planner, benchmark suites,
-validation smoke, scalar reward/Pareto promotion, batch winner integration,
-authoritative champion context, and edge cases.
+The focused dual-loop regression additionally checks exact paired dispatch,
+true concurrency, sibling completion after failure, strict review quorum,
+planner advice binding, deterministic fallback, lineage-safe resume, and
+shared-winner continuation.
 
 ## Pipeline Stages
 
@@ -459,7 +491,7 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
                       (correctness-backed)
      review.py         classify: REPAIR_VALIDATION | PATCH | SMOKE | COMPILE
                        | REJECT_CEC | REPAIR_QOR | ACCEPT_FOR_NEXT_CYCLE
-     next_cycle.py     generate next-cycle assignment with evidence chain
+     portfolio_review select at most one lineage-valid winner after both lanes
 ```
 
 ## Review Decisions
@@ -475,7 +507,8 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 | `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — bootstrap or replacement champion |
 
 For `REPAIR_SMOKE`, inspect
-`experiments/<cycle>/impl_compare/candidate_modified/build.log` first. This is
+`experiments/<cycle>/candidates/<candidate>/impl_compare/candidate_modified/build.log`
+first. This is
 the Python/fixture smoke gate before ABC CEC/QoR starts; it is usually a harness,
 validator, fixture, or assignment-scope issue rather than evidence that a new
 ABC source patch is needed.
