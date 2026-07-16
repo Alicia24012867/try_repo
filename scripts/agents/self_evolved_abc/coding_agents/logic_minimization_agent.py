@@ -231,6 +231,9 @@ class LogicMinimizationAgent(FlowAgent):
             seen.add(path)
             selected.append(by_path[path])
 
+        for path in self._requested_source_context_files():
+            add(path)
+
         target = self._planned_target_command()
         for path in LOGIC_SOURCE_CONTEXT_KEY_PATHS.get(target, ()):
             add(path)

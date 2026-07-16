@@ -32,7 +32,6 @@ _TARGETABLE_COMMANDS: tuple[str, ...] = (
     "resub",
     "dc2",
     "csweep",
-    "refactor",
 )
 
 _PARAMETER_KINDS_BY_COMMAND: dict[str, tuple[str, ...]] = {
@@ -76,6 +75,9 @@ class Strategy:
     discouraged_targets: tuple[str, ...] = ()
     # Source files to avoid in the next cycle
 
+    exploration_phase: str = "conservative"
+    # conservative | diversify | structural
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -88,6 +90,7 @@ def select_strategy(
     previous_strategies: Sequence[Strategy] = (),
     cycle_number: int = 1,
     benchmark_count: int = 30,
+    consecutive_qor_stagnation: int = 0,
 ) -> Strategy:
     """Select the best strategy for the next Flow Agent cycle.
 
@@ -111,7 +114,11 @@ def select_strategy(
     # --- QoR repair (CEC passed but didn't improve enough) ---
     if evidence.is_repair_qor:
         return _qor_repair_strategy(
-            evidence, previous_strategies, cycle_number, benchmark_count
+            evidence,
+            previous_strategies,
+            cycle_number,
+            benchmark_count,
+            consecutive_qor_stagnation,
         )
 
     # --- Fallback ---
@@ -222,9 +229,40 @@ def _qor_repair_strategy(
     previous_strategies: Sequence[Strategy],
     cycle_number: int,
     benchmark_count: int,
+    consecutive_qor_stagnation: int,
 ) -> Strategy:
     """QoR didn't improve enough — decide: switch target, use batch, or relax."""
     discouraged = _collect_discouraged(evidence, previous_strategies)
+
+    # Repeatedly filtering the deterministic batch to one command family made
+    # cycle 6 another narrow rewrite probe.  At the paper's later exploratory
+    # phase, remove that filter and measure several existing ABC precedents
+    # before spending another model call.
+    if consecutive_qor_stagnation >= 4:
+        return Strategy(
+            task_type="batch_search",
+            target_command="",
+            target_source_dir="third_party/FlowTune/src/src/opt",
+            target_parameter_kind="cross_family_structural_probe",
+            hypothesis_template=(
+                f"{consecutive_qor_stagnation} consecutive correctness-backed "
+                "QoR attempts produced no champion. Run the rotating, bounded "
+                "flow_wide cross-family stage without a target-command filter. Preserve "
+                "diverse fx/csweep/rewrite/resub/dc2 evidence, while the "
+                "parallel Logic lane covers refactor/orchestration; then "
+                "ask for a structural scoring, tie-break, stopping, or "
+                "orchestration change anchored in the best reached precedent. "
+                "Do not spend another cycle on a capacity-only constant edit."
+            ),
+            rationale=(
+                "Late-cycle stagnation requires cross-family measurement and "
+                "structural recombination instead of another single-command probe."
+            ),
+            should_skip_llm=True,
+            should_relax_thresholds=True,
+            discouraged_targets=discouraged,
+            exploration_phase="structural",
+        )
 
     # --- Zero delta → reachability/sensitivity problem, switch command ---
     if evidence.all_deltas_zero:
@@ -257,6 +295,9 @@ def _qor_repair_strategy(
             ),
             should_skip_llm=skip_llm,
             discouraged_targets=discouraged,
+            exploration_phase=(
+                "diversify" if consecutive_qor_stagnation >= 2 else "conservative"
+            ),
         )
 
     # --- Small nonzero improvement but failed thresholds → may relax ---
@@ -289,6 +330,7 @@ def _qor_repair_strategy(
                     should_skip_llm=True,
                     should_relax_thresholds=False,
                     discouraged_targets=discouraged,
+                    exploration_phase="diversify",
                 )
             return Strategy(
                 task_type="optimization",
@@ -313,6 +355,11 @@ def _qor_repair_strategy(
                     >= evidence.min_improved_benchmarks - 1
                 ),
                 discouraged_targets=discouraged,
+                exploration_phase=(
+                    "diversify"
+                    if consecutive_qor_stagnation >= 2
+                    else "conservative"
+                ),
             )
 
     # --- Regressions or complete neutral → switch command ---
@@ -333,6 +380,7 @@ def _qor_repair_strategy(
         ),
         should_skip_llm=True,
         discouraged_targets=discouraged,
+        exploration_phase="diversify",
     )
 
 

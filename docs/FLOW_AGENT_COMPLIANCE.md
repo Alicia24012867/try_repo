@@ -17,15 +17,22 @@ on the Linux server.
 
 ## Local Compliance Decisions
 
-- Champion lineage is centralized in `flow/lineage.py`, so source context,
-  isolated workspaces, and baseline binary selection use the same assignment
-  fields.
+- Champion lineage is centralized in `flow/lineage.py`. Prompt source and
+  isolated patch workspaces now use `baseline_ref.source_root` as the same
+  authoritative snapshot; missing snapshots and alias drift fail closed rather
+  than silently falling back to live vanilla source.
+- A structurally valid source diff is strictly apply-checked against a
+  disposable frozen-baseline workspace before build. Context mismatch enters
+  the same bounded Coding repair loop, whose retry-only assignment promotes the
+  failed target into key source context. S4 uses the same strict `git apply`
+  flags; fuzzy patch fallback and whitespace relaxation are disabled.
 - Promotion thresholds are centralized in `flow/promotion.py`, so review,
   prompts, and initial/next assignments agree on what counts as a champion.
-- Weak one-row or one-node improvements are treated as repair feedback rather
-  than accumulated into the champion lineage. Follow-up promotion uses a
-  scalar net-AND reward plus a per-design Pareto safeguard: zero regressions,
-  breadth met, and either relative or absolute magnitude met.
+- Promotion has two explicit channels: a regression-free scalar net-AND lane
+  with relative/absolute thresholds, and a positive node/depth-product Pareto
+  lane with bounded per-design regression guardrails. After three consecutive
+  full-CEC QoR misses, the scalar lane also permits a one-row/one-node positive
+  increment so correctness-backed gains can accumulate.
 - Deterministic batch search is model-free and still passes through S4/S5/review;
   it increases feedback density without weakening correctness gates.
 - Duplicate `* 2.*` backup files were removed because they were unreferenced and
@@ -46,9 +53,9 @@ on the Linux server.
   ABC-native evaluation coverage: 70 designs remain in `benchmark_scope`, 30
   BLIF designs form `evaluation_benchmark_scope`, and 40 Verilog designs are
   listed in `unsupported_benchmark_scope` until a frontend is connected.
-- The first correctness-backed positive candidate with no regressions may
-  bootstrap the champion lineage; subsequent accepted candidates must beat the
-  recorded champion under the promotion thresholds.
+- Bootstrap and later replacement candidates use the same two reward channels;
+  every accepted candidate must still pass the real build, full frozen-scope
+  CEC, complete QoR-row, and channel-specific guardrails.
 - Coding Agent QoR context now reads the authoritative S5
   `impl_compare/comparison/qor_delta.csv`, not the legacy flow-only summary
   path, and includes the incumbent vector plus the previous applied patch.
@@ -56,10 +63,17 @@ on the Linux server.
   assignment and rendered with the static rulebase, so rule updates affect
   later coding behavior instead of remaining inert Markdown artifacts.
 - Planner `should_skip_llm` is executable control state. `run.sh` launches a
-  model-free, planner-command-filtered `flow_wide` batch in `probe_NNN`, filters
-  shadowed csweep-default variants, covers reached wrapper parameters for
-  rewrite/resub/dc2/refactor, and integrates the winner/sensitivity evidence
-  before resuming.
+  model-free `flow_wide` batch in `probe_NNN`: early phases filter by planner
+  command, while four consecutive correctness-backed QoR misses trigger an
+  at-most-12-probe rotating cross-family structural stage. Cycles 6–10 cover
+  the complete opt-only space without making one cycle run all probes. It filters shadowed csweep-default
+  variants, uses source-owned reached probes such as `src/opt/rwr` for rewrite,
+  and integrates the winner/sensitivity evidence.
+  Planning is then refreshed for both branches with the shared baseline and
+  evaluation contract unchanged; Coding does not start if either step fails.
+  A probe that already passes promotion gates is not left as advisory evidence:
+  its SHA-256-bound diff is replayed unchanged in the Flow candidate lane and
+  repeats build, full CEC, and QoR before paired fan-in.
 
 ## Local Compliance Pass: Planning Agent Integration
 
@@ -86,7 +100,7 @@ on the Linux server.
   `large_70` assignments this is 30 designs; the 70-design threshold tier should
   be used only after Verilog conversion/read support is added.
 
-## Remote Diagnosis: No Champion After Cycle 004
+## Historical Three-Design Diagnosis: No Champion After Cycle 004
 
 - Build and CEC passed in cycles 001-004, so the blocker is not correctness or
   compilation.
@@ -100,7 +114,7 @@ on the Linux server.
 - Next step should use `batch_search --variant-set flow_wide` before another
   LLM cycle, then feed the batch `summary.csv`/`winner.json` back into planning.
 
-## Remote Diagnosis: `flow_wide_cycle_020`
+## Historical Three-Design Diagnosis: `flow_wide_cycle_020`
 
 - The 24-candidate deterministic sweep completed without finding a champion.
 - All `fx_*` candidates produced zero AND delta, including command defaults,
@@ -119,22 +133,50 @@ on the Linux server.
   arguments so this retest can focus on the known nonzero candidates instead of
   rerunning the whole 24-candidate grid.
 
-## Remote Diagnosis: Corrected 30-Design Run
+## Current 30-Design No-Winner Recovery
 
-- `cycle_001` passed CEC `30/30` and bootstrapped the champion with total AND
-  delta `-6`, three improved rows, and no regressions.
-- `cycle_002` inherited that champion correctly but produced one improvement
-  and one regression for net zero, so rollback was correct.
-- `cycle_003` through `cycle_005` passed CEC but produced exact zero structural
-  deltas. Their edits changed large capacity/fanout/window constants without
-  evidence that the limiting conditions were active.
-- The assignments already contained `should_skip_llm: true`, but the launcher
-  treated it as advisory. Automatic batch execution and feedback integration
-  now close that planner-to-executor control gap.
-- The former three-way promotion conjunction incorrectly reused the paper's
-  long-run percentage result as a per-cycle hard requirement. Promotion now
-  follows the paper's scalar-reward-plus-vector model while retaining strict
-  no-regression and breadth gates.
+- Do not infer a champion from older or differently versioned cycle artifacts.
+  The active reported lineage completed cycles 1–5 with two settled reviews per
+  cycle and no centralized winner; its unexecuted cycle-6 dispatch is stale
+  under the new campaign policy and is regenerated before execution.
+- Zero-delta edits to large capacity/fanout/window constants are treated as
+  reachability evidence. After four consecutive full-CEC QoR misses, Planning
+  bans another capacity-only edit and runs a bounded rotating `flow_wide` stage
+  over all distinct command families before either coding branch starts.
+- The batch returns both its best measured candidate and a diverse top-three
+  family frontier. Flow and Logic then receive orthogonal structural hypotheses
+  instead of copying the same target into both lanes.
+- `flow_wide` now contains real `src/opt` probes for `resub` window fanout/TFI
+  depth and the DAR rewrite/refactor defaults repeatedly reached inside `dc2`.
+  Earlier ABCI-wrapper variants were removed by Flow ownership filtering, which
+  had made the advertised cross-family search substantially narrower.
+- Promotion now follows the paper's scalar-reward-plus-vector model. The AND
+  lane retains its regression-free aggregate policy; a separate node/depth
+  product Pareto lane allows bounded per-design trade-offs. Full candidate
+  build, exact-scope CEC, and complete QoR rows remain hard gates.
+- A useful but non-promotable size/depth trade-off is persisted as
+  `RETAIN_FOR_SYNERGY`. It never changes the champion baseline; any composition
+  must be materialized as a fresh isolated candidate and repeat build, full CEC,
+  and QoR.
+- Strict diff-context and compile failures now use the remaining bounded model
+  attempts inside the same candidate, with strict apply diagnostics or a bounded
+  compiler-log tail. The complete compile log remains in the attempt directory. This
+  converts previously wasted cycles into coding self-debug attempts without
+  weakening validation.
+- `run.sh` fast-forwards completed lineage, regenerates an unexecuted plan made
+  by an older campaign policy, executes through absolute cycle 10 by default,
+  and does not create an unused cycle-11 dispatch.
+
+## Paper-Fidelity Limitation
+
+The current Flow lane is a command-kernel surrogate, not yet the paper's full
+Flow subsystem. It edits `third_party/FlowTune/src/src/opt`, while the fork's
+MAB scheduler is implemented in `src/base/abc/abcBayestune.cpp` and exposed by
+the `ftune` command in `src/base/abci/abc.c`. The frozen evaluation recipe does
+not call `ftune`. The current evaluator also uses one AIG recipe and node/depth
+proxies, not eight flows plus ASAP7 timing/area. A current winner is therefore
+a valid foundation champion, not a claim that the final paper tables have been
+reproduced.
 
 ## Remaining Remote Evidence Needed
 

@@ -27,6 +27,8 @@ class AdaptiveThresholds:
     # Metadata for traceability
     benchmark_count: int
     adjustment_reason: str = ""
+    consecutive_qor_stagnation: int = 0
+    evolution_phase: str = "conservative"
 
     def as_dict(self) -> dict[str, float | int]:
         return {
@@ -41,6 +43,7 @@ def propose_thresholds(
     benchmark_count: int,
     previous_evidence: Sequence[CycleEvidence] = (),
     cycle_number: int = 1,
+    consecutive_qor_stagnation: int | None = None,
 ) -> AdaptiveThresholds:
     """Propose promotion thresholds tuned for the current benchmark scope.
 
@@ -60,6 +63,17 @@ def propose_thresholds(
     gates that must all pass simultaneously.
     """
     reasons: list[str] = []
+    stagnation = (
+        _consecutive_qor_stagnation(previous_evidence)
+        if consecutive_qor_stagnation is None
+        else max(0, consecutive_qor_stagnation)
+    )
+    if cycle_number <= 3 and stagnation < 2:
+        evolution_phase = "conservative"
+    elif stagnation < 4:
+        evolution_phase = "diversify"
+    else:
+        evolution_phase = "structural"
 
     # --- min_improved_benchmarks ---
     raw_min_improved = max(1, int(benchmark_count * 0.1 + 0.5))
@@ -68,6 +82,18 @@ def propose_thresholds(
         f"min_improved_benchmarks={min_improved} "
         f"(10% of {benchmark_count} designs, capped at 5)"
     )
+
+    # The paper accumulates beneficial changes over many generations and does
+    # not impose the reproduction's original 3%-or-15-AND hurdle forever.
+    # After three correctness-backed QoR misses, accept any strictly positive,
+    # regression-free incremental AND gain; full build, coverage, and CEC stay
+    # hard gates in review.py.
+    if stagnation >= 3:
+        min_improved = 1
+        reasons.append(
+            "min_improved_benchmarks=1 (controlled relaxation after "
+            f"{stagnation} consecutive correctness-backed QoR misses)"
+        )
 
     # --- min_average_and_improve_pct ---
     champion_count = sum(1 for ev in previous_evidence if ev.is_champion)
@@ -78,8 +104,13 @@ def propose_thresholds(
     else:
         base_pct = 2.0
 
+    if stagnation >= 3:
+        avg_pct = 0.0
+        reasons.append(
+            "min_average_and_improve_pct=0.0% (incremental accumulation phase)"
+        )
     # Early-cycle leniency: relax by 40 % in cycles 1-2
-    if cycle_number <= 2 and champion_count == 0:
+    elif cycle_number <= 2 and champion_count == 0:
         avg_pct = base_pct * 0.6
         reasons.append(
             f"min_average_and_improve_pct={avg_pct:.1f}% "
@@ -106,6 +137,8 @@ def propose_thresholds(
         total_reduction = 15
     else:
         total_reduction = 20
+    if stagnation >= 3:
+        total_reduction = 1
     reasons.append(
         f"min_total_and_reduction={total_reduction} "
         f"(for {benchmark_count} designs)"
@@ -117,4 +150,21 @@ def propose_thresholds(
         min_improved_benchmarks=min_improved,
         benchmark_count=benchmark_count,
         adjustment_reason="; ".join(reasons),
+        consecutive_qor_stagnation=stagnation,
+        evolution_phase=evolution_phase,
     )
+
+
+def _consecutive_qor_stagnation(
+    evidence: Sequence[CycleEvidence],
+) -> int:
+    """Count trailing correctness-backed non-promoting QoR reviews."""
+
+    count = 0
+    for item in reversed(tuple(evidence)):
+        if item.is_champion:
+            break
+        if not item.is_repair_qor or not item.all_cec_pass:
+            break
+        count += 1
+    return count

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -43,6 +44,9 @@ from scripts.agents.self_evolved_abc.schemas import AgentArtifacts
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
     LEGACY_CYCLE_LAYOUT,
     implementation_root_for,
+)
+from scripts.agents.self_evolved_abc.workflow.failure_evidence import (
+    format_validation_feedback,
 )
 
 
@@ -206,6 +210,11 @@ class FlowAgent(CodingAgent):
                 assignment
             ),
             "PLANNER_TASK": assignment.get("planner_hypothesis", ""),
+            "CAMPAIGN_RECOVERY_STATE": json.dumps(
+                assignment.get("campaign_state", {}),
+                indent=2,
+                sort_keys=True,
+            ),
             "ALLOWED_FILES": assignment.get("allowed_to_edit", ()),
             "PROGRAMMING_GUIDANCE": load_template(
                 repo_root, "configs/agents/shared/programming_guidance.md"
@@ -229,6 +238,7 @@ class FlowAgent(CodingAgent):
                 legacy_summary_path=summary_path,
             ),
             "PREVIOUS_CANDIDATES": self._previous_candidate_context(previous_cycle),
+            "ROLE_FAILURE_FEEDBACK": self._role_failure_feedback_text(),
             "PRIMARY_METRIC": assignment.get(
                 "target_metric", "AIG node count / depth provisional"
             ),
@@ -581,6 +591,18 @@ class FlowAgent(CodingAgent):
             return "\n\n".join(blocks)
         return self._previous_flow_context(previous_cycle)
 
+    def _role_failure_feedback_text(self) -> str:
+        raw = self.context.assignment.get("previous_role_validation_feedback")
+        if not isinstance(raw, Mapping):
+            return "No exact validation issues were recorded for this role."
+        rendered = format_validation_feedback(
+            raw,
+            branch_role=str(self.context.assignment.get("branch_role", "")),
+            agent_name=self.context.agent_name,
+            candidate_id=self.context.candidate_id,
+        )
+        return rendered or "No exact validation issues were recorded for this role."
+
     def _previous_impl_root(
         self,
         cycle_id: str,
@@ -626,6 +648,11 @@ class FlowAgent(CodingAgent):
 
         chunks: list[str] = [
             "## Source Files Available for Patching",
+            "",
+            (
+                "The contents below come from the frozen evaluation baseline. "
+                "Displayed filenames remain repository-relative patch targets."
+            ),
             "",
             "### File Index (all source files under allowed scope)",
             "",
@@ -716,6 +743,9 @@ class FlowAgent(CodingAgent):
             selected.append(item)
             seen.add(rel)
 
+        for requested in self._requested_source_context_files():
+            add(requested)
+
         target_command = self._planned_target_command()
         for suffix in FLOW_SOURCE_CONTEXT_KEY_SUFFIXES_BY_COMMAND.get(
             target_command, ()
@@ -733,6 +763,22 @@ class FlowAgent(CodingAgent):
                 if len(selected) >= KEY_SOURCE_LIMIT:
                     break
         return selected[:KEY_SOURCE_LIMIT]
+
+    def _requested_source_context_files(self) -> tuple[str, ...]:
+        """Return retry-requested files; selection still uses ``all_files``."""
+
+        return tuple(
+            text
+            for text in (
+                str(value).strip()
+                for value in self._as_root_tuple(
+                    self.context.assignment.get(
+                        "source_context_requested_files", ()
+                    )
+                )
+            )
+            if text
+        )
 
     def _planned_target_command(self) -> str:
         meta = self.context.assignment.get("_planning_meta")

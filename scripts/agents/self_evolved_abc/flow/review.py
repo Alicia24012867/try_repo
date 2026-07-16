@@ -21,10 +21,14 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
     average,
     format_float,
     format_optional_int,
+    is_structural_frontier_candidate,
     meets_promotion_thresholds,
+    meets_structural_pareto_policy,
     normalize_promotion_thresholds,
     parse_float,
     scalar_and_reward,
+    structural_regression_guard_passes,
+    structural_qor_stats,
 )
 
 
@@ -42,6 +46,7 @@ REVIEW_DECISIONS = frozenset(
         "REPAIR_QOR",
         "REPAIR_SMOKE",
         "REPAIR_VALIDATION",
+        "RETAIN_FOR_SYNERGY",
     )
 )
 REVIEW_REQUIRED_FIELDS = frozenset(
@@ -92,6 +97,20 @@ class ReviewDecision:
     min_improved_benchmarks: int
     reason: str
     next_action: str
+    total_depth_delta_candidate_minus_baseline: int | None = None
+    depth_improved_benchmark_count: int = 0
+    depth_regressed_benchmark_count: int = 0
+    depth_unchanged_benchmark_count: int = 0
+    structural_proxy_reward_pct: float | None = None
+    paired_structural_metric_count: int = 0
+    max_node_regression_pct: float = 0.0
+    max_depth_regression_pct: float = 0.0
+    promotion_basis: str = ""
+    retained_for_synergy: bool = False
+    validation_evidence_type: str = ""
+    validation_issues_markdown: str = ""
+    validation_evidence_source: str = ""
+    validation_evidence_sha256: str = ""
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -138,15 +157,30 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         if row.get("and_improve_pct") not in ("", None)
     )
     delta_stats = and_delta_stats(backed_rows)
+    structural_stats = structural_qor_stats(backed_rows)
     scalar_reward = scalar_and_reward(delta_stats)
     thresholds = normalize_promotion_thresholds(
         context.assignment.get("promotion_thresholds")
     )
     all_structural_deltas_zero = _all_structural_deltas_zero(backed_rows)
+    coverage_issue = _evaluation_coverage_issue(
+        context,
+        cec_rows=cec_rows,
+        qor_rows=qor_rows,
+    )
 
     promotion = False
+    promotion_basis = ""
+    retained_for_synergy = False
     if build_status not in CANDIDATE_BUILD_READY_STATUSES:
         decision, reason, next_action = _classify_build_failure(build_status)
+    elif coverage_issue:
+        decision = "REPAIR_EVALUATION"
+        reason = coverage_issue
+        next_action = (
+            "Re-run the frozen evaluation scope and preserve exactly one CEC "
+            "and QoR row for every expected benchmark."
+        )
     elif not cec_rows:
         decision = "REPAIR_EVALUATION"
         reason = "CEC summary is missing or empty"
@@ -155,11 +189,41 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         decision = "REJECT_CEC"
         reason = f"CEC passed {cec_pass}/{len(cec_rows)} rows"
         next_action = "Reject or repair the candidate before any QoR discussion."
-    elif not backed_rows:
+    elif not backed_rows or (
+        context.evaluation_benchmark_scope
+        and len(backed_rows) != len(context.evaluation_benchmark_scope)
+    ):
         decision = "REPAIR_EVALUATION"
-        reason = "No correctness-backed QoR rows are available"
-        next_action = "Re-run S5/F7 and ensure qor_delta rows are CEC-backed."
-    elif _meets_bootstrap_champion_policy(context, avg_and, delta_stats):
+        reason = (
+            "Correctness-backed QoR coverage is incomplete: "
+            f"{len(backed_rows)}/{len(context.evaluation_benchmark_scope)} rows"
+        )
+        next_action = (
+            "Re-run S5/F7 and ensure every frozen-scope qor_delta row is "
+            "CEC-backed."
+        )
+    elif _qor_metric_coverage_issue(
+        backed_rows=backed_rows,
+        delta_stats=delta_stats,
+        structural_stats=structural_stats,
+    ):
+        decision = "REPAIR_EVALUATION"
+        reason = _qor_metric_coverage_issue(
+            backed_rows=backed_rows,
+            delta_stats=delta_stats,
+            structural_stats=structural_stats,
+        ) or "Correctness-backed QoR metrics are incomplete"
+        next_action = (
+            "Re-run implementation comparison and require finite, integral "
+            "AND/depth deltas plus finite AND percentages and positive "
+            "baseline/candidate node/depth values for every backed row."
+        )
+    elif _meets_bootstrap_champion_policy(
+        context,
+        avg_and,
+        delta_stats,
+        structural_stats=structural_stats,
+    ):
         decision = "ACCEPT_FOR_NEXT_CYCLE"
         reason = (
             "All CEC rows passed and this is the first positive champion "
@@ -175,10 +239,12 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
             "must beat the champion under the configured QoR thresholds."
         )
         promotion = True
+        promotion_basis = "bootstrap_structural_improvement"
     elif meets_promotion_thresholds(
         avg_and=avg_and,
         delta_stats=delta_stats,
         thresholds=thresholds,
+        structural_stats=structural_stats,
     ):
         decision = "ACCEPT_FOR_NEXT_CYCLE"
         reason = (
@@ -186,14 +252,53 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
             "improvement: zero AND-regressed rows, "
             f"scalar AND reward {scalar_reward}, average AND improvement "
             f"{avg_and:.6f}%, total AND delta {delta_stats.total_delta}, "
-            f"improved rows {delta_stats.improved_count}. The breadth gate and "
-            "at least one configured magnitude gate were satisfied."
+            f"improved rows {delta_stats.improved_count}. The breadth gate, "
+            "one configured magnitude gate, and the node-depth regression "
+            "guard were satisfied."
         )
         next_action = (
             "Use this candidate as positive evidence for the next "
             f"{context.paper_role} cycle."
         )
         promotion = True
+        promotion_basis = "and_threshold"
+    elif meets_structural_pareto_policy(
+        delta_stats=delta_stats,
+        structural_stats=structural_stats,
+    ):
+        decision = "ACCEPT_FOR_NEXT_CYCLE"
+        reason = (
+            "All CEC rows passed and the candidate is a suite-level structural "
+            "Pareto improvement: aggregate AND/depth deltas are "
+            f"{delta_stats.total_delta}/{structural_stats.total_depth_delta}, "
+            "normalized node-depth proxy reward is "
+            f"{structural_stats.structural_proxy_reward_pct:.6f}%, and the "
+            "per-design regression guardrails passed. This structural proxy "
+            "is auxiliary until the paper's mapped timing/area flow is connected."
+        )
+        next_action = (
+            "Promote this correctness-backed structural Pareto candidate and "
+            "retain its full size/depth vector for the next Planning round."
+        )
+        promotion = True
+        promotion_basis = "structural_pareto_proxy"
+    elif is_structural_frontier_candidate(
+        delta_stats=delta_stats,
+        structural_stats=structural_stats,
+    ):
+        decision = "RETAIN_FOR_SYNERGY"
+        reason = (
+            "Correctness and coverage passed, and at least one structural QoR "
+            "dimension improved, but the candidate is a size/depth trade-off "
+            "rather than a champion. It is retained on the non-promoting "
+            "frontier for a possible cross-subsystem follow-up."
+        )
+        next_action = (
+            "Planning may use this candidate as synergy evidence. Do not change "
+            "the baseline; any combined patch must be materialized as a new "
+            "candidate and repeat build, full CEC, and QoR."
+        )
+        retained_for_synergy = True
     else:
         decision = "REPAIR_QOR"
         if all_structural_deltas_zero:
@@ -246,6 +351,20 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         min_improved_benchmarks=thresholds.min_improved_benchmarks,
         reason=reason,
         next_action=next_action,
+        total_depth_delta_candidate_minus_baseline=(
+            structural_stats.total_depth_delta
+        ),
+        depth_improved_benchmark_count=structural_stats.depth_improved_count,
+        depth_regressed_benchmark_count=structural_stats.depth_regressed_count,
+        depth_unchanged_benchmark_count=structural_stats.depth_unchanged_count,
+        structural_proxy_reward_pct=(
+            structural_stats.structural_proxy_reward_pct
+        ),
+        paired_structural_metric_count=structural_stats.paired_metric_count,
+        max_node_regression_pct=structural_stats.max_node_regression_pct,
+        max_depth_regression_pct=structural_stats.max_depth_regression_pct,
+        promotion_basis=promotion_basis,
+        retained_for_synergy=retained_for_synergy,
     )
 
 
@@ -303,6 +422,39 @@ def _read_existing_feedback(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def _evaluation_coverage_issue(
+    context: CycleContext,
+    *,
+    cec_rows: Sequence[dict[str, str]],
+    qor_rows: Sequence[dict[str, str]],
+) -> str:
+    """Fail closed on a missing, duplicate, or substituted benchmark row."""
+
+    expected = tuple(str(item).strip() for item in context.evaluation_benchmark_scope)
+    if not expected:
+        return ""
+    expected_set = set(expected)
+    if len(expected_set) != len(expected):
+        return "Frozen evaluation scope itself contains duplicate benchmarks"
+    for label, rows in (("CEC", cec_rows), ("QoR", qor_rows)):
+        actual = tuple(str(row.get("benchmark", "")).strip() for row in rows)
+        if len(actual) != len(expected):
+            return (
+                f"{label} coverage does not match the frozen evaluation scope: "
+                f"{len(actual)}/{len(expected)} rows"
+            )
+        if len(set(actual)) != len(actual):
+            return f"{label} coverage contains duplicate benchmark rows"
+        missing = sorted(expected_set - set(actual))
+        unexpected = sorted(set(actual) - expected_set)
+        if missing or unexpected:
+            return (
+                f"{label} benchmark identity mismatch; missing={missing[:3]}, "
+                f"unexpected={unexpected[:3]}"
+            )
+    return ""
+
+
 def _feedback_has_diagnostics(text: str) -> bool:
     """True when the feedback contains agent-level info worth preserving."""
     return (
@@ -338,6 +490,12 @@ def render_feedback(
             f"- Total AND delta candidate-minus-baseline: `{format_optional_int(decision.total_and_delta_candidate_minus_baseline)}`",
             f"- Scalar AND reward: `{format_optional_int(decision.scalar_and_reward)}`",
             f"- AND improved/regressed/unchanged rows: {decision.improved_benchmark_count}/{decision.regressed_benchmark_count}/{decision.unchanged_benchmark_count}",
+            f"- Total depth delta candidate-minus-baseline: `{format_optional_int(decision.total_depth_delta_candidate_minus_baseline)}`",
+            f"- Depth improved/regressed/unchanged rows: {decision.depth_improved_benchmark_count}/{decision.depth_regressed_benchmark_count}/{decision.depth_unchanged_benchmark_count}",
+            f"- Structural node-depth proxy reward pct: `{format_float(decision.structural_proxy_reward_pct)}`",
+            f"- Worst per-design node/depth regression pct: `{decision.max_node_regression_pct:.6f}` / `{decision.max_depth_regression_pct:.6f}`",
+            f"- Promotion basis: `{decision.promotion_basis or 'none'}`",
+            f"- Retained for synergy: `{str(decision.retained_for_synergy).lower()}`",
             f"- Promotion gate: zero AND regressions, improved rows >= `{decision.min_improved_benchmarks}`, and either avg >= `{decision.min_average_and_improve_pct:.6f}%` or total reduction >= `{decision.min_total_and_reduction}`",
             "",
             "## Evidence",
@@ -392,6 +550,45 @@ def render_rule_update(
             "",
         )
     )
+
+
+def _qor_metric_coverage_issue(
+    *,
+    backed_rows: Sequence[dict[str, str]],
+    delta_stats: object,
+    structural_stats: object,
+) -> str | None:
+    """Reject partial or non-finite QoR vectors before any reward policy.
+
+    CEC-backed row identity alone is insufficient: aggregate helpers otherwise
+    skip empty cells and can turn one measured design plus many blank rows into
+    an apparent suite-level improvement.
+    """
+
+    expected = len(backed_rows)
+    actual = {
+        "AND deltas": int(getattr(delta_stats, "parsed_delta_count", 0)),
+        "AND percentages": int(
+            getattr(delta_stats, "parsed_improve_pct_count", 0)
+        ),
+        "depth deltas": int(
+            getattr(structural_stats, "parsed_depth_delta_count", 0)
+        ),
+        "paired node/depth metrics": int(
+            getattr(structural_stats, "paired_metric_count", 0)
+        ),
+    }
+    incomplete = [
+        f"{label}={count}/{expected}"
+        for label, count in actual.items()
+        if count != expected
+    ]
+    if incomplete:
+        return (
+            "Correctness-backed QoR metric coverage is incomplete or invalid: "
+            + ", ".join(incomplete)
+        )
+    return None
 
 
 def read_build_status(impl_root: Path) -> str | None:
@@ -458,6 +655,8 @@ def _meets_bootstrap_champion_policy(
     context: CycleContext,
     avg_and: float | None,
     delta_stats: object,
+    *,
+    structural_stats: object | None = None,
 ) -> bool:
     """Allow the first champion to be the first correctness-backed improvement."""
 
@@ -466,14 +665,25 @@ def _meets_bootstrap_champion_policy(
     total_delta = getattr(delta_stats, "total_delta", None)
     improved_count = int(getattr(delta_stats, "improved_count", 0))
     regressed_count = int(getattr(delta_stats, "regressed_count", 0))
-    return (
+    if regressed_count != 0:
+        return False
+    and_bootstrap = (
         avg_and is not None
         and avg_and > 0.0
         and total_delta is not None
         and total_delta < 0
         and improved_count > 0
-        and regressed_count == 0
+        and structural_stats is not None
+        and structural_regression_guard_passes(structural_stats)  # type: ignore[arg-type]
     )
+    structural_bootstrap = (
+        structural_stats is not None
+        and meets_structural_pareto_policy(
+            delta_stats=delta_stats,  # type: ignore[arg-type]
+            structural_stats=structural_stats,  # type: ignore[arg-type]
+        )
+    )
+    return and_bootstrap or structural_bootstrap
 
 
 def _has_existing_champion(context: CycleContext) -> bool:

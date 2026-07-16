@@ -138,6 +138,23 @@ source_patch_mode: {{SOURCE_PATCH_MODE}}
 {{PLANNER_TASK}}
 ```
 
+## Campaign Recovery State
+
+```json
+{{CAMPAIGN_RECOVERY_STATE}}
+```
+
+Use the stated phase literally: conservative candidates stay local;
+diversification changes family/mechanism; structural recovery must be anchored
+in existing ABC code and must not be another unmeasured capacity-only edit. Use
+the coordinator-owned target for your own role from this state; do not adopt
+the sibling branch's target.
+
+If the Planner Task starts with `COORDINATOR-LOCKED PROMOTED BATCH REPLAY`, the
+referenced SHA-256-bound diff is the candidate. Do not redesign, paraphrase, or
+extend it. The workflow may materialize that exact diff deterministically, but
+it still must repeat isolated build, full-scope CEC, and QoR before fan-in.
+
 ## Allowed Scope
 
 You may inspect surrounding code, but you may edit only these files or paths:
@@ -427,6 +444,13 @@ Relevant previous candidates:
 
 ```text
 {{PREVIOUS_CANDIDATES}}
+```
+
+Exact validation issues from this same role's previous cycle (authoritative;
+fix these fields directly and do not substitute the sibling branch's feedback):
+
+```text
+{{ROLE_FAILURE_FEEDBACK}}
 ```
 
 ## Target Metrics

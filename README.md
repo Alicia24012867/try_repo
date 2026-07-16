@@ -25,9 +25,24 @@ structured feedback drives the next iteration.
   `third_party/FlowTune/src/src/base/abci`. Neither lane can write the other's
   source or silently merge patches.
 - **All-settled fan-in and strict quorum are implemented** — one branch failure
-  does not cancel its sibling, but both candidate reviews must be complete,
-  lineage-valid, full-scope CEC-backed results before the centralized portfolio
-  review can select a winner or generate the next Planning round.
+  does not cancel its sibling. Both branches must settle with lineage-valid
+  reviews before portfolio fan-in; promotion additionally requires a real
+  candidate build, exact evaluation coverage, and full CEC. Settled negative
+  experiment reviews may drive the next Planning round, while coding
+  infrastructure failures stop it.
+- **No-winner recovery is paper-aligned** — the campaign moves from
+  conservative to diverse and then structural exploration, runs a bounded,
+  rotating cross-family batch after four consecutive CEC-backed QoR misses, and gives
+  Flow and Logic orthogonal hypotheses instead of repeating one inactive
+  constant edit.
+- **Promotion uses a scalar reward plus a detailed QoR vector** — aggregate AND
+  reduction remains supported, while node/depth-product Pareto improvements can
+  also promote under bounded regression guardrails. Useful partial trade-offs
+  are retained on a non-promoting frontier for a separately rebuilt, fully
+  revalidated follow-up candidate.
+- **Patch and compile failures self-debug inside one candidate** — strict
+  `git apply --check` diagnostics or a bounded compiler-log tail is returned to
+  the next model attempt before the branch settles as negative evidence.
 - `run.sh` is the one-command Linux entry point. It first checks all pinned
   prior-knowledge repositories, then launches the resumable
   `Planning -> (Flow || Logic) -> portfolio review` loop.
@@ -35,8 +50,10 @@ structured feedback drives the next iteration.
   boundary, reachable rewrite/refactor/resub/balance/`dc2` source context,
   isolated diff materialization, distinct-binary compile→CEC→QoR contract,
   dynamic cycle dispatch, and reviewer-driven next-cycle rules. Upstream
-  `orchestrate` remains profiled but is not auto-targeted because the pinned
-  FlowTune fork does not register that command.
+  `orchestrate` remains profiled as a coordinator-owned Logic planning target;
+  because the pinned FlowTune fork does not register it as an ABC command, the
+  target lands in the existing ABCI orchestration wrapper rather than invoking
+  a nonexistent command.
 - **Paper-style repository profiling expanded to ten pinned repositories** —
   Berkeley ABC, FlowTune, mockturtle, LSOracle, Yosys,
   OpenROAD-flow-scripts, kitty, alice, CUDD, and EQY provide complementary
@@ -51,6 +68,16 @@ structured feedback drives the next iteration.
 Local macOS development is used for editing, prompt/schema validation, and
 Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
 QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
+
+This is a correctness-backed foundation for reproducing the paper, not yet its
+full Table-level physical-design experiment. The current campaign has two of
+the paper's three coding roles, evaluates one frozen AIG command recipe rather
+than eight downstream flows, and reports AIG node/depth proxies rather than the
+final ASAP7 timing/area reward. Its Flow lane edits command kernels under
+`src/opt`; the legacy fork's MAB `ftune` scheduler lives in
+`src/base/abc/abcBayestune.cpp` and is not invoked by the frozen recipe. These
+gaps are recorded explicitly so an AIG winner is not misreported as the full
+paper result.
 
 ## Repository Knowledge Bootstrap
 
@@ -91,11 +118,12 @@ budget controls, failure modes, and one-repository check/refresh commands.
 The paper's system gets dense reward feedback: many benchmark suites, multiple
 synthesis flows, compile and CEC before QoR, and auxiliary structural, mapping,
 STA, and runtime metrics. This reproduction is intentionally smaller, so one
-LLM patch plus one flow recipe can easily produce zero deltas or a one-row
-improvement. A candidate that improves only one benchmark by a few AND nodes is
-weak evidence for replacing an existing champion, even though the first
-correctness-backed positive, no-regression candidate may bootstrap the initial
-champion lineage.
+LLM patch plus one flow recipe can easily produce zero deltas. Promotion has two
+explicit channels: a regression-free scalar AND-reduction channel and a guarded
+node/depth structural Pareto channel. After three consecutive correctness-backed
+QoR misses, the scalar channel also permits a one-row/one-node positive
+increment under full build, coverage, and CEC so beneficial changes can
+accumulate across generations.
 
 The recent `CEC 30/70` diagnostic was a harness-front-end issue, not evidence
 that the candidate failed 40 extra equivalence checks. `large_70` includes 40
@@ -112,20 +140,14 @@ assignment now keeps:
 This means a valid remote run should report CEC coverage such as `30/30`, not
 `30/70`, until the Verilog frontend is implemented.
 
-The latest corrected remote run produced one valid bootstrap champion:
-
-- `cycle_001`: `ACCEPT_FOR_NEXT_CYCLE`, CEC `30/30`, total AND delta `-6`,
-  improved/regressed/unchanged `3/0/27`.
-- `cycle_002`: CEC `30/30`, but net delta `0` with `1/1/28`; this is not a safe
-  replacement champion.
-- `cycle_003` through `cycle_005`: CEC `30/30`, but all 30 rows were unchanged.
-
-The zero-delta patches enlarged `fx` capacity, a rewrite fanout ceiling, and a
-resubstitution window without evidence that those limits were active. The
-planner requested batch search, but the old loop only printed that request and
-continued calling the model. The current loop executes that control decision,
-uses a separate `probe_NNN` namespace, and feeds `summary.csv`, `winner.json`,
-and the winner QoR vector into the pending cycle.
+The active lineage reported for this campaign has no centralized winner through
+cycles 1–5. Earlier single-lane or differently versioned `ACCEPT` artifacts are
+historical evidence only; champion status is authoritative only when the
+matching `planning/portfolio_review.json` selects it. The unexecuted cycle-6
+dispatch is regenerated under the new campaign policy. The current loop then
+executes the requested model-free search, uses a separate `probe_NNN` namespace,
+and feeds the measured best result plus a diverse family frontier through a
+refreshed paired Planning decision before the pending Coding branches run.
 
 Recent implementation issues also made the signal weaker than necessary:
 
@@ -138,10 +160,10 @@ Recent implementation issues also made the signal weaker than necessary:
   keep the correctness checker independent of candidate edits.
 - Legacy source-patch scope allowed framework/prompt edits; source diffs are
   now restricted to ABC/FlowTune source plus active-cycle artifacts.
-- The first correctness-backed positive, no-regression candidate can bootstrap
-  the champion lineage. Later candidates are compared against that champion and
-  must be regression-free, meet the benchmark-breadth gate, and meet either the
-  configured relative or absolute AND-reduction magnitude gate.
+- The scalar AND lane is regression-free and uses relative, absolute, or
+  drought-recovery accumulation thresholds. The structural bootstrap/Pareto
+  lane instead uses a positive node/depth-product reward with bounded per-design
+  node/depth regression guardrails.
 - Coding Agent baseline context now comes from authoritative
   `impl_compare/comparison/qor_delta.csv` artifacts. It sees the incumbent
   per-design AND/depth values, previous applied patch, and review feedback.
@@ -246,16 +268,28 @@ pip install -r requirements.txt
 # 3. Provision and verify the ten pinned cycle-0 knowledge repositories
 python3 -B scripts/bootstrap_agent_context.py
 
-# 4. Launch the autonomous loop (from cycle_001, max 5 cycles)
+# 4. Resume from the first unfinished frontier and stop after cycle 10
 bash run.sh
+
+# Optional: change the invocation budget and absolute final cycle.
+# Completed lineage-valid history is fast-forwarded without consuming budget.
+EDA_AGENT_NEW_CYCLE_BUDGET=4 EDA_AGENT_TARGET_CYCLE=12 bash run.sh
 ```
 
 `run.sh` wraps `workflow.dual_agent_loop`; branch manifests and content hashes
 allow a rerun to reuse only complete, lineage-valid work without overwriting or
-trusting stale reviews. Legacy `build_status=missing` reviews and structured
-provider/model/runtime failures are deliberately non-resumable, so fixing the
-environment and rerunning retries only those lanes. If a retried review changes,
-stale downstream Planning dispatches are regenerated from the new lineage.
+trusting stale reviews. `--new-cycle-budget` counts only unfinished evaluation
+cycles advanced by the current invocation. After the last paid evaluation, its
+review is still consumed into one frozen next-cycle Planning dispatch; that
+prepared dispatch runs on the next invocation. The absolute
+`--target-cycle` is different: after that cycle's fan-in review the campaign
+stops without creating an unused next dispatch. Both defaults are 10, so a
+lineage completed through cycle 5 runs cycles 6–10. Legacy `build_status=missing`
+reviews and structured provider/model/runtime failures are deliberately
+non-resumable, so fixing the environment and rerunning retries only those lanes.
+If a retried review changes, an unstarted stale downstream Planning dispatch is
+regenerated from the new lineage. A dispatch that already has branch work is
+never overwritten; parent-lineage drift is reported for explicit recovery.
 
 After syncing a fresh tree, this quick sanity check should print `70 30 40`:
 
@@ -269,17 +303,36 @@ PY
 
 When a completed cycle produces zero deltas or repeated weak evidence,
 `run.sh` honors the planner by running deterministic batch search before the
-next LLM call. The automatic batch is filtered to the planner-selected command;
-`flow_wide` includes reached wrapper probes for `rewrite`, `resub`, `dc2`, and
-`refactor` in addition to csweep/fx. Pass `--honor-planner-skip-llm` without
-`--auto-batch-on-planner-skip` when a diagnostic run should stop at that point
-instead.
-
-The repeated-decision guard is configurable. By default the loop stops after
-three repeated review decisions, which means four same-decision cycles in a
-row. Use `--same-decision-repeat-limit 0` for an uninterrupted remote run, or
-resume from the printed pending assignment if the guard stops after generating
-the next cycle.
+next Coding call. Early batches are filtered to the planner-selected command;
+after four consecutive correctness-backed QoR misses, the structural recovery
+phase removes that filter and explores all role-valid command families. The
+automatic structural stage evaluates at most 12 probes per cycle and rotates
+the complete opt-only space across cycles 6–10. The summary carries the best
+candidate plus a diverse top-three family frontier,
+so Planning receives measured alternatives rather than another single-family
+guess. `rewrite` probes stay inside Flow's `src/opt/rwr` ownership, while
+csweep/fx and other variants use their own source touchpoints. In particular,
+the wide set now includes opt-only, recipe-reached `resub` window probes and
+`dc2` DAR rewrite/refactor-default probes that were previously lost when ABCI
+wrapper variants were filtered by Flow ownership. The measured
+summary, winner, and QoR vector are then passed
+through a refreshed Planning call for both Flow and Logic. That refresh may
+change hypotheses and tasks, but it cannot change their shared baseline or
+frozen evaluation contract. If either the batch or refreshed Planning fails,
+neither Coding branch starts and the pending evidence is resumed on rerun.
+If a batch probe passes promotion gates, its exact hash-bound diff is replayed
+in the current Flow branch and re-runs build/full CEC/QoR so it participates in
+the paired fan-in instead of remaining evidence-only. At the absolute target,
+the resulting incumbent is recorded in `planning/final_champion.json`; reaching
+the target without any champion returns a nonzero status.
+Automatic batch directories are generation-specific:
+`<cycle>_planner_flow_wide_<lineage-prefix>`. The lineage binds the parent
+portfolio, baseline, evaluation contract, planner advice, selected command,
+and the exact source/patch variant space. A naked or copied `winner.json` is
+never reusable without its matching manifest, probe assignments, and patch
+hashes. The four refreshed Planning artifacts (advice, both assignments, and
+plan) are committed through a small roll-forward journal, so interruption
+between file replacements is recovered before any branch can resume.
 
 Recommended workflow:
 
@@ -341,7 +394,9 @@ the full cross-command batch.
 Outputs live in `experiments/batches/<batch-id>/summary.csv` and
 `experiments/batches/<batch-id>/winner.json`. Automatic batches use
 `experiments/probe_NNN/` so normal `cycle_NNN` auto-resume is unaffected; each
-probe still uses the standard S4/S5/review artifact layout.
+probe still uses the standard S4/S5/review artifact layout. Loaded manifests
+are fail-closed: their base assignment, complete variant set, source and patch
+digests, and winner membership must all match.
 
 ## Benchmarks
 
@@ -444,16 +499,19 @@ persisted.
 `cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair.
 The Flow lane is limited to `third_party/FlowTune/src/src/opt`; the Logic lane
 is limited to existing `.c`/`.h` files in
-`third_party/FlowTune/src/src/base/abci`. Both use the same benchmark and
-promotion flow, which reaches FlowTune and rewrite/resub/refactor families
-before CEC-backed QoR review.
+`third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG command
+recipe and CEC-backed QoR review. This reaches the edited rewrite/resub/refactor
+command kernels, but it does not exercise the separate `ftune` MAB scheduler.
 
 ## Planning Agent
 
-The Planning Agent runs once per new cycle. In `auto`/`model` mode it uses the
-LLM to formulate two hypotheses and tasks; deterministic mode supplies stable
-fallback advice. Code, not the model, locks the candidate identities, source
-ownership, baseline, benchmark/evaluation contract, and artifact layout.
+The Planning Agent normally runs once per new cycle. In `auto`/`model` mode it
+uses the LLM to formulate two hypotheses and tasks; deterministic mode supplies
+stable fallback advice. If Planning's executable `should_skip_llm` control asks
+for a model-free sensitivity batch, Planning is refreshed once with those
+measurements before either Coding branch starts. Code, not the model, locks the
+candidate identities, source ownership, baseline, benchmark/evaluation
+contract, and artifact layout.
 
 ### Architecture
 
@@ -462,6 +520,9 @@ previous centralized review + both branch evidence + pinned cycle-0 priors
                                │
                                ▼
                     one Planning Agent call
+                               │
+                 optional model-free batch +
+                 measured-evidence Planning refresh
                                │
                    frozen advice + content hash
                          ┌─────┴─────┐
@@ -496,14 +557,17 @@ shared-winner continuation.
 ```
 F0  assignment.py     normalize source_patch_diff scope and active-cycle paths
 F1  cycle_driver      model proposes source_patch_diff; each bounded attempt
-                      writes a typed status and an immutable repair assignment
+                      writes a typed status, immutable repair assignment, and
+                      per-attempt validation-feedback snapshot with SHA-256;
+                      strict patch/compile failures retry in the same candidate
 S4d source_patch_runner  apply diff to isolated workspace (git apply --recount)
 S4c source_patch_runner  Python smoke gate (py_compile + fixture validation)
 S4e source_patch_runner  compile candidate ABC binary in workspace
 S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
                       (correctness-backed)
      review.py         classify: REPAIR_VALIDATION | PATCH | SMOKE | COMPILE
-                       | REJECT_CEC | REPAIR_QOR | ACCEPT_FOR_NEXT_CYCLE
+                       | REJECT_CEC | REPAIR_QOR | RETAIN_FOR_SYNERGY
+                       | ACCEPT_FOR_NEXT_CYCLE
      portfolio_review select at most one lineage-valid winner after both lanes
 ```
 
@@ -520,7 +584,8 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 | `REPAIR_COMPILE` | C compilation failed |
 | `REJECT_CEC` | CEC equivalence check failed |
 | `REPAIR_QOR` | CEC passed but QoR didn't improve |
-| `ACCEPT_FOR_NEXT_CYCLE` | CEC passed AND QoR improved — bootstrap or replacement champion |
+| `RETAIN_FOR_SYNERGY` | Full CEC passed and the size/depth vector is useful, but this trade-off cannot update the baseline until a fresh combined/follow-up candidate passes every gate |
+| `ACCEPT_FOR_NEXT_CYCLE` | Full CEC passed and either the scalar AND lane or guarded structural Pareto lane improved — eligible for centralized selection |
 
 Before build/CEC, `build_status` distinguishes outcomes that previously all
 looked like `missing`:
@@ -530,6 +595,7 @@ looked like `missing`:
 | `agent_deferred` | Valid evidence-insufficient result; fan in and let Planning narrow the next task |
 | `agent_needs_planner_approval` | Valid scope request; fan in without applying a patch |
 | `agent_response_validation_failed` | Local JSON/patch contract remained invalid; fan in exact feedback |
+| `agent_patch_apply_check_failed` | Structurally valid diff still did not apply exactly to the frozen baseline after three attempts (two repairs); fan in as `REPAIR_PATCH` |
 | `agent_provider_transient_failed` | Retry budget exhausted; stop campaign and retry this lane on resume |
 | `agent_provider_permanent_failed` / `agent_provider_configuration_failed` | Stop before another Planning round; fix provider configuration |
 | `agent_model_response_failed` | Empty, truncated, invalid, refused, or filtered response; stop with typed attempt evidence |
@@ -563,9 +629,19 @@ enter the same bounded three-attempt loop as local validation feedback. Auth,
 model, request-policy, and configuration errors fail fast. Each attempt is
 recorded under
 `experiments/<cycle>/agents/attempts/<candidate>/`; the frozen Planning
-assignment is never modified. `json_schema` strict mode fails locally with an
-actionable configuration error when an agent schema is not strict-compatible,
-instead of relying on a provider-side 400 response.
+assignment is never modified during Coding retries. Local response-validation
+failures store `attempt_XX.feedback.md`; the terminal exact issue section is
+also embedded in the hash-bound branch review and carried through a dedicated,
+role-tagged Planning/Coding prompt channel. `json_schema` strict mode fails
+locally with an actionable configuration error when an agent schema is not
+strict-compatible, instead of relying on a provider-side 400 response.
+
+For `source_patch_diff`, every structurally valid response is also checked with
+strict `git apply` in a disposable copy of the exact frozen baseline before any
+build. A failed target is added only to the next attempt assignment's key source
+context, so the model can regenerate exact hunks without mutating the frozen
+Planning assignment. Three failed checks produce `REPAIR_PATCH`; fuzzy patching
+and whitespace-relaxed application are not accepted.
 
 Larger output budgets help when the model response is cut off, malformed, or
 missing part of a unified diff. They do not usually fix repeated `REPAIR_QOR`

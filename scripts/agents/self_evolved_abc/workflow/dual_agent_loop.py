@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
+import json
 import os
 import signal
 import shutil
@@ -22,8 +24,10 @@ from scripts.agents.self_evolved_abc.benchmarks import (
 )
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.planning.portfolio import (
+    CAMPAIGN_POLICY_VERSION,
     BranchDispatch,
     PortfolioPlan,
+    finalize_portfolio_champion,
     load_portfolio_plan,
     portfolio_plan_path,
     validate_portfolio_plan,
@@ -31,6 +35,9 @@ from scripts.agents.self_evolved_abc.planning.portfolio import (
 from scripts.agents.self_evolved_abc.flow.source_patch import (
     source_patch_diff_path,
     source_patch_plan_path,
+)
+from scripts.agents.self_evolved_abc.flow.planner_batch import (
+    run_and_integrate_planner_batch,
 )
 from scripts.agents.self_evolved_abc.model_client import ModelClientError
 from scripts.agents.self_evolved_abc.planning_agent import PlanningAgent
@@ -53,6 +60,7 @@ from scripts.agents.self_evolved_abc.workflow.evaluation_recipe import (
 )
 from scripts.agents.self_evolved_abc.workflow.portfolio_review import (
     BranchOutcome,
+    build_portfolio_review_payload,
     collect_branch_outcome,
     write_portfolio_review,
 )
@@ -80,7 +88,28 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--cycle-id", default="cycle_001")
     parser.add_argument("--previous-cycle", default="cycle_000")
     parser.add_argument("--portfolio-id", default="flow_logic_campaign")
-    parser.add_argument("--max-cycles", type=int, default=5)
+    parser.add_argument(
+        "--new-cycle-budget",
+        type=int,
+        default=10,
+        help=(
+            "Maximum number of unfinished evaluation cycles to advance in this "
+            "invocation. Completed, lineage-valid cycles are fast-forwarded "
+            "without consuming budget; the final review is still consumed into "
+            "one prepared Planning dispatch."
+        ),
+    )
+    parser.add_argument(
+        "--target-cycle",
+        type=int,
+        default=10,
+        help=(
+            "Absolute final cycle number to execute. Unlike the safety budget, "
+            "this is resume-stable: a campaign with cycles 1-5 complete runs "
+            "only cycles 6-10 and stops after cycle 10 review without leaving "
+            "an unexecuted cycle 11 dispatch."
+        ),
+    )
     parser.add_argument(
         "--max-workers",
         type=int,
@@ -126,8 +155,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
-    if args.max_cycles < 1:
-        print("dual_agent_loop: --max-cycles must be >= 1", file=sys.stderr)
+    if args.new_cycle_budget < 1:
+        print(
+            "dual_agent_loop: --new-cycle-budget must be >= 1",
+            file=sys.stderr,
+        )
+        return 2
+    if args.target_cycle < 1:
+        print("dual_agent_loop: --target-cycle must be >= 1", file=sys.stderr)
         return 2
     if args.timeout_seconds <= 0 or args.build_timeout_seconds <= 0:
         print("dual_agent_loop: timeouts must be > 0", file=sys.stderr)
@@ -155,19 +190,92 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
+    repo_root = repo_root.resolve()
     current_plan = _load_or_create_initial_plan(repo_root, args)
     _print_plan(current_plan, repo_root)
     if args.prepare_only:
         return 0
 
+    (
+        current_plan,
+        fast_forwarded_count,
+        target_already_complete,
+    ) = _fast_forward_completed_lineage(
+        repo_root=repo_root,
+        current_plan=current_plan,
+        timeout_seconds=args.timeout_seconds,
+        build_timeout_seconds=args.build_timeout_seconds,
+        planner_mode=args.planner_mode,
+        target_cycle=args.target_cycle,
+    )
+    if fast_forwarded_count:
+        print(
+            "dual_agent_loop: resumed frontier "
+            f"cycle={current_plan.cycle_id} "
+            f"fast_forwarded={fast_forwarded_count} "
+            "new_cycle_budget_unchanged=true"
+        )
+        _print_plan(current_plan, repo_root)
+
+    if target_already_complete:
+        completed_review = _load_completed_portfolio_review(repo_root, current_plan)
+        if completed_review is None:
+            print(
+                "dual_agent_loop: completed target has no valid paired review",
+                file=sys.stderr,
+            )
+            return 1
+        terminal = finalize_portfolio_champion(
+            repo_root=repo_root,
+            current_plan=current_plan,
+            portfolio_review=completed_review,
+        )
+        print(
+            "dual_agent_loop: target cycle already complete; "
+            f"completed={current_plan.cycle_id} "
+            f"target=cycle_{args.target_cycle:03d}; no unexecuted next "
+            "dispatch was created; terminal_status="
+            f"{terminal['status']}"
+        )
+        return 0 if bool(terminal["objective_achieved"]) else 1
+
+    if _cycle_number(current_plan.cycle_id) > args.target_cycle:
+        achieved = str(current_plan.baseline_ref.get("kind", "")) == "champion"
+        print(
+            "dual_agent_loop: target cycle already complete; "
+            f"frontier={current_plan.cycle_id} target=cycle_{args.target_cycle:03d}; "
+            f"champion_available={str(achieved).lower()}"
+        )
+        return 0 if achieved else 1
+
     had_failed_branch = False
-    for iteration in range(1, args.max_cycles + 1):
+    terminal_objective_achieved: bool | None = None
+    for iteration in range(1, args.new_cycle_budget + 1):
         print("\n" + "=" * 72)
         print(
             "dual_agent_loop: "
-            f"round {iteration}/{args.max_cycles} ({current_plan.cycle_id})"
+            "new-cycle budget "
+            f"{iteration}/{args.new_cycle_budget} ({current_plan.cycle_id})"
         )
         print("=" * 72 + "\n")
+        controlled_plan = _honor_flow_planner_control(
+            repo_root=repo_root,
+            plan=current_plan,
+            build_candidate_binary=args.build_candidate_binary,
+            build_jobs=args.build_jobs,
+            build_timeout_seconds=args.build_timeout_seconds,
+            timeout_seconds=args.timeout_seconds,
+            planner_mode=args.planner_mode,
+        )
+        if controlled_plan is None:
+            had_failed_branch = True
+            print(
+                "dual_agent_loop: stopping — planner-requested Flow batch "
+                "did not produce usable sensitivity evidence; no coding "
+                "branch was started"
+            )
+            break
+        current_plan = controlled_plan
         outcomes = execute_portfolio_plan(
             repo_root=repo_root,
             plan=current_plan,
@@ -232,10 +340,26 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
                 f"{missing_roles or 'unknown'}"
             )
             break
-        if iteration == args.max_cycles:
-            print("dual_agent_loop: stopping — reached --max-cycles")
+        completed_cycle_id = current_plan.cycle_id
+        if _cycle_number(completed_cycle_id) >= args.target_cycle:
+            terminal = finalize_portfolio_champion(
+                repo_root=repo_root,
+                current_plan=current_plan,
+                portfolio_review=review,
+            )
+            terminal_objective_achieved = bool(terminal["objective_achieved"])
+            print(
+                "dual_agent_loop: stopping — reached absolute target "
+                f"cycle_{args.target_cycle:03d} after its fan-in review; no "
+                "unexecuted next dispatch was created; terminal_status="
+                f"{terminal['status']}"
+            )
+            if not terminal_objective_achieved:
+                print(
+                    "dual_agent_loop: campaign objective unmet — no "
+                    "correctness-backed champion was produced"
+                )
             break
-
         next_cycle = _increment_cycle_id(current_plan.cycle_id)
         current_plan = _load_or_create_next_plan(
             repo_root=repo_root,
@@ -247,8 +371,307 @@ def _run_campaign(repo_root: Path, args: argparse.Namespace) -> int:
             planner_mode=args.planner_mode,
         )
         _print_plan(current_plan, repo_root)
+        if iteration == args.new_cycle_budget:
+            print(
+                "dual_agent_loop: stopping — exhausted --new-cycle-budget "
+                f"after {iteration} new cycle(s); feedback from "
+                f"{completed_cycle_id} was consumed into prepared dispatch "
+                f"{current_plan.cycle_id}, whose candidates were not executed"
+            )
+            break
 
-    return 1 if had_failed_branch else 0
+    return 1 if had_failed_branch or terminal_objective_achieved is False else 0
+
+
+def _honor_flow_planner_control(
+    *,
+    repo_root: Path,
+    plan: PortfolioPlan,
+    build_candidate_binary: bool,
+    build_jobs: int,
+    build_timeout_seconds: float,
+    timeout_seconds: float,
+    planner_mode: str,
+) -> PortfolioPlan | None:
+    """Run a requested model-free Flow batch before either coding branch."""
+
+    try:
+        (
+            flow_branch,
+            _payload,
+            meta,
+            should_skip_llm,
+            pending_replan,
+        ) = _flow_planner_control_state(plan)
+    except (OSError, ValueError, json.JSONDecodeError):
+        return None
+    if not should_skip_llm and not pending_replan:
+        return plan
+
+    context = CycleContext.from_assignment_file(
+        repo_root, flow_branch.assignment_path
+    )
+    if load_valid_branch_run(
+        repo_root=repo_root,
+        plan=plan,
+        branch=flow_branch,
+        review_path=review_decision_path(context),
+    ) is not None:
+        print(
+            "dual_agent_loop: ignoring pre-control Flow branch manifest — "
+            "planner batch/replan is still pending and must establish the "
+            f"authoritative assignment lineage for {plan.cycle_id}"
+        )
+
+    target_command = str(meta.get("target_command", "")).strip()
+    print(
+        "dual_agent_loop: honoring planner should_skip_llm before coding "
+        f"branches; running model-free flow_wide batch targeting "
+        f"{target_command or 'planner-selected command'}"
+    )
+    try:
+        result = run_and_integrate_planner_batch(
+            repo_root=repo_root,
+            assignment_path=flow_branch.assignment_path,
+            build_candidate_binary=build_candidate_binary,
+            build_jobs=build_jobs,
+            build_timeout_seconds=build_timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            update_baseline=False,
+            lineage_context={
+                "portfolio_id": plan.portfolio_id,
+                "planner_dispatch_id": plan.planner_dispatch_id,
+                "cycle_id": plan.cycle_id,
+                "previous_cycle_id": plan.previous_cycle_id,
+                "parent_plan_hash": plan.parent_plan_hash,
+                "parent_review_hash": plan.parent_review_hash,
+                "portfolio_plan_sha256": hashlib.sha256(
+                    portfolio_plan_path(repo_root, plan.cycle_id).read_bytes()
+                ).hexdigest(),
+                "evaluation_contract_hash": plan.evaluation_contract_hash,
+                "planner_advice_hash": plan.planner_advice_hash,
+            },
+        )
+        if result is None:
+            return None
+        replanned = PlanningAgent.refresh_parallel_coding_dispatch(
+            repo_root=repo_root,
+            plan=plan,
+            planner_mode=planner_mode,
+        )
+        if not isinstance(replanned, PortfolioPlan):
+            raise ValueError("post-batch Planning did not return a portfolio plan")
+        validate_portfolio_plan(replanned, repo_root=repo_root)
+    except (OSError, ValueError) as exc:
+        print(f"dual_agent_loop: planner batch integration failed: {exc}")
+        return None
+    print(
+        "dual_agent_loop: planner batch evidence consumed by refreshed "
+        "Flow/Logic Planning advice with shared baseline unchanged; coding "
+        "branches may start"
+    )
+    return replanned
+
+
+def _flow_planner_control_state(
+    plan: PortfolioPlan,
+) -> tuple[BranchDispatch, dict[str, object], dict[str, object], bool, bool]:
+    """Read the durable Flow control state without consulting branch runs.
+
+    Branch manifests describe Coding work under one assignment lineage.  They
+    cannot prove that the coordinator-owned pre-Coding batch/replan control was
+    executed.  Only the assignment's batch evidence may settle that control.
+    """
+
+    flow_branch = next(
+        branch for branch in plan.branches if branch.branch_role == "flow"
+    )
+    payload = json.loads(flow_branch.assignment_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Flow assignment is not a JSON object")
+    raw_meta = payload.get("_planning_meta")
+    meta = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+    should_skip_llm = bool(payload.get("planner_should_skip_llm", False)) or bool(
+        meta.get("should_skip_llm")
+    )
+    batch_evidence = payload.get("batch_search_evidence")
+    pending_replan = (
+        isinstance(batch_evidence, dict)
+        and bool(batch_evidence.get("requires_replanning"))
+        and not bool(batch_evidence.get("planning_consumed"))
+    )
+    return flow_branch, payload, meta, should_skip_llm, pending_replan
+
+
+def _fast_forward_completed_lineage(
+    *,
+    repo_root: Path,
+    current_plan: PortfolioPlan,
+    timeout_seconds: float,
+    build_timeout_seconds: float,
+    planner_mode: str,
+    target_cycle: int,
+) -> tuple[PortfolioPlan, int, bool]:
+    """Advance past durable completed rounds without charging new-cycle budget."""
+
+    completed_count = 0
+    while True:
+        review = _load_completed_portfolio_review(repo_root, current_plan)
+        if review is None:
+            return current_plan, completed_count, False
+        completed_cycle_id = current_plan.cycle_id
+        if _cycle_number(completed_cycle_id) >= target_cycle:
+            return current_plan, completed_count, True
+        current_plan = _load_or_create_next_plan(
+            repo_root=repo_root,
+            current_plan=current_plan,
+            portfolio_review=review,
+            next_cycle_id=_increment_cycle_id(completed_cycle_id),
+            timeout_seconds=timeout_seconds,
+            build_timeout_seconds=build_timeout_seconds,
+            planner_mode=planner_mode,
+        )
+        completed_count += 1
+        print(
+            "dual_agent_loop: fast-forwarded completed lineage "
+            f"{completed_cycle_id} -> {current_plan.cycle_id}"
+        )
+
+
+def _load_completed_portfolio_review(
+    repo_root: Path,
+    plan: PortfolioPlan,
+) -> dict[str, object] | None:
+    """Rebuild a canonical fan-in checkpoint from two resumable branch runs."""
+
+    repo_root = repo_root.resolve()
+    try:
+        _, _, _, should_skip_llm, pending_replan = _flow_planner_control_state(plan)
+    except (OSError, ValueError, json.JSONDecodeError):
+        # A malformed control assignment is never safe to fast-forward.
+        return None
+    if should_skip_llm or pending_replan:
+        # Pre-control Coding manifests (for example from the former advisory-only
+        # launcher) cannot make a planner-requested batch/replan disappear.
+        return None
+
+    outcomes: list[BranchOutcome] = []
+    for branch in plan.branches:
+        context = CycleContext.from_assignment_file(repo_root, branch.assignment_path)
+        manifest = load_valid_branch_run(
+            repo_root=repo_root,
+            plan=plan,
+            branch=branch,
+            review_path=review_decision_path(context),
+        )
+        if manifest is None:
+            return None
+        outcome = collect_branch_outcome(
+            repo_root=repo_root,
+            branch=branch,
+            return_code=_optional_manifest_int(manifest.get("return_code")),
+            elapsed_seconds=float(manifest.get("elapsed_seconds", 0.0)),
+            runner_error=str(manifest.get("error", "")),
+        )
+        if outcome.status != "reviewed" or _coding_infrastructure_failed(outcome):
+            return None
+        outcomes.append(outcome)
+
+    persisted = _load_matching_portfolio_checkpoint(
+        repo_root=repo_root,
+        plan=plan,
+        outcomes=outcomes,
+    )
+    if persisted is not None:
+        return persisted
+    payload = write_portfolio_review(
+        repo_root=repo_root,
+        plan=plan,
+        outcomes=outcomes,
+    )
+    if not bool(payload["quorum_reached"]):
+        return None
+    return payload
+
+
+def _load_matching_portfolio_checkpoint(
+    *,
+    repo_root: Path,
+    plan: PortfolioPlan,
+    outcomes: Sequence[BranchOutcome],
+) -> dict[str, object] | None:
+    """Preserve historical bytes only when all promotion facts still match."""
+
+    path = (
+        repo_root
+        / "experiments"
+        / plan.cycle_id
+        / "planning"
+        / "portfolio_review.json"
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    canonical = build_portfolio_review_payload(
+        repo_root=repo_root,
+        plan=plan,
+        outcomes=outcomes,
+    )
+    # Descriptive prose may legitimately change between campaign policy
+    # versions, so it must not invalidate an already-started downstream plan.
+    # Every field capable of changing eligibility, winner selection, frontier
+    # membership, or terminal status is nevertheless compared to a fresh
+    # reconstruction from the hash-bound branch manifests and reviews.
+    safety_fields = (
+        "schema_version",
+        "portfolio_id",
+        "planner_dispatch_id",
+        "cycle_id",
+        "baseline_ref",
+        "evaluation_contract_hash",
+        "planner_advice_hash",
+        "round_status",
+        "reviewed_count",
+        "failed_count",
+        "quorum_reached",
+        "eligible_count",
+        "selected_candidate_id",
+        "selected_agent_name",
+        "frontier_candidates",
+        "frontier_count",
+    )
+    if any(payload.get(key) != canonical.get(key) for key in safety_fields):
+        return None
+    raw_branches = payload.get("branches")
+    canonical_branches = canonical.get("branches")
+    if (
+        not isinstance(raw_branches, list)
+        or not isinstance(canonical_branches, list)
+        or len(raw_branches) != len(canonical_branches)
+    ):
+        return None
+    by_role = {
+        str(item.get("branch_role", "")): item
+        for item in raw_branches
+        if isinstance(item, dict)
+    }
+    expected_by_role = {
+        str(item.get("branch_role", "")): item
+        for item in canonical_branches
+        if isinstance(item, dict)
+    }
+    if set(by_role) != set(expected_by_role):
+        return None
+    for role, expected_branch in expected_by_role.items():
+        raw = by_role[role]
+        if any(
+            raw.get(key) != value for key, value in expected_branch.items()
+        ):
+            return None
+    return payload
 
 
 def _load_or_create_next_plan(
@@ -267,19 +690,41 @@ def _load_or_create_next_plan(
     overwrite = False
     if path.is_file():
         try:
-            return load_portfolio_plan(repo_root, next_cycle_id)
+            loaded = load_portfolio_plan(repo_root, next_cycle_id)
+            if _portfolio_policy_is_current(loaded):
+                return loaded
+            if _portfolio_has_started(repo_root, loaded):
+                print(
+                    "dual_agent_loop: retaining started historical dispatch "
+                    f"{next_cycle_id} under its frozen campaign policy"
+                )
+                return loaded
+            overwrite = True
+            print(
+                "dual_agent_loop: regenerating unexecuted downstream Planning "
+                f"dispatch {next_cycle_id} under campaign policy "
+                f"v{CAMPAIGN_POLICY_VERSION}"
+            )
         except ValueError as exc:
             message = str(exc)
-            if message not in (
+            if overwrite:
+                pass
+            elif message not in (
                 "portfolio parent plan lineage mismatch",
                 "portfolio parent review lineage mismatch",
             ):
                 raise
-            overwrite = True
-            print(
-                "dual_agent_loop: regenerating stale downstream Planning "
-                f"dispatch {next_cycle_id}: {message}"
-            )
+            else:
+                if _raw_portfolio_has_started(repo_root, path):
+                    raise ValueError(
+                        "started downstream dispatch has stale parent lineage; "
+                        "refusing to overwrite frozen branch work"
+                    ) from exc
+                overwrite = True
+                print(
+                    "dual_agent_loop: regenerating stale downstream Planning "
+                    f"dispatch {next_cycle_id}: {message}"
+                )
 
     created = PlanningAgent.create_next_parallel_coding_dispatch(
         repo_root=repo_root,
@@ -293,6 +738,66 @@ def _load_or_create_next_plan(
     )
     assert isinstance(created, PortfolioPlan)
     return created
+
+
+def _portfolio_policy_is_current(plan: PortfolioPlan) -> bool:
+    for branch in plan.branches:
+        try:
+            payload = json.loads(branch.assignment_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+        state = payload.get("campaign_state") if isinstance(payload, dict) else None
+        if not isinstance(state, dict) or int(state.get("policy_version", 0) or 0) != CAMPAIGN_POLICY_VERSION:
+            return False
+    return True
+
+
+def _portfolio_has_started(repo_root: Path, plan: PortfolioPlan) -> bool:
+    for branch in plan.branches:
+        context = CycleContext.from_assignment_file(repo_root, branch.assignment_path)
+        if branch_run_manifest_path(repo_root, plan, branch).is_file():
+            return True
+        if review_decision_path(context).is_file():
+            return True
+    return False
+
+
+def _raw_portfolio_has_started(repo_root: Path, plan_path: Path) -> bool:
+    """Detect started work even when strict plan loading rejects parent hashes."""
+
+    try:
+        payload = json.loads(plan_path.read_text(encoding="utf-8"))
+        cycle_id = validate_portfolio_cycle_id(payload.get("cycle_id"))
+        branches = payload.get("branches")
+        if not isinstance(branches, list):
+            return False
+        for raw in branches:
+            if not isinstance(raw, dict):
+                continue
+            candidate_id = validate_candidate_id(raw.get("candidate_id"))
+            manifest = safe_repo_path(
+                repo_root,
+                repo_root
+                / "experiments"
+                / cycle_id
+                / "planning"
+                / "branch_runs"
+                / f"{candidate_id}.json",
+            )
+            if manifest.is_file():
+                return True
+            assignment_relative = str(raw.get("assignment_path", "")).strip()
+            if not assignment_relative:
+                continue
+            assignment = safe_repo_path(repo_root, repo_root / assignment_relative)
+            if not assignment.is_file():
+                continue
+            context = CycleContext.from_assignment_file(repo_root, assignment)
+            if review_decision_path(context).is_file():
+                return True
+    except (OSError, ValueError, json.JSONDecodeError, TypeError):
+        return False
+    return False
 
 
 def _acquire_campaign_lock(repo_root: Path):
@@ -783,6 +1288,13 @@ def _increment_cycle_id(cycle_id: str) -> str:
     if not separator or not number.isdigit():
         raise ValueError(f"invalid cycle id: {cycle_id!r}")
     return f"{prefix}_{int(number) + 1:0{len(number)}d}"
+
+
+def _cycle_number(cycle_id: str) -> int:
+    _prefix, separator, number = cycle_id.rpartition("_")
+    if not separator or not number.isdigit():
+        raise ValueError(f"invalid cycle id: {cycle_id!r}")
+    return int(number)
 
 
 if __name__ == "__main__":

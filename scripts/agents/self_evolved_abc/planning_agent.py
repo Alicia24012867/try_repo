@@ -39,6 +39,9 @@ from scripts.agents.self_evolved_abc.workflow.artifacts import (
     implementation_root_for,
     validate_portfolio_cycle_id,
 )
+from scripts.agents.self_evolved_abc.workflow.failure_evidence import (
+    format_validation_feedback,
+)
 
 
 class PlanningAgent(PaperAgent):
@@ -98,6 +101,28 @@ class PlanningAgent(PaperAgent):
         )
 
     @classmethod
+    def refresh_parallel_coding_dispatch(
+        cls,
+        *,
+        planner_mode: str = "auto",
+        model_client: ModelClient | None = None,
+        **kwargs: Any,
+    ) -> object:
+        """Replan both branches after a model-free sensitivity batch."""
+
+        from scripts.agents.self_evolved_abc.planning.portfolio import (
+            refresh_portfolio_planner_advice,
+        )
+
+        return refresh_portfolio_planner_advice(
+            **kwargs,
+            planner_advice_provider=cls._parallel_advice_provider(
+                planner_mode=planner_mode,
+                model_client=model_client,
+            ),
+        )
+
+    @classmethod
     def _parallel_advice_provider(
         cls,
         *,
@@ -145,6 +170,7 @@ class PlanningAgent(PaperAgent):
             raise ValueError("locked portfolio is missing Flow assignment")
         assignment = dict(flow)
         evidence: list[str] = []
+        branch_failure_feedback: list[dict[str, object]] = []
         for role in ("flow", "logic"):
             branch = branches.get(role)
             if not isinstance(branch, Mapping):
@@ -153,6 +179,20 @@ class PlanningAgent(PaperAgent):
                 relative = str(value)
                 if relative not in evidence:
                     evidence.append(relative)
+            raw_feedback = branch.get("previous_role_validation_feedback")
+            if isinstance(raw_feedback, Mapping) and str(
+                raw_feedback.get("issues_markdown", "")
+            ).strip():
+                branch_failure_feedback.append(
+                    {
+                        **dict(raw_feedback),
+                        # Coordinator-owned labels prevent stale or forged
+                        # feedback metadata from crossing branch identities.
+                        "branch_role": role,
+                        "agent_name": str(branch.get("agent_name", "")),
+                        "candidate_id": str(branch.get("candidate_id", "")),
+                    }
+                )
         assignment.update(
             {
                 "agent_name": cls.agent_name,
@@ -161,6 +201,7 @@ class PlanningAgent(PaperAgent):
                 "cycle_id": locked["cycle_id"],
                 "previous_cycle_id": locked["previous_cycle_id"],
                 "recent_evidence": evidence,
+                "branch_failure_feedback": branch_failure_feedback,
                 # Section 3.3 gives the cycle-0 planner the repository-wide
                 # profile.  Keep that prior available (but immutable) in later
                 # rounds so autonomous planning can refer back to the same
@@ -523,6 +564,11 @@ class PlanningAgent(PaperAgent):
             ),
             "PRIOR_KNOWLEDGE_CONTEXT": repository_context.text,
             "CURRENT_CHAMPION_SUMMARY": champion_summary,
+            "CAMPAIGN_RECOVERY_STATE": json.dumps(
+                assignment.get("campaign_state", {}),
+                indent=2,
+                sort_keys=True,
+            ),
             "COMPILE_FEEDBACK": compact_text_block(
                 "compile", str(compile_feedback), max_chars=4000
             ),
@@ -534,6 +580,7 @@ class PlanningAgent(PaperAgent):
             ),
             "RUNTIME_FEEDBACK": "Runtime data from remote Linux host.",
             "REJECTED_CANDIDATES": self._rejected_candidates_text(previous_cycle),
+            "BRANCH_FAILURE_FEEDBACK": self._branch_failure_feedback_text(),
             "PRIMARY_METRIC": assignment.get(
                 "target_metric", "AND node count"
             ),
@@ -554,14 +601,38 @@ class PlanningAgent(PaperAgent):
             ),
         }
 
+    def _branch_failure_feedback_text(self) -> str:
+        raw = self.context.assignment.get("branch_failure_feedback", ())
+        if isinstance(raw, Mapping) or isinstance(raw, (str, bytes)):
+            records = (raw,)
+        else:
+            try:
+                records = tuple(raw)  # type: ignore[arg-type]
+            except TypeError:
+                records = ()
+        blocks = [
+            format_validation_feedback(record)
+            for record in records
+            if isinstance(record, Mapping)
+        ]
+        rendered = [block for block in blocks if block]
+        if not rendered:
+            return "No exact branch validation issues were recorded."
+        return "\n\n".join(rendered)
+
     def _champion_summary(self) -> str:
         assignment = self.context.assignment
         champion_cycle = assignment.get("champion_cycle_id", "")
         if not champion_cycle or assignment.get("baseline_kind") == "vanilla":
+            campaign = assignment.get("campaign_state")
+            state = dict(campaign) if isinstance(campaign, Mapping) else {}
             return (
                 "No champion yet — using vanilla ABC/FlowTune binary as baseline. "
                 "The first champion will be promoted when a candidate passes "
-                "build, CEC, and QoR thresholds."
+                "build, CEC, and QoR thresholds. "
+                f"Recovery phase={state.get('evolution_phase', 'conservative')}, "
+                "consecutive correctness-backed QoR misses="
+                f"{state.get('consecutive_qor_stagnation', 0)}."
             )
         return (
             f"Champion from {champion_cycle} "

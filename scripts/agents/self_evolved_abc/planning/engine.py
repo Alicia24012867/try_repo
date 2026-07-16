@@ -124,6 +124,9 @@ class PlanningEngine:
             previous_strategies=tuple(strategies),
             cycle_number=cycle_number,
             benchmark_count=effective_benchmark_count,
+            consecutive_qor_stagnation=(
+                thresholds.consecutive_qor_stagnation
+            ),
         )
         strategies.append(strategy)
 
@@ -181,6 +184,18 @@ class PlanningEngine:
             "target_source_dir": strategy.target_source_dir,
             "target_parameter_kind": strategy.target_parameter_kind,
             "planner_should_skip_llm": strategy.should_skip_llm,
+            "campaign_state": {
+                "cycle_number": _cycle_number(result.next_cycle_id),
+                "consecutive_qor_stagnation": (
+                    thresholds.consecutive_qor_stagnation
+                ),
+                "evolution_phase": thresholds.evolution_phase,
+                "exploration_phase": strategy.exploration_phase,
+                "frontier_policy": (
+                    "Partial candidates are evidence only; a combined candidate "
+                    "must repeat build, full CEC, and QoR before promotion."
+                ),
+            },
             "evaluation_flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
             "flow_source_touchpoints": dict(FLOW_SOURCE_TOUCHPOINTS),
             "source_patch_allowed_roots": [
@@ -239,6 +254,12 @@ class PlanningEngine:
 
         # --- Strategy guidance ---
         parts.append(
+            "Campaign recovery state: "
+            f"phase={thresholds.evolution_phase}, consecutive "
+            "correctness-backed QoR misses="
+            f"{thresholds.consecutive_qor_stagnation}."
+        )
+        parts.append(
             f"Strategy: {strategy.task_type}. "
             f"Target command: `{strategy.target_command}`. "
             f"Rationale: {strategy.rationale}"
@@ -290,6 +311,10 @@ def planning_meta_from_result(result: PlanningResult) -> dict[str, object]:
         "target_parameter_kind": strategy.target_parameter_kind,
         "should_skip_llm": strategy.should_skip_llm,
         "should_relax_thresholds": strategy.should_relax_thresholds,
+        "exploration_phase": strategy.exploration_phase,
+        "consecutive_qor_stagnation": (
+            thresholds.consecutive_qor_stagnation
+        ),
         "threshold_rationale": thresholds.adjustment_reason,
         "strategy_rationale": strategy.rationale,
         "discouraged_targets": list(strategy.discouraged_targets),
@@ -354,6 +379,9 @@ def _reconstruct_strategy_history(
                     ),
                     discouraged_targets=tuple(
                         meta.get("discouraged_targets", ())
+                    ),
+                    exploration_phase=str(
+                        meta.get("exploration_phase", "conservative")
                     ),
                 )
             )

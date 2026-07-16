@@ -106,6 +106,21 @@ class PatchApplyResult:
     log_lines: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class PatchApplyCheckResult:
+    """Side-effect-free applicability result against the frozen baseline."""
+
+    patch_path: Path
+    target_paths: tuple[str, ...]
+    exit_code: int
+    status: str
+    log_lines: tuple[str, ...]
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0
+
+
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Create S4 baseline/candidate implementation manifests."
@@ -740,6 +755,58 @@ def write_patch_diff(
     return output_path
 
 
+def check_candidate_patch_against_frozen_baseline(
+    *,
+    context: CycleContext,
+    patch_path: Path,
+) -> PatchApplyCheckResult:
+    """Strictly apply a patch to a disposable copy of the frozen baseline.
+
+    This is intentionally stronger than parsing a unified diff.  It exercises
+    the exact S4 application path before an expensive build, while the real
+    baseline and the persistent candidate workspace remain untouched.
+    """
+
+    check_parent = impl_candidate_dir(context) / "patch_apply_checks"
+    check_parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with tempfile.TemporaryDirectory(
+            prefix="attempt_",
+            dir=check_parent,
+        ) as temporary:
+            # Reuse the exact S4 implementation rather than maintaining a
+            # second preflight command that could silently drift in flags.
+            applied = apply_candidate_patch_to_workspace(
+                context=context,
+                patch_path=patch_path,
+                workspace_root=Path(temporary),
+            )
+            log_lines = (
+                "Coding Agent strict frozen-baseline patch apply-check",
+                "workspace_lifetime: temporary",
+                "persistent_candidate_workspace_modified: false",
+                *applied.log_lines,
+            )
+            return PatchApplyCheckResult(
+                patch_path=patch_path,
+                target_paths=applied.target_paths,
+                exit_code=applied.exit_code,
+                status=(
+                    "patch_apply_check_passed"
+                    if applied.exit_code == 0
+                    else "patch_apply_check_failed"
+                ),
+                log_lines=log_lines,
+            )
+    finally:
+        # TemporaryDirectory removes the disposable workspace; remove its
+        # empty container too so a check has no persistent filesystem marker.
+        try:
+            check_parent.rmdir()
+        except OSError:
+            pass
+
+
 def apply_candidate_patch_to_workspace(
     *,
     context: CycleContext,
@@ -784,7 +851,6 @@ def apply_candidate_patch_to_workspace(
         "apply",
         "--check",
         "--recount",
-        "--ignore-space-change",
         f"--directory={workspace_relative}",
         patch_rel,
     )
@@ -792,7 +858,6 @@ def apply_candidate_patch_to_workspace(
         "git",
         "apply",
         "--recount",
-        "--ignore-space-change",
         f"--directory={workspace_relative}",
         patch_rel,
     )
@@ -816,64 +881,27 @@ def apply_candidate_patch_to_workspace(
     if check_result.stdout:
         log_lines.extend(check_result.stdout.rstrip().splitlines())
 
-    # Try git-apply first; fall back to GNU patch with fuzz for LLM diffs.
-    apply_tool: str
-    if check_result.returncode == 0:
-        apply_tool = "git"
-        log_lines.append(f"apply_command: {shlex.join(apply_command)}")
-        apply_result = subprocess.run(
-            apply_command,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    else:
-        patch_abs = str(patch_path.resolve())
-        fallback_check = (
-            "patch", "--dry-run", "-p1", "-F5",
-            "-d", str(workspace_relative),
-            "-i", patch_abs,
-        )
-        log_lines.append(f"git-apply failed, trying: {shlex.join(fallback_check)}")
-        fb_check = subprocess.run(
-            fallback_check,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-        log_lines.append(f"patch_check_return_code: {fb_check.returncode}")
-        if fb_check.stdout:
-            log_lines.extend(fb_check.stdout.rstrip().splitlines())
-        if fb_check.returncode != 0:
-            return PatchApplyResult(
-                patch_path=patch_path,
-                workspace_root=workspace_root,
-                target_paths=target_paths,
-                exit_code=fb_check.returncode or 1,
-                status="patch_check_failed",
-                log_lines=tuple(log_lines),
-            )
-        apply_tool = "patch"
-        fallback_apply = (
-            "patch", "-p1", "-F5", "-N",
-            "-d", str(workspace_relative),
-            "-i", patch_abs,
-        )
-        log_lines.append(f"apply_command: {shlex.join(fallback_apply)}")
-        apply_result = subprocess.run(
-            fallback_apply,
-            cwd=context.repo_root,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
+    if check_result.returncode != 0:
+        return PatchApplyResult(
+            patch_path=patch_path,
+            workspace_root=workspace_root,
+            target_paths=target_paths,
+            exit_code=check_result.returncode or 1,
+            status="patch_check_failed",
+            log_lines=tuple(log_lines),
         )
 
-    log_lines.append(f"apply_return_code ({apply_tool}): {apply_result.returncode}")
+    log_lines.append(f"apply_command: {shlex.join(apply_command)}")
+    apply_result = subprocess.run(
+        apply_command,
+        cwd=context.repo_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+    log_lines.append(f"apply_return_code (git): {apply_result.returncode}")
     if apply_result.stdout:
         log_lines.extend(apply_result.stdout.rstrip().splitlines())
     status = "patch_applied_to_workspace" if apply_result.returncode == 0 else "patch_apply_failed"

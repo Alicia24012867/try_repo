@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -24,8 +25,11 @@ from scripts.agents.self_evolved_abc.flow.next_cycle import (
 )
 from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root
 from scripts.agents.self_evolved_abc.logic.contracts import (
+    LOGIC_ABCI_ROOT,
     LOGIC_AGENT_NAME,
     LOGIC_EVALUATION_FLOW_COMMANDS,
+    LOGIC_REACHABLE_TARGET_COMMANDS,
+    normalize_logic_target_command,
 )
 from scripts.agents.self_evolved_abc.planning.assignment_factory import (
     build_initial_assignment,
@@ -52,6 +56,10 @@ BRANCH_SPECS = {
 PLAN_SCHEMA_VERSION = 2
 EVALUATION_CONTRACT_VERSION = 1
 PLANNER_ADVICE_SCHEMA_VERSION = 2
+CAMPAIGN_POLICY_VERSION = 4
+POST_BATCH_REPLAN_JOURNAL_SCHEMA_VERSION = 1
+POST_BATCH_REPLAN_TRANSACTION = "post_batch_replan"
+_SHA256_HEX = frozenset("0123456789abcdef")
 PlannerAdviceProvider = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 
@@ -158,6 +166,8 @@ def create_portfolio_plan(
         assignments[branch_role] = _enforce_branch_scope(
             assignments[branch_role], branch_role
         )
+
+    _apply_campaign_recovery_state(assignments, consecutive_no_winner=0)
 
     evaluation_contract = _evaluation_contract(
         assignments[FLOW_BRANCH],
@@ -302,6 +312,13 @@ def create_next_portfolio_plan(
             assignment[key] = values
         assignments[branch.branch_role] = assignment
 
+    _apply_campaign_recovery_state(
+        assignments,
+        consecutive_no_winner=_consecutive_portfolio_no_winner(
+            repo_root, current_plan.cycle_id
+        ),
+    )
+
     evaluation_contract = _evaluation_contract(
         assignments[FLOW_BRANCH],
         baseline_ref=baseline_ref,
@@ -361,8 +378,22 @@ def create_next_portfolio_plan(
 def load_portfolio_plan(repo_root: Path, cycle_id: str) -> PortfolioPlan:
     repo_root = repo_root.resolve()
     cycle_id = validate_portfolio_cycle_id(cycle_id)
+    recover_post_batch_replan(repo_root, cycle_id)
     path = portfolio_plan_path(repo_root, cycle_id)
     payload = json.loads(path.read_text(encoding="utf-8"))
+    plan = _portfolio_plan_from_payload(repo_root, payload)
+    if plan.cycle_id != cycle_id:
+        raise ValueError("portfolio plan cycle_id does not match its path")
+    validate_portfolio_plan(plan, repo_root=repo_root)
+    return plan
+
+
+def _portfolio_plan_from_payload(
+    repo_root: Path,
+    payload: object,
+) -> PortfolioPlan:
+    if not isinstance(payload, Mapping):
+        raise ValueError("portfolio plan is not a JSON object")
     if payload.get("schema_version") != PLAN_SCHEMA_VERSION:
         raise ValueError("unsupported portfolio plan schema_version")
     branches = tuple(
@@ -388,12 +419,513 @@ def load_portfolio_plan(repo_root: Path, cycle_id: str) -> PortfolioPlan:
         planner_advice_source=str(payload["planner_advice_source"]),
         branches=branches,
     )
-    validate_portfolio_plan(plan, repo_root=repo_root)
     return plan
+
+
+def refresh_portfolio_planner_advice(
+    *,
+    repo_root: Path,
+    plan: PortfolioPlan,
+    planner_advice_provider: PlannerAdviceProvider | None = None,
+) -> PortfolioPlan:
+    """Replan both frozen branches after coordinator-injected batch evidence."""
+
+    repo_root = repo_root.resolve()
+    if recover_post_batch_replan(repo_root, plan.cycle_id):
+        # The previous call had already selected and journaled one generation.
+        # Do not ask a nondeterministic provider for a second answer.
+        return load_portfolio_plan(repo_root, plan.cycle_id)
+    validate_portfolio_plan(plan, repo_root=repo_root)
+    assignments: dict[str, dict[str, object]] = {}
+    for branch in plan.branches:
+        payload = json.loads(branch.assignment_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("portfolio assignment is not a JSON object")
+        assignments[branch.branch_role] = payload
+
+    advice = _resolve_planner_advice(
+        repo_root=repo_root,
+        cycle_id=plan.cycle_id,
+        previous_cycle_id=plan.previous_cycle_id,
+        portfolio_id=plan.portfolio_id,
+        dispatch_id=plan.planner_dispatch_id,
+        baseline_ref=plan.baseline_ref,
+        evaluation_contract=plan.evaluation_contract,
+        assignments=assignments,
+        provider=planner_advice_provider,
+        reuse_existing=False,
+    )
+    advice_hash = hash_planner_advice(advice)
+    _apply_planner_advice(assignments, advice, advice_hash)
+    flow_batch = assignments[FLOW_BRANCH].get("batch_search_evidence")
+    if isinstance(flow_batch, dict):
+        flow_batch["planning_consumed"] = True
+        assignments[FLOW_BRANCH]["batch_search_evidence"] = flow_batch
+
+    for role in BRANCH_ORDER:
+        assignment = assignments[role]
+        if assignment.get("baseline_ref") != dict(plan.baseline_ref):
+            raise ValueError("post-batch Planning attempted to change baseline")
+        validate_baseline_assignment(assignment, plan.baseline_ref)
+        validate_assignment_contract(assignment, plan.evaluation_contract)
+
+    updated = replace(
+        plan,
+        planner_advice_hash=advice_hash,
+        planner_advice_source=str(advice["source"]),
+    )
+    staged: list[tuple[Path, str]] = [
+        (
+            planner_advice_path(repo_root, plan.cycle_id),
+            json.dumps(advice, indent=2, sort_keys=True) + "\n",
+        ),
+        *[
+            (
+                branch.assignment_path,
+                json.dumps(
+                    assignments[branch.branch_role], indent=2, sort_keys=True
+                )
+                + "\n",
+            )
+            for branch in plan.branches
+        ],
+        (
+            portfolio_plan_path(repo_root, plan.cycle_id),
+            json.dumps(updated.as_dict(repo_root), indent=2, sort_keys=True) + "\n",
+        ),
+    ]
+    _commit_post_batch_replan(
+        repo_root=repo_root,
+        cycle_id=plan.cycle_id,
+        planner_dispatch_id=plan.planner_dispatch_id,
+        staged=staged,
+    )
+    validate_portfolio_plan(updated, repo_root=repo_root)
+    return updated
+
+
+def post_batch_replan_journal_path(repo_root: Path, cycle_id: str) -> Path:
+    """Return the only journal location accepted for one paired Planning round."""
+
+    cycle_id = validate_portfolio_cycle_id(cycle_id)
+    return safe_repo_path(
+        repo_root,
+        repo_root.resolve()
+        / "experiments"
+        / cycle_id
+        / "planning"
+        / "post_batch_replan_journal.json",
+    )
+
+
+def _commit_post_batch_replan(
+    *,
+    repo_root: Path,
+    cycle_id: str,
+    planner_dispatch_id: str,
+    staged: Sequence[tuple[Path, str]],
+) -> None:
+    """Journal one validated four-artifact generation, then roll it forward."""
+
+    repo_root = repo_root.resolve()
+    cycle_id = validate_portfolio_cycle_id(cycle_id)
+    journal_path = post_batch_replan_journal_path(repo_root, cycle_id)
+    if journal_path.is_file():
+        # Completing the prior generation is safer than overwriting its intent.
+        recover_post_batch_replan(repo_root, cycle_id)
+        raise ValueError(
+            "recovered an earlier post-batch replan; reload the portfolio plan"
+        )
+    expected_targets = _post_batch_replan_targets(repo_root, cycle_id)
+    provided = {safe_repo_path(repo_root, path): text for path, text in staged}
+    if set(provided) != set(expected_targets.values()) or len(provided) != 4:
+        raise ValueError("post-batch replan must replace exactly four artifacts")
+
+    serialized: dict[str, bytes] = {
+        artifact: provided[target].encode("utf-8")
+        for artifact, target in expected_targets.items()
+    }
+    _validate_post_batch_replan_generation(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        planner_dispatch_id=planner_dispatch_id,
+        artifact_bytes=serialized,
+    )
+    descriptors = [
+        {
+            "artifact": artifact,
+            "target_path": target.relative_to(repo_root).as_posix(),
+            "sha256": hashlib.sha256(serialized[artifact]).hexdigest(),
+            "size": len(serialized[artifact]),
+        }
+        for artifact, target in expected_targets.items()
+    ]
+    generation_id = _post_batch_replan_generation_id(
+        cycle_id=cycle_id,
+        planner_dispatch_id=planner_dispatch_id,
+        descriptors=descriptors,
+    )
+    entries: list[dict[str, object]] = []
+    for descriptor in descriptors:
+        artifact = str(descriptor["artifact"])
+        target = expected_targets[artifact]
+        temporary = _post_batch_replan_staged_path(target, generation_id)
+        temporary.parent.mkdir(parents=True, exist_ok=True)
+        _write_bytes_durable(temporary, serialized[artifact])
+        _fsync_directory(temporary.parent)
+        entries.append(
+            {
+                **descriptor,
+                "staged_path": temporary.relative_to(repo_root).as_posix(),
+            }
+        )
+
+    journal = {
+        "schema_version": POST_BATCH_REPLAN_JOURNAL_SCHEMA_VERSION,
+        "transaction": POST_BATCH_REPLAN_TRANSACTION,
+        "cycle_id": cycle_id,
+        "planner_dispatch_id": planner_dispatch_id,
+        "generation_id": generation_id,
+        "entries": entries,
+    }
+    journal_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_journal = journal_path.with_suffix(journal_path.suffix + ".tmp")
+    _write_bytes_durable(
+        temporary_journal,
+        (json.dumps(journal, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
+    temporary_journal.replace(journal_path)
+    _fsync_directory(journal_path.parent)
+    recover_post_batch_replan(repo_root, cycle_id)
+
+
+def _validate_post_batch_replan_journal(
+    *,
+    repo_root: Path,
+    cycle_id: str,
+    journal: object,
+) -> tuple[list[dict[str, object]], dict[str, bytes]]:
+    if not isinstance(journal, Mapping):
+        raise ValueError("post-batch replan journal is not a JSON object")
+    if journal.get("schema_version") != POST_BATCH_REPLAN_JOURNAL_SCHEMA_VERSION:
+        raise ValueError("unsupported post-batch replan journal schema")
+    if journal.get("transaction") != POST_BATCH_REPLAN_TRANSACTION:
+        raise ValueError("unexpected post-batch replan transaction type")
+    if journal.get("cycle_id") != cycle_id:
+        raise ValueError("post-batch replan journal cycle mismatch")
+    dispatch_id = str(journal.get("planner_dispatch_id", ""))
+    if not dispatch_id or dispatch_id.rpartition(":")[2] != cycle_id:
+        raise ValueError("post-batch replan journal dispatch mismatch")
+    generation_id = str(journal.get("generation_id", ""))
+    if not _is_sha256_hex(generation_id):
+        raise ValueError("post-batch replan generation id is invalid")
+    raw_entries = journal.get("entries")
+    if not isinstance(raw_entries, list) or len(raw_entries) != 4:
+        raise ValueError("post-batch replan journal must contain four entries")
+
+    expected_targets = _post_batch_replan_targets(repo_root, cycle_id)
+    raw_by_artifact: dict[str, Mapping[str, object]] = {}
+    for raw in raw_entries:
+        if not isinstance(raw, Mapping):
+            raise ValueError("post-batch replan journal entry is malformed")
+        artifact = str(raw.get("artifact", ""))
+        if artifact in raw_by_artifact or artifact not in expected_targets:
+            raise ValueError("post-batch replan journal artifact set is invalid")
+        raw_by_artifact[artifact] = raw
+    if set(raw_by_artifact) != set(expected_targets):
+        raise ValueError("post-batch replan journal artifact set is incomplete")
+
+    entries: list[dict[str, object]] = []
+    descriptors: list[dict[str, object]] = []
+    artifact_bytes: dict[str, bytes] = {}
+    for artifact, expected_target in expected_targets.items():
+        raw = raw_by_artifact[artifact]
+        target = _journal_repo_path(repo_root, raw.get("target_path"))
+        if target != expected_target:
+            raise ValueError("post-batch replan journal target path mismatch")
+        staged_path = _journal_repo_path(repo_root, raw.get("staged_path"))
+        if staged_path != _post_batch_replan_staged_path(target, generation_id):
+            raise ValueError("post-batch replan journal staged path mismatch")
+        sha256 = str(raw.get("sha256", ""))
+        size = raw.get("size")
+        if not _is_sha256_hex(sha256) or not isinstance(size, int):
+            raise ValueError("post-batch replan journal hash metadata is invalid")
+        if size <= 0 or size > 8 * 1024 * 1024:
+            raise ValueError("post-batch replan artifact size is out of bounds")
+        content = _read_post_batch_replan_artifact(
+            staged_path=staged_path,
+            target_path=target,
+            expected_hash=sha256,
+            expected_size=size,
+        )
+        artifact_bytes[artifact] = content
+        descriptor = {
+            "artifact": artifact,
+            "target_path": target.relative_to(repo_root).as_posix(),
+            "sha256": sha256,
+            "size": size,
+        }
+        descriptors.append(descriptor)
+        entries.append(
+            {
+                **descriptor,
+                "staged_path": staged_path,
+                "target_path": target,
+            }
+        )
+    expected_generation = _post_batch_replan_generation_id(
+        cycle_id=cycle_id,
+        planner_dispatch_id=dispatch_id,
+        descriptors=descriptors,
+    )
+    if generation_id != expected_generation:
+        raise ValueError("post-batch replan journal generation hash mismatch")
+    return entries, artifact_bytes
+
+
+def _validate_post_batch_replan_generation(
+    *,
+    repo_root: Path,
+    cycle_id: str,
+    planner_dispatch_id: str,
+    artifact_bytes: Mapping[str, bytes],
+) -> None:
+    expected = set(_post_batch_replan_targets(repo_root, cycle_id))
+    if set(artifact_bytes) != expected:
+        raise ValueError("post-batch replan generation is incomplete")
+    payloads: dict[str, Mapping[str, object]] = {}
+    for artifact, content in artifact_bytes.items():
+        try:
+            payload = json.loads(content.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"post-batch replan {artifact} is not valid UTF-8 JSON"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"post-batch replan {artifact} is not a JSON object")
+        payloads[artifact] = payload
+    plan = _portfolio_plan_from_payload(repo_root, payloads["portfolio_plan"])
+    if plan.cycle_id != cycle_id or plan.planner_dispatch_id != planner_dispatch_id:
+        raise ValueError("post-batch replan plan identity mismatch")
+    assignments = {
+        FLOW_BRANCH: payloads["flow_assignment"],
+        LOGIC_BRANCH: payloads["logic_assignment"],
+    }
+    _validate_portfolio_plan_payloads(
+        plan,
+        repo_root=repo_root,
+        advice=payloads["planner_advice"],
+        assignments=assignments,
+    )
+
+
+def _post_batch_replan_targets(repo_root: Path, cycle_id: str) -> dict[str, Path]:
+    base = repo_root.resolve() / "experiments" / cycle_id
+    return {
+        "planner_advice": planner_advice_path(repo_root, cycle_id),
+        "flow_assignment": safe_repo_path(
+            repo_root,
+            base / "agents" / "assignments" / f"{BRANCH_SPECS[FLOW_BRANCH][1]}.json",
+        ),
+        "logic_assignment": safe_repo_path(
+            repo_root,
+            base / "agents" / "assignments" / f"{BRANCH_SPECS[LOGIC_BRANCH][1]}.json",
+        ),
+        "portfolio_plan": portfolio_plan_path(repo_root, cycle_id),
+    }
+
+
+def _post_batch_replan_generation_id(
+    *,
+    cycle_id: str,
+    planner_dispatch_id: str,
+    descriptors: Sequence[Mapping[str, object]],
+) -> str:
+    canonical = json.dumps(
+        {
+            "cycle_id": cycle_id,
+            "planner_dispatch_id": planner_dispatch_id,
+            "entries": [dict(item) for item in descriptors],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _post_batch_replan_staged_path(target: Path, generation_id: str) -> Path:
+    return target.with_name(f".{target.name}.post-batch-replan.{generation_id}.tmp")
+
+
+def _journal_repo_path(repo_root: Path, raw_path: object) -> Path:
+    text = str(raw_path or "").strip()
+    if not text or Path(text).is_absolute():
+        raise ValueError("post-batch replan journal paths must be repo-relative")
+    return safe_repo_path(repo_root, repo_root.resolve() / text)
+
+
+def _read_post_batch_replan_artifact(
+    *,
+    staged_path: Path,
+    target_path: Path,
+    expected_hash: str,
+    expected_size: int,
+) -> bytes:
+    for path in (staged_path, target_path):
+        if not path.is_file():
+            continue
+        content = path.read_bytes()
+        if len(content) == expected_size and hashlib.sha256(content).hexdigest() == expected_hash:
+            return content
+        if path == staged_path:
+            raise ValueError("post-batch replan staged artifact hash mismatch")
+    raise ValueError("post-batch replan artifact content is unavailable")
+
+
+def _replace_post_batch_replan_artifact(staged_path: Path, target_path: Path) -> None:
+    staged_path.replace(target_path)
+    _fsync_directory(target_path.parent)
+
+
+def _write_bytes_durable(path: Path, content: bytes) -> None:
+    with path.open("wb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        descriptor = os.open(str(path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        # Some network and synthetic filesystems do not expose directory fsync.
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(char in _SHA256_HEX for char in value)
+
+
+def recover_post_batch_replan(repo_root: Path, cycle_id: str) -> bool:
+    """Roll a published post-batch replan journal forward recoverably.
+
+    A process may stop between any two of the four artifact replacements.  The
+    journal is published before the first replacement and contains content
+    hashes for exactly the Planning advice, Flow assignment, Logic assignment,
+    and portfolio plan for ``cycle_id``.  Recovery accepts no other paths and
+    completes the same generation before normal portfolio validation resumes.
+    """
+
+    repo_root = repo_root.resolve()
+    cycle_id = validate_portfolio_cycle_id(cycle_id)
+    journal_path = post_batch_replan_journal_path(repo_root, cycle_id)
+    if not journal_path.is_file():
+        return False
+    if journal_path.stat().st_size > 64 * 1024:
+        raise ValueError("post-batch replan journal is too large")
+    try:
+        journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError("post-batch replan journal is not valid JSON") from exc
+    entries, artifact_bytes = _validate_post_batch_replan_journal(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        journal=journal,
+    )
+    _validate_post_batch_replan_generation(
+        repo_root=repo_root,
+        cycle_id=cycle_id,
+        planner_dispatch_id=str(journal["planner_dispatch_id"]),
+        artifact_bytes=artifact_bytes,
+    )
+
+    for entry in entries:
+        staged_path = entry["staged_path"]
+        target_path = entry["target_path"]
+        expected_hash = entry["sha256"]
+        if not isinstance(staged_path, Path) or not isinstance(target_path, Path):
+            raise ValueError("post-batch replan journal path type is invalid")
+        if not isinstance(expected_hash, str):
+            raise ValueError("post-batch replan journal hash type is invalid")
+        if staged_path.is_file():
+            _replace_post_batch_replan_artifact(staged_path, target_path)
+        elif not target_path.is_file() or _path_sha256(target_path) != expected_hash:
+            raise ValueError(
+                "post-batch replan artifact has neither staged nor committed content: "
+                f"{entry['artifact']}"
+            )
+
+    for entry in entries:
+        target_path = entry["target_path"]
+        expected_hash = entry["sha256"]
+        if not isinstance(target_path, Path) or not isinstance(expected_hash, str):
+            raise ValueError("post-batch replan verified entry type is invalid")
+        if not target_path.is_file() or _path_sha256(target_path) != expected_hash:
+            raise ValueError(
+                f"post-batch replan roll-forward hash mismatch: {entry['artifact']}"
+            )
+
+    plan_payload = json.loads(
+        portfolio_plan_path(repo_root, cycle_id).read_text(encoding="utf-8")
+    )
+    recovered_plan = _portfolio_plan_from_payload(repo_root, plan_payload)
+    validate_portfolio_plan(recovered_plan, repo_root=repo_root)
+    journal_path.unlink()
+    _fsync_directory(journal_path.parent)
+    return True
 
 
 def validate_portfolio_plan(plan: PortfolioPlan, *, repo_root: Path) -> None:
     """Fail fast if a dispatch is ambiguous, mixed-baseline, or unsafe."""
+
+    repo_root = repo_root.resolve()
+    advice = json.loads(
+        planner_advice_path(repo_root, plan.cycle_id).read_text(encoding="utf-8")
+    )
+    assignments: dict[str, Mapping[str, object]] = {}
+    if tuple(branch.branch_role for branch in plan.branches) != BRANCH_ORDER:
+        raise ValueError("portfolio must contain Flow then Logic exactly once")
+    for branch in plan.branches:
+        expected_path = safe_repo_path(
+            repo_root,
+            repo_root
+            / "experiments"
+            / plan.cycle_id
+            / "agents"
+            / "assignments"
+            / f"{branch.candidate_id}.json",
+        )
+        actual_path = safe_repo_path(repo_root, branch.assignment_path)
+        if actual_path != expected_path:
+            raise ValueError(f"non-canonical assignment path: {branch.assignment_path}")
+        payload = json.loads(actual_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, Mapping):
+            raise ValueError("portfolio assignment is not a JSON object")
+        assignments[branch.branch_role] = payload
+    if not isinstance(advice, Mapping):
+        raise ValueError("planner advice is not a JSON object")
+    _validate_portfolio_plan_payloads(
+        plan,
+        repo_root=repo_root,
+        advice=advice,
+        assignments=assignments,
+    )
+
+
+def _validate_portfolio_plan_payloads(
+    plan: PortfolioPlan,
+    *,
+    repo_root: Path,
+    advice: Mapping[str, object],
+    assignments: Mapping[str, Mapping[str, object]],
+) -> None:
+    """Validate a complete generation from disk or from journaled bytes."""
 
     repo_root = repo_root.resolve()
     validate_portfolio_cycle_id(plan.cycle_id)
@@ -434,10 +966,6 @@ def validate_portfolio_plan(plan: PortfolioPlan, *, repo_root: Path) -> None:
     expected_hash = hash_evaluation_contract(plan.evaluation_contract)
     if plan.evaluation_contract_hash != expected_hash:
         raise ValueError("portfolio evaluation_contract_hash mismatch")
-    advice_path = planner_advice_path(repo_root, plan.cycle_id)
-    advice = json.loads(advice_path.read_text(encoding="utf-8"))
-    if not isinstance(advice, Mapping):
-        raise ValueError("planner advice is not a JSON object")
     if hash_planner_advice(advice) != plan.planner_advice_hash:
         raise ValueError("portfolio planner_advice_hash mismatch")
     if advice.get("source") != plan.planner_advice_source:
@@ -458,7 +986,9 @@ def validate_portfolio_plan(plan: PortfolioPlan, *, repo_root: Path) -> None:
         actual_path = safe_repo_path(repo_root, branch.assignment_path)
         if actual_path != expected_path:
             raise ValueError(f"non-canonical assignment path: {branch.assignment_path}")
-        payload = json.loads(actual_path.read_text(encoding="utf-8"))
+        payload = assignments.get(branch.branch_role)
+        if not isinstance(payload, Mapping):
+            raise ValueError(f"missing {branch.branch_role} assignment payload")
         spec = get_coding_agent_spec(payload.get("agent_name"))
         if spec.name != branch.agent_name or payload.get("paper_role") != spec.paper_role:
             raise ValueError(f"role mismatch in {branch.assignment_path}")
@@ -848,9 +1378,29 @@ def _apply_planner_advice(
     for role, item in zip(BRANCH_ORDER, dispatches):
         assert isinstance(item, Mapping)
         assignment = assignments[role]
-        assignment["planner_hypothesis"] = (
+        hypothesis = (
             f"{item['hypothesis']}\n\nCoding task: {item['coding_agent_task']}"
         )
+        batch_evidence = assignment.get("batch_search_evidence")
+        if (
+            role == FLOW_BRANCH
+            and isinstance(batch_evidence, Mapping)
+            and bool(batch_evidence.get("exact_replay_required"))
+        ):
+            patch_path = str(batch_evidence.get("winner_patch_path", "")).strip()
+            patch_sha256 = str(
+                batch_evidence.get("winner_patch_sha256", "")
+            ).strip()
+            hypothesis = (
+                "COORDINATOR-LOCKED PROMOTED BATCH REPLAY: materialize the "
+                f"already measured Flow patch `{patch_path}` with sha256 "
+                f"`{patch_sha256}` unchanged, then repeat the frozen build, "
+                "full CEC, and QoR gates so it enters this round's paired "
+                "fan-in. Planning advice may explain the evidence but may not "
+                "replace this replay task.\n\n"
+                + hypothesis
+            )
+        assignment["planner_hypothesis"] = hypothesis
         assignment["planner_task_type"] = item["task_type"]
         assignment["planner_advice_hash"] = advice_hash
         assignment["planner_advice_source"] = advice["source"]
@@ -967,10 +1517,12 @@ def _next_baseline_ref(
         ),
         None,
     )
-    if not isinstance(selected_review, Mapping) or not bool(
-        selected_review.get("eligible_for_promotion", False)
+    if not isinstance(selected_review, Mapping) or not (
+        _portfolio_branch_promotion_claim_is_self_consistent(selected_review)
     ):
-        raise ValueError("portfolio winner is not marked eligible for promotion")
+        raise ValueError(
+            "portfolio winner does not carry a self-consistent promotion claim"
+        )
     context = CycleContext.from_assignment_file(repo_root, branch.assignment_path)
     workspace = (
         impl_compare_root(context) / IMPL_CANDIDATE_LABEL / "workspace"
@@ -990,6 +1542,103 @@ def _next_baseline_ref(
         "source_root": source_root,
         "abc_bin": f"{source_root}/abc",
     }
+
+
+def _portfolio_branch_promotion_claim_is_self_consistent(
+    branch_review: Mapping[str, object],
+) -> bool:
+    """Recheck terminal hard gates instead of trusting one eligibility bit."""
+
+    expected = branch_review.get("expected_benchmark_count")
+    if not isinstance(expected, int) or isinstance(expected, bool) or expected < 1:
+        return False
+    return (
+        branch_review.get("status") == "reviewed"
+        and branch_review.get("return_code") == 0
+        and not str(branch_review.get("error", "")).strip()
+        and branch_review.get("decision") == "ACCEPT_FOR_NEXT_CYCLE"
+        and branch_review.get("eligible_for_promotion") is True
+        and branch_review.get("build_status") == "candidate_binary_build_passed"
+        and branch_review.get("cec_total_count") == expected
+        and branch_review.get("cec_pass_count") == expected
+        and branch_review.get("correctness_backed_rows") == expected
+    )
+
+
+def finalize_portfolio_champion(
+    *,
+    repo_root: Path,
+    current_plan: PortfolioPlan,
+    portfolio_review: Mapping[str, Any],
+) -> dict[str, object]:
+    """Persist the terminal champion without manufacturing a next dispatch.
+
+    Normally a selected candidate becomes the baseline while cycle N+1 is
+    created.  At an absolute target cycle there is deliberately no N+1, so a
+    separate terminal manifest must perform and record the same workspace/
+    binary validation.  This keeps the frozen target plan immutable.
+    """
+
+    repo_root = repo_root.resolve()
+    if portfolio_review.get("cycle_id") != current_plan.cycle_id:
+        raise ValueError("terminal portfolio review cycle mismatch")
+    if portfolio_review.get("portfolio_id") != current_plan.portfolio_id:
+        raise ValueError("terminal portfolio review portfolio mismatch")
+    if portfolio_review.get("planner_dispatch_id") != current_plan.planner_dispatch_id:
+        raise ValueError("terminal portfolio review dispatch mismatch")
+    if not bool(portfolio_review.get("quorum_reached")):
+        raise ValueError("terminal champion requires a complete paired fan-in")
+
+    selected = str(portfolio_review.get("selected_candidate_id", "")).strip()
+    final_ref = _next_baseline_ref(
+        repo_root=repo_root,
+        current_plan=current_plan,
+        portfolio_review=portfolio_review,
+    )
+    achieved = str(final_ref.get("kind", "")) == "champion"
+    if achieved:
+        source_root = safe_repo_path(
+            repo_root, repo_root / str(final_ref.get("source_root", ""))
+        )
+        abc_bin = safe_repo_path(
+            repo_root, repo_root / str(final_ref.get("abc_bin", ""))
+        )
+        if not source_root.is_dir() or not abc_bin.is_file():
+            raise FileNotFoundError(
+                "terminal champion source workspace or ABC binary is missing"
+            )
+
+    plan_path = portfolio_plan_path(repo_root, current_plan.cycle_id)
+    review_path = (
+        repo_root
+        / "experiments"
+        / current_plan.cycle_id
+        / "planning"
+        / "portfolio_review.json"
+    )
+    if not plan_path.is_file() or not review_path.is_file():
+        raise FileNotFoundError("terminal champion lineage artifacts are missing")
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "portfolio_id": current_plan.portfolio_id,
+        "cycle_id": current_plan.cycle_id,
+        "planner_dispatch_id": current_plan.planner_dispatch_id,
+        "objective_achieved": achieved,
+        "status": "champion_finalized" if achieved else "no_champion",
+        "winner_selected_this_cycle": bool(selected),
+        "selected_candidate_id": selected,
+        "final_baseline_ref": dict(final_ref),
+        "source_plan_sha256": _path_sha256(plan_path),
+        "source_review_sha256": _path_sha256(review_path),
+    }
+    output = review_path.parent / "final_champion.json"
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(output)
+    return payload
 
 
 def _baseline_assignment_fields(
@@ -1049,3 +1698,199 @@ def _enforce_branch_scope(
             and str(value).rstrip("/") != legacy_impl_root
         ]
     return normalize_coding_assignment(assignment)
+
+
+def _apply_campaign_recovery_state(
+    assignments: Mapping[str, dict[str, object]],
+    *,
+    consecutive_no_winner: int,
+) -> None:
+    """Give both branches one coordinator-owned stagnation/phase envelope."""
+
+    raw_state = assignments[FLOW_BRANCH].get("campaign_state")
+    state = dict(raw_state) if isinstance(raw_state, Mapping) else {
+        "cycle_number": 1,
+        "consecutive_qor_stagnation": 0,
+        "evolution_phase": "conservative",
+        "exploration_phase": "conservative",
+    }
+    state["policy_version"] = CAMPAIGN_POLICY_VERSION
+    branch_stagnation = int(state.get("consecutive_qor_stagnation", 0) or 0)
+    portfolio_stagnation = max(0, int(consecutive_no_winner))
+    stagnation = max(branch_stagnation, portfolio_stagnation)
+    phase = str(state.get("evolution_phase", "conservative"))
+    if stagnation >= 4:
+        phase = "structural"
+    elif stagnation >= 3 and phase == "conservative":
+        phase = "diversify"
+    state["branch_consecutive_qor_stagnation"] = branch_stagnation
+    state["consecutive_no_winner"] = portfolio_stagnation
+    state["consecutive_qor_stagnation"] = stagnation
+    state["evolution_phase"] = phase
+    state["exploration_phase"] = phase
+    cycle_number = int(state.get("cycle_number", 1) or 1)
+    if stagnation >= 3:
+        for assignment in assignments.values():
+            thresholds = dict(assignment.get("promotion_thresholds", {}))
+            thresholds.update(
+                {
+                    "min_average_and_improve_pct": 0.0,
+                    "min_total_and_reduction": 1,
+                    "min_improved_benchmarks": 1,
+                }
+            )
+            assignment["promotion_thresholds"] = thresholds
+    if phase == "structural":
+        flow_assignment = assignments[FLOW_BRANCH]
+        flow_assignment["target_command"] = ""
+        flow_assignment["target_source_dir"] = FLOWTUNE_SOURCE_SCOPE_PRIMARY
+        flow_assignment["planner_should_skip_llm"] = True
+        flow_meta_raw = flow_assignment.get("_planning_meta")
+        flow_recovery_meta = (
+            dict(flow_meta_raw) if isinstance(flow_meta_raw, Mapping) else {}
+        )
+        flow_recovery_meta.update(
+            {
+                "task_type": "batch_search",
+                "target_command": "",
+                "target_source_dir": FLOWTUNE_SOURCE_SCOPE_PRIMARY,
+                "should_skip_llm": True,
+            }
+        )
+        flow_assignment["_planning_meta"] = flow_recovery_meta
+    flow_meta = assignments[FLOW_BRANCH].get("_planning_meta")
+    flow_target = (
+        str(flow_meta.get("target_command", "")).strip()
+        if isinstance(flow_meta, Mapping)
+        else str(assignments[FLOW_BRANCH].get("target_command", "")).strip()
+    )
+    logic_target = _select_logic_recovery_target(
+        phase=phase,
+        cycle_number=cycle_number,
+        stagnation=stagnation,
+        flow_target=flow_target,
+    )
+    logic_assignment = assignments[LOGIC_BRANCH]
+    logic_assignment["target_command"] = logic_target
+    logic_assignment["target_source_dir"] = LOGIC_ABCI_ROOT
+    logic_meta_raw = logic_assignment.get("_planning_meta")
+    logic_meta = (
+        dict(logic_meta_raw) if isinstance(logic_meta_raw, Mapping) else {}
+    )
+    logic_meta["target_command"] = logic_target
+    logic_meta["target_source_dir"] = LOGIC_ABCI_ROOT
+    logic_assignment["_planning_meta"] = logic_meta
+    state["flow_target_command"] = flow_target
+    state["logic_target_command"] = logic_target
+    for role in BRANCH_ORDER:
+        assignment = assignments[role]
+        assignment["campaign_state"] = dict(state)
+        assignment["exploration_lane"] = (
+            "flow_measured_search" if role == FLOW_BRANCH else "logic_orthogonal_search"
+        )
+        hypothesis = str(assignment.get("planner_hypothesis", "")).strip()
+        if phase == "structural":
+            role_guidance = (
+                "Run the bounded rotating cross-family sensitivity stage first, then "
+                "change a reached scoring/tie-break/stopping mechanism anchored "
+                "in an existing ABC precedent; reject capacity-only edits."
+                if role == FLOW_BRANCH
+                else f"Use the independently frozen `{logic_target}` Logic "
+                "target, recombine existing safe ABC precedents, and avoid the "
+                "Flow branch's measured family and all repeated patch targets."
+            )
+            recovery = (
+                "PAPER-ALIGNED STRUCTURAL RECOVERY: "
+                f"{stagnation} consecutive correctness-backed QoR misses. "
+                + role_guidance
+            )
+        elif phase == "diversify":
+            recovery = (
+                "PAPER-ALIGNED DIVERSIFICATION: select a reached decision family "
+                "that is distinct from the sibling branch and recent failed targets."
+            )
+        else:
+            recovery = (
+                "PAPER-ALIGNED CONSERVATIVE PHASE: test one reversible, reached "
+                "mechanism with full compile/CEC/QoR gates."
+            )
+        assignment["planner_hypothesis"] = (
+            recovery + ("\n\n" + hypothesis if hypothesis else "")
+        )
+
+
+def _consecutive_portfolio_no_winner(repo_root: Path, cycle_id: str) -> int:
+    """Count complete trailing rounds with valid QoR evidence but no champion."""
+
+    current = int(validate_portfolio_cycle_id(cycle_id).rsplit("_", 1)[1])
+    width = len(cycle_id.rsplit("_", 1)[1])
+    count = 0
+    for number in range(current, 0, -1):
+        review_path = (
+            repo_root
+            / "experiments"
+            / f"cycle_{number:0{width}d}"
+            / "planning"
+            / "portfolio_review.json"
+        )
+        try:
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            break
+        if (
+            not isinstance(review, Mapping)
+            or review.get("round_status") != "no_promotion"
+            or not bool(review.get("quorum_reached"))
+            or str(review.get("selected_candidate_id", "")).strip()
+            or not _portfolio_review_has_full_qor_branch(review)
+        ):
+            break
+        count += 1
+    return count
+
+
+def _portfolio_review_has_full_qor_branch(review: Mapping[str, object]) -> bool:
+    branches = review.get("branches")
+    if not isinstance(branches, Sequence):
+        return False
+    for branch in branches:
+        if not isinstance(branch, Mapping):
+            continue
+        expected = int(branch.get("expected_benchmark_count", 0) or 0)
+        if (
+            expected > 0
+            and int(branch.get("cec_pass_count", 0) or 0) == expected
+            and int(branch.get("cec_total_count", 0) or 0) == expected
+            and int(branch.get("correctness_backed_rows", 0) or 0) == expected
+            and str(branch.get("decision", ""))
+            in {"REPAIR_QOR", "RETAIN_FOR_SYNERGY"}
+        ):
+            return True
+    return False
+
+
+def _select_logic_recovery_target(
+    *,
+    phase: str,
+    cycle_number: int,
+    stagnation: int,
+    flow_target: str,
+) -> str:
+    """Choose a stable Logic family independently of the Flow planner target."""
+
+    if phase == "structural":
+        ordered = ("orchestrate", "refactor", "resub", "rewrite")
+        offset = max(stagnation, cycle_number - 1)
+    elif phase == "diversify":
+        ordered = ("refactor", "resub", "rewrite", "orchestrate")
+        offset = max(0, cycle_number - 1)
+    else:
+        ordered = tuple(LOGIC_REACHABLE_TARGET_COMMANDS)
+        offset = max(0, cycle_number - 1)
+
+    flow_family = str(flow_target).strip().lower().split(maxsplit=1)
+    excluded = flow_family[0] if flow_family else ""
+    choices = tuple(command for command in ordered if command != excluded)
+    if not choices:
+        return normalize_logic_target_command("")
+    return normalize_logic_target_command(choices[offset % len(choices)])

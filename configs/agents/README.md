@@ -94,8 +94,8 @@ suite:
   the 40 Verilog designs as frontend-pending; use `standard_30` or `epfl_10`
   only for faster smoke/debug runs.
 - Candidate type: `source_patch_diff`.
-- Source patch scope: `third_party/FlowTune/src/src/opt` plus command wrappers
-  under `third_party/FlowTune/src/src/base/abci`.
+- Source patch scope: `third_party/FlowTune/src/src/opt`. Command wrappers under
+  `src/base/abci` belong to the concurrent Logic lane and are read-only to Flow.
 - Default evaluation flow: `fx; strash; rewrite -z; resub -K 8; dc2; csweep;
   refactor -z; strash; print_stats`.
 - Required evidence: previous review decision, CEC/QoR deltas, feedback,
@@ -105,7 +105,9 @@ suite:
 
 The earlier `.abc` flow path remains available for fixtures and legacy
 flow-recipe evaluation, but the current autonomous loop targets FlowTune source
-patches.
+patches. This profile reaches the command kernels named by the frozen recipe;
+it does not call the fork's separate `ftune` MAB scheduler in
+`src/base/abc/abcBayestune.cpp`.
 
 ## Logic-Minimization Reproduction Profile
 

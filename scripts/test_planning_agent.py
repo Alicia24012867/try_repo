@@ -30,8 +30,14 @@ from scripts.agents.self_evolved_abc.benchmarks import (
 from scripts.agents.self_evolved_abc.flow.promotion import (
     AndDeltaStats,
     PromotionThresholds,
+    is_structural_frontier_candidate,
     meets_promotion_thresholds,
+    meets_structural_pareto_policy,
+    parse_float,
+    parse_int,
     scalar_and_reward,
+    structural_regression_guard_passes,
+    structural_qor_stats,
 )
 from scripts.agents.self_evolved_abc.flow.review import (
     _meets_bootstrap_champion_policy,
@@ -40,12 +46,14 @@ from scripts.agents.self_evolved_abc.flow.review import (
 from scripts.agents.self_evolved_abc.flow.batch_search import (
     build_variants,
     current_csw_floors,
+    expected_winner_payload,
     set_csw_floors,
     variant_command,
 )
 from scripts.agents.self_evolved_abc.flow.planner_batch import (
     batch_variant_command,
     integrate_batch_winner,
+    select_staged_planner_variants,
 )
 from scripts.agents.self_evolved_abc.flow.cycle_loop import (
     _assignment_champion_cycle,
@@ -126,7 +134,7 @@ check(
     "csweep" in _TARGETABLE_COMMANDS,
 )
 check(
-    "§3.3(1): all 6 targetable commands have parameter kinds",
+    "§3.3(1): all Flow-owned targetable commands have parameter kinds",
     all(cmd in _PARAMETER_KINDS_BY_COMMAND for cmd in _TARGETABLE_COMMANDS),
 )
 check(
@@ -998,8 +1006,24 @@ bootstrap_stats = AndDeltaStats(
     regressed_count=0,
     unchanged_count=27,
 )
+bootstrap_structural = structural_qor_stats(
+    [
+        {
+            "baseline_aig_nodes": "100",
+            "candidate_aig_nodes": "98",
+            "baseline_aig_depth": "10",
+            "candidate_aig_depth": "10",
+            "depth_delta_candidate_minus_baseline": "0",
+        }
+    ]
+)
 check("12a: first positive no-regression candidate can bootstrap champion",
-      _meets_bootstrap_champion_policy(bootstrap_ctx, 0.0004, bootstrap_stats))
+      _meets_bootstrap_champion_policy(
+          bootstrap_ctx,
+          0.0004,
+          bootstrap_stats,
+          structural_stats=bootstrap_structural,
+      ))
 
 existing_champion_ctx = SmokeContext(
     repo_root,
@@ -1014,7 +1038,10 @@ existing_champion_ctx = SmokeContext(
 )
 check("12b: bootstrap policy is disabled after champion exists",
       not _meets_bootstrap_champion_policy(
-          existing_champion_ctx, 0.0004, bootstrap_stats
+          existing_champion_ctx,
+          0.0004,
+          bootstrap_stats,
+          structural_stats=bootstrap_structural,
       ))
 regressed_stats = AndDeltaStats(
     total_delta=-6,
@@ -1023,7 +1050,12 @@ regressed_stats = AndDeltaStats(
     unchanged_count=25,
 )
 check("12c: bootstrap policy rejects regressions",
-      not _meets_bootstrap_champion_policy(bootstrap_ctx, 0.5, regressed_stats))
+      not _meets_bootstrap_champion_policy(
+          bootstrap_ctx,
+          0.5,
+          regressed_stats,
+          structural_stats=bootstrap_structural,
+      ))
 
 
 # ===================================================================
@@ -1075,8 +1107,11 @@ with tempfile.TemporaryDirectory() as td:
     )
     (impl_root / "comparison/qor_delta.csv").write_text(
         "benchmark,correctness_backed,and_improve_pct,"
-        "and_delta_candidate_minus_baseline,depth_delta_candidate_minus_baseline\n"
-        "a,True,0.001,-5,0\nb,True,0.001,-5,0\nc,True,0.001,-5,0\n",
+        "and_delta_candidate_minus_baseline,depth_delta_candidate_minus_baseline,"
+        "baseline_aig_nodes,candidate_aig_nodes,baseline_aig_depth,candidate_aig_depth\n"
+        "a,True,0.001,-5,0,100,95,10,10\n"
+        "b,True,0.001,-5,0,100,95,10,10\n"
+        "c,True,0.001,-5,0,100,95,10,10\n",
         encoding="utf-8",
     )
     review_ctx = SmokeContext(
@@ -1088,13 +1123,177 @@ with tempfile.TemporaryDirectory() as td:
             "paper_role": "Flow Agent",
             "baseline_kind": "champion",
             "champion_cycle_id": "cycle_001",
+            "evaluation_benchmark_scope": ["a", "b", "c"],
             "promotion_thresholds": meaningful_thresholds.as_dict(),
         },
     )
     reviewed = review_impl_compare(review_ctx, impl_root)
-    check("13e: review promotes absolute -15 regression-free gain",
+check("13e: review promotes absolute -15 regression-free gain",
           reviewed.decision == "ACCEPT_FOR_NEXT_CYCLE"
           and reviewed.scalar_and_reward == 15)
+with tempfile.TemporaryDirectory() as td:
+    partial_repo = Path(td)
+    partial_root = partial_repo / "experiments/cycle_002/impl_compare"
+    (partial_root / "candidate_modified").mkdir(parents=True)
+    (partial_root / "comparison").mkdir(parents=True)
+    (partial_root / "candidate_modified/build_info.json").write_text(
+        json.dumps({"status": "candidate_binary_build_passed"}),
+        encoding="utf-8",
+    )
+    (partial_root / "comparison/cec_summary.csv").write_text(
+        "benchmark,cec_status\na,cec_pass\nb,cec_pass\n",
+        encoding="utf-8",
+    )
+    (partial_root / "comparison/qor_delta.csv").write_text(
+        "benchmark,correctness_backed,and_improve_pct,"
+        "and_delta_candidate_minus_baseline,depth_delta_candidate_minus_baseline\n"
+        "a,True,5.0,-50,0\nb,True,5.0,-50,0\n",
+        encoding="utf-8",
+    )
+    partial_ctx = SmokeContext(
+        partial_repo,
+        {
+            "cycle_id": "cycle_002",
+            "candidate_id": "candidate_001",
+            "agent_name": "flow_agent",
+            "paper_role": "Flow Agent",
+            "evaluation_benchmark_scope": ["a", "b", "c"],
+            "promotion_thresholds": meaningful_thresholds.as_dict(),
+        },
+    )
+    incomplete = review_impl_compare(partial_ctx, partial_root)
+check("13e.1: incomplete benchmark matrix cannot produce a winner",
+      incomplete.decision == "REPAIR_EVALUATION"
+      and not incomplete.promotion_allowed)
+
+with tempfile.TemporaryDirectory() as td:
+    blank_repo = Path(td)
+    blank_root = blank_repo / "experiments/cycle_002/impl_compare"
+    (blank_root / "candidate_modified").mkdir(parents=True)
+    (blank_root / "comparison").mkdir(parents=True)
+    (blank_root / "candidate_modified/build_info.json").write_text(
+        json.dumps({"status": "candidate_binary_build_passed"}),
+        encoding="utf-8",
+    )
+    (blank_root / "comparison/cec_summary.csv").write_text(
+        "benchmark,cec_status\na,cec_pass\nb,cec_pass\n",
+        encoding="utf-8",
+    )
+    (blank_root / "comparison/qor_delta.csv").write_text(
+        "benchmark,correctness_backed,and_improve_pct,"
+        "and_delta_candidate_minus_baseline,depth_delta_candidate_minus_baseline,"
+        "baseline_aig_nodes,candidate_aig_nodes,baseline_aig_depth,candidate_aig_depth\n"
+        "a,True,0,0,-1,100,100,10,9\n"
+        "b,True,,,,,,,\n",
+        encoding="utf-8",
+    )
+    blank_ctx = SmokeContext(
+        blank_repo,
+        {
+            "cycle_id": "cycle_002",
+            "candidate_id": "candidate_001",
+            "agent_name": "flow_agent",
+            "paper_role": "Flow Agent",
+            "evaluation_benchmark_scope": ["a", "b"],
+        },
+    )
+    blank_review = review_impl_compare(blank_ctx, blank_root)
+check("13e.2: partial QoR cells cannot become structural winner",
+      blank_review.decision == "REPAIR_EVALUATION"
+      and not blank_review.promotion_allowed)
+check("13e.3: non-finite and fractional integer metrics fail closed",
+      parse_float("nan") is None
+      and parse_float("inf") is None
+      and parse_int("nan") is None
+      and parse_int("inf") is None
+      and parse_int("1.5") is None)
+
+severe_depth_loss = structural_qor_stats(
+    [
+        {
+            "baseline_aig_nodes": "100",
+            "candidate_aig_nodes": "90",
+            "baseline_aig_depth": "10",
+            "candidate_aig_depth": "1000",
+            "depth_delta_candidate_minus_baseline": "990",
+        }
+    ]
+)
+check("13e.4: scalar area gain cannot hide catastrophic depth regression",
+      not structural_regression_guard_passes(severe_depth_loss))
+
+# Paper §3.3(4): detailed multi-dimensional vector + partial retention.
+depth_only_rows = [
+    {
+        "baseline_aig_nodes": "1000",
+        "candidate_aig_nodes": "1000",
+        "and_delta_candidate_minus_baseline": "0",
+        "baseline_aig_depth": "20",
+        "candidate_aig_depth": "19",
+        "depth_delta_candidate_minus_baseline": "-1",
+    }
+]
+depth_only_structural = structural_qor_stats(depth_only_rows)
+check(
+    "13f: depth-only suite Pareto gain is recognized",
+    meets_structural_pareto_policy(
+        delta_stats=AndDeltaStats(0, 0, 0, 1),
+        structural_stats=depth_only_structural,
+    ),
+)
+tradeoff_rows = [
+    {
+        "baseline_aig_nodes": "1000",
+        "candidate_aig_nodes": "900",
+        "and_delta_candidate_minus_baseline": "-100",
+        "baseline_aig_depth": "10",
+        "candidate_aig_depth": "11",
+        "depth_delta_candidate_minus_baseline": "1",
+    }
+]
+tradeoff_structural = structural_qor_stats(tradeoff_rows)
+check(
+    "13g: positive size/depth trade-off is retained on frontier",
+    is_structural_frontier_candidate(
+        delta_stats=AndDeltaStats(-100, 1, 0, 0),
+        structural_stats=tradeoff_structural,
+    )
+    and not meets_structural_pareto_policy(
+        delta_stats=AndDeltaStats(-100, 1, 0, 0),
+        structural_stats=tradeoff_structural,
+    ),
+)
+
+stagnant_evidence = CycleEvidence(
+    "cycle_005", "candidate_001", "REPAIR_QOR", False, False,
+    "candidate_binary_build_passed", 30, 30, True,
+    0.0, 0, 0, 0, 30, 30,
+)
+relaxed = propose_thresholds(
+    benchmark_count=30,
+    previous_evidence=[stagnant_evidence] * 3,
+    cycle_number=6,
+)
+check(
+    "13h: repeated CEC-backed drought activates incremental accumulation",
+    relaxed.min_improved_benchmarks == 1
+    and relaxed.min_total_and_reduction == 1
+    and relaxed.min_average_and_improve_pct == 0.0
+    and relaxed.evolution_phase == "diversify",
+)
+late_strategy = select_strategy(
+    stagnant_evidence,
+    previous_strategies=prev,
+    cycle_number=6,
+    benchmark_count=30,
+    consecutive_qor_stagnation=4,
+)
+check(
+    "13i: late drought removes the single-command batch filter",
+    late_strategy.should_skip_llm
+    and late_strategy.target_command == ""
+    and late_strategy.exploration_phase == "structural",
+)
 
 
 # ===================================================================
@@ -1119,14 +1318,87 @@ check("14c: batch variant maps to reached command",
       batch_variant_command("csweep_floor_c20_l10") == "csweep")
 wrapper_families = {
     command: build_variants(smoke_ctx, "flow_wide", target_command=command)
-    for command in ("rewrite", "resub", "dc2", "refactor")
+    for command in ("rewrite", "resub", "dc2")
 }
-check("14d: every planner wrapper command has deterministic probes",
+check("14d: every Flow-owned target family has deterministic probes",
       all(wrapper_families.values()))
 check("14e: target-command filtering does not leak other families",
       all(variant_command(item.variant_id) == command
           for command, items in wrapper_families.items()
           for item in items))
+check("14f: flow_wide includes reached opt-only resub window probes",
+      any(item.target_file.endswith("src/opt/res/resWin.c")
+          for item in wrapper_families["resub"]))
+check("14g: flow_wide includes reached opt-only dc2 DAR probes",
+      any(item.target_file.endswith(("src/opt/dar/darCore.c",
+                                     "src/opt/dar/darRefact.c"))
+          for item in wrapper_families["dc2"]))
+opt_only_assignment = dict(smoke_ctx.assignment)
+opt_only_assignment["source_patch_allowed_roots"] = [
+    "third_party/FlowTune/src/src/opt"
+]
+opt_only_context = SmokeContext(repo_root, opt_only_assignment)
+full_opt_variants = build_variants(opt_only_context, "flow_wide")
+staged_opt_variants = [
+    select_staged_planner_variants(
+        full_opt_variants,
+        cycle_id=f"cycle_{cycle_number:03d}",
+        limit=12,
+        enabled=True,
+    )
+    for cycle_number in range(6, 11)
+]
+check("14g.1: structural batch is bounded and cross-family in every stage",
+      all(len(stage) <= 12 for stage in staged_opt_variants)
+      and all(
+          {variant_command(item.variant_id) for item in stage}
+          == {variant_command(item.variant_id) for item in full_opt_variants}
+          for stage in staged_opt_variants
+      ))
+check("14g.2: cycle 6-10 stages cover the complete opt-only probe space",
+      {
+          item.variant_id
+          for stage in staged_opt_variants
+          for item in stage
+      } == {item.variant_id for item in full_opt_variants})
+
+eligible_probe = {
+    "batch_id": "b",
+    "cycle_id": "probe_001",
+    "variant_id": "rewrite_valid",
+    "decision": "REPAIR_QOR",
+    "promotion_allowed": False,
+    "build_status": "candidate_binary_build_passed",
+    "cec_pass_count": 30,
+    "cec_total_count": 30,
+    "correctness_backed_rows": 30,
+    "evaluation_benchmark_count": 30,
+    "average_and_improve_pct": 0.0,
+    "total_and_delta_candidate_minus_baseline": 0,
+    "improved_benchmark_count": 0,
+    "regressed_benchmark_count": 0,
+    "structural_proxy_reward_pct": 0.0,
+}
+invalid_better_probe = {
+    **eligible_probe,
+    "cycle_id": "probe_002",
+    "variant_id": "dc2_partial_cec",
+    "decision": "REJECT_CEC",
+    "cec_pass_count": 1,
+    "average_and_improve_pct": 99.0,
+    "total_and_delta_candidate_minus_baseline": -9999,
+    "improved_benchmark_count": 30,
+    "structural_proxy_reward_pct": 99.0,
+}
+filtered_batch = expected_winner_payload(
+    [invalid_better_probe, eligible_probe], lineage_hash="lineage"
+)
+check("14g.3: failed/partial CEC probes cannot teach batch winner or frontier",
+      filtered_batch["winner"]["variant_id"] == "rewrite_valid"
+      and all(
+          item["variant_id"] != "dc2_partial_cec"
+          for item in filtered_batch["diverse_frontier"]
+      ))
 
 with tempfile.TemporaryDirectory() as td:
     temp_repo = Path(td)
@@ -1169,15 +1441,68 @@ with tempfile.TemporaryDirectory() as td:
     integrated_assignment = json.loads(
         assignment_path.read_text(encoding="utf-8")
     )
-    check("14f: promoted batch winner becomes champion", integrated == "probe_003")
-    check("14g: batch champion source is the next base",
+    check("14h: promoted batch winner becomes champion", integrated == "probe_003")
+    check("14i: batch champion source is the next base",
           integrated_assignment.get("champion_cycle_id") == "probe_003"
           and "probe_003" in integrated_assignment.get("base_source_root", ""))
-    check("14h: LLM resumes only after batch evidence integration",
+    check("14j: LLM resumes only after batch evidence integration",
           integrated_assignment.get("_planning_meta", {}).get("should_skip_llm") is False
           and bool(integrated_assignment.get("batch_search_evidence")))
-    check("14i: resumed loop restores incumbent champion from assignment",
+    check("14k: resumed loop restores incumbent champion from assignment",
           _assignment_champion_cycle(assignment_path) == "probe_003")
+
+with tempfile.TemporaryDirectory() as td:
+    replay_repo = Path(td)
+    replay_assignment = (
+        replay_repo
+        / "experiments/cycle_006/agents/assignments/flow_candidate_001.json"
+    )
+    replay_assignment.parent.mkdir(parents=True)
+    replay_assignment.write_text(
+        json.dumps(
+            {
+                "agent_name": "flow_agent",
+                "paper_role": "Flow Agent",
+                "cycle_id": "cycle_006",
+                "candidate_id": "flow_candidate_001",
+                "baseline_kind": "vanilla",
+                "benchmark_scope": ["benchmarks/a.blif"],
+                "evaluation_benchmark_scope": ["benchmarks/a.blif"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replay_result = integrate_batch_winner(
+        assignment_path=replay_assignment,
+        batch_id="cycle_006_planner_flow_wide_hash",
+        winner_payload={
+            "promotion_found": True,
+            "winner_patch_path": (
+                "experiments/probe_009/agents/source_patches/candidate_001.diff"
+            ),
+            "winner_patch_sha256": "a" * 64,
+            "winner_assignment_path": (
+                "experiments/probe_009/agents/assignments/candidate_001.json"
+            ),
+            "winner": {
+                "cycle_id": "probe_009",
+                "variant_id": "rewrite_validated",
+                "decision": "ACCEPT_FOR_NEXT_CYCLE",
+                "promotion_allowed": True,
+                "average_and_improve_pct": 1.0,
+                "total_and_delta_candidate_minus_baseline": -10,
+                "improved_benchmark_count": 1,
+                "regressed_benchmark_count": 0,
+            },
+        },
+        update_baseline=False,
+    )
+    replay_payload = json.loads(replay_assignment.read_text(encoding="utf-8"))
+check("14l: paired promoted batch is locked for exact Flow fan-in replay",
+      replay_result == ""
+      and replay_payload["baseline_kind"] == "vanilla"
+      and replay_payload["batch_search_evidence"]["exact_replay_required"]
+      and "COORDINATOR-LOCKED" in replay_payload["planner_hypothesis"])
 
 # ===================================================================
 # SECTION 15: Coding Agent receives authoritative champion QoR

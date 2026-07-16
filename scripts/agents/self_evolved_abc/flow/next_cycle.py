@@ -36,6 +36,9 @@ from scripts.agents.self_evolved_abc.workflow.artifacts import (
     implementation_root_for,
     validate_candidate_id,
 )
+from scripts.agents.self_evolved_abc.workflow.failure_evidence import (
+    validation_feedback_payload,
+)
 
 
 CYCLE_RE = re.compile(r"^cycle_(?P<number>[0-9]{3,})$")
@@ -152,6 +155,7 @@ def _base_next_assignment(
     benchmark_payload: Mapping[str, object],
 ) -> dict[str, object]:
     evidence = _previous_evidence_paths(context)
+    validation_feedback = validation_feedback_payload(context)
     assignment: dict[str, object] = {
         "agent_name": context.agent_name,
         "paper_role": context.paper_role,
@@ -174,6 +178,8 @@ def _base_next_assignment(
         **_carried_workflow_metadata(current),
         **_build_champion_payload(context, review),
     }
+    if validation_feedback is not None:
+        assignment["previous_role_validation_feedback"] = validation_feedback
     return assignment
 
 
@@ -224,7 +230,12 @@ def _build_next_logic_assignment(
         "source patch that is evaluated under the frozen CEC/QoR contract."
     )
     if previous:
-        hypothesis += f"\n\nPrevious Planning hypothesis:\n{previous}"
+        # Keep one bounded handoff instead of recursively embedding every
+        # earlier Planning prompt until the next dispatch exceeds its schema.
+        hypothesis += (
+            "\n\nPrevious Planning hypothesis (bounded):\n"
+            + previous[-2000:]
+        )
     return {
         **common,
         "planner_hypothesis": hypothesis,

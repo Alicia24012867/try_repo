@@ -77,17 +77,9 @@ def review_decision_path(context: CycleContext) -> Path:
     return implementation_root(context) / "comparison" / "review_decision.json"
 
 
-def agent_attempt_path(
-    context: CycleContext,
-    attempt: int,
-    artifact: str,
-) -> Path:
-    """Return a safe generated path for one Coding Agent attempt."""
+def agent_attempt_root(context: CycleContext) -> Path:
+    """Return the candidate-scoped root for one Coding Agent run's attempts."""
 
-    if attempt < 1:
-        raise ValueError("agent attempt must be >= 1")
-    if artifact not in ("assignment", "status"):
-        raise ValueError(f"unsupported agent attempt artifact: {artifact!r}")
     cycle_id = validate_portfolio_cycle_id(context.cycle_id)
     candidate_id = validate_candidate_id(context.candidate_id)
     return safe_repo_path(
@@ -97,8 +89,29 @@ def agent_attempt_path(
         / cycle_id
         / "agents"
         / "attempts"
-        / candidate_id
-        / f"attempt_{attempt:02d}.{artifact}.json",
+        / candidate_id,
+    )
+
+
+def agent_attempt_path(
+    context: CycleContext,
+    attempt: int,
+    artifact: str,
+) -> Path:
+    """Return a safe generated path for one Coding Agent attempt."""
+
+    if attempt < 1:
+        raise ValueError("agent attempt must be >= 1")
+    suffixes = {
+        "assignment": "assignment.json",
+        "status": "status.json",
+        "feedback": "feedback.md",
+    }
+    if artifact not in suffixes:
+        raise ValueError(f"unsupported agent attempt artifact: {artifact!r}")
+    return safe_repo_path(
+        context.repo_root,
+        agent_attempt_root(context) / f"attempt_{attempt:02d}.{suffixes[artifact]}",
     )
 
 

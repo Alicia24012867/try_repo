@@ -65,13 +65,19 @@ class CycleEvidence:
     # Whether all structural deltas were zero
     all_deltas_zero: bool = False
 
+    # Multi-objective structural proxy fields (optional for older reviews)
+    total_depth_delta: int | None = None
+    structural_proxy_reward_pct: float | None = None
+    retained_for_synergy: bool = False
+    promotion_basis: str = ""
+
     @property
     def is_champion(self) -> bool:
         return self.review_decision == "ACCEPT_FOR_NEXT_CYCLE"
 
     @property
     def is_repair_qor(self) -> bool:
-        return self.review_decision == "REPAIR_QOR"
+        return self.review_decision in ("REPAIR_QOR", "RETAIN_FOR_SYNERGY")
 
     @property
     def is_cec_fail(self) -> bool:
@@ -225,6 +231,16 @@ def read_cycle_evidence(
         review_next_action=str(review.get("next_action", "")),
         previous_patch_target=patch_target,
         all_deltas_zero=len(nonzero_deltas) == 0 and len(qor_rows) > 0,
+        total_depth_delta=_parse_optional_int(
+            review.get("total_depth_delta_candidate_minus_baseline")
+        ),
+        structural_proxy_reward_pct=_parse_optional_float(
+            review.get("structural_proxy_reward_pct")
+        ),
+        retained_for_synergy=bool(
+            review.get("retained_for_synergy", False)
+        ),
+        promotion_basis=str(review.get("promotion_basis", "")),
     )
 
 

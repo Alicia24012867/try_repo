@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -17,17 +18,28 @@ from scripts.agents.self_evolved_abc.flow.source_patch import (
     source_patch_diff_path,
     source_patch_plan_path,
 )
+from scripts.agents.self_evolved_abc.flow.source_patch_runner import (
+    PatchApplyCheckResult,
+    check_candidate_patch_against_frozen_baseline,
+)
+from scripts.agents.self_evolved_abc.flow.contracts import (
+    FLOW_CANDIDATE_SOURCE_PATCH_DIFF,
+)
 from scripts.agents.self_evolved_abc.flow.review import (
     review_impl_compare,
     write_review_artifacts,
 )
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
     agent_attempt_path,
+    agent_attempt_root,
     implementation_root,
     review_decision_path,
 )
 from scripts.agents.self_evolved_abc.workflow.failure_status import (
     is_coding_infrastructure_failure_status,
+)
+from scripts.agents.self_evolved_abc.workflow.failure_evidence import (
+    validation_feedback_payload,
 )
 
 
@@ -45,6 +57,7 @@ class AgentRunResult:
     attempts: int
     retryable: bool = False
     detail: str = ""
+    build_materialized: bool = False
 
     @property
     def should_evaluate(self) -> bool:
@@ -108,6 +121,9 @@ def _run_agent_with_retry(
     repo_root: Path,
     assignment: Path,
     max_retries: int,
+    build_candidate_binary: bool = False,
+    build_jobs: int = 4,
+    build_timeout_seconds: float = 900.0,
 ) -> AgentRunResult:
     """Run bounded attempts without mutating the frozen Planning assignment."""
 
@@ -121,17 +137,33 @@ def _run_agent_with_retry(
         raise ValueError("assignment must contain one JSON object")
     agent_name = _assignment_agent_name(repo_root, canonical)
     context = CycleContext.from_assignment_file(repo_root, canonical)
+    _reset_agent_attempts(context)
     feedback_path = context.artifact_paths().feedback
     repair_hint = ""
+    requested_source_files: tuple[str, ...] = ()
     total_attempts = max_retries + 1
 
     for attempt in range(1, total_attempts + 1):
+        # Each model attempt owns a fresh implementation/evaluation namespace.
+        # In particular, a compile failure from attempt N must not survive into
+        # attempt N+1 when that later attempt ends at provider/validation/DEFER
+        # before materializing a new build manifest.  Per-attempt assignments,
+        # statuses, feedback, and compiler-log snapshots live outside this root
+        # and remain available for audit and repair prompts.
+        _reset_attempt_implementation_outputs(context)
         attempt_assignment = agent_attempt_path(context, attempt, "assignment")
         attempt_status = agent_attempt_path(context, attempt, "status")
+        attempt_feedback = agent_attempt_path(context, attempt, "feedback")
         attempt_status.unlink(missing_ok=True)
+        attempt_feedback.unlink(missing_ok=True)
+        if _requires_patch_apply_check(context):
+            # A provider failure on a later attempt must never leave an older
+            # diff looking like the result of that attempt.
+            source_patch_diff_path(context).unlink(missing_ok=True)
         payload = _attempt_assignment_payload(
             original_payload,
             repair_hint=repair_hint,
+            requested_source_files=requested_source_files,
         )
         _write_json_atomic(attempt_assignment, payload)
 
@@ -172,8 +204,39 @@ def _run_agent_with_retry(
         if canonical.read_bytes() != original_bytes:
             raise RuntimeError("frozen Planning assignment changed during agent retry")
 
+        decision = str(status.get("decision", "")).strip()
+        failure_kind = str(status.get("failure_kind", "")).strip()
+        if decision == "NEEDS_HUMAN_REVIEW" and (
+            completed.returncode == 0 or failure_kind == "response_validation"
+        ):
+            feedback_text, feedback_sha256 = _snapshot_validation_feedback(
+                source=feedback_path,
+                destination=attempt_feedback,
+            )
+            status = _write_validation_attempt_status(
+                attempt_status,
+                status,
+                context=context,
+                feedback_path=attempt_feedback,
+                feedback_sha256=feedback_sha256,
+                feedback_text=feedback_text,
+            )
+            if attempt < total_attempts:
+                repair_hint = _validation_repair_hint(feedback_text)
+                print(
+                    "iteration_loop: retrying with structured validation feedback"
+                )
+                continue
+            return AgentRunResult(
+                succeeded=False,
+                decision=decision,
+                failure_kind="response_validation",
+                attempts=attempt,
+                retryable=True,
+                detail=feedback_text or "model response failed local validation",
+            )
+
         if completed.returncode != 0:
-            failure_kind = str(status.get("failure_kind", "")).strip()
             retryable = bool(status.get("retryable", False))
             detail = str(status.get("error_message", "")).strip()
             if not failure_kind:
@@ -212,22 +275,86 @@ def _run_agent_with_retry(
                 detail=detail,
             )
 
-        decision = str(status.get("decision", "")).strip()
-        if decision == "NEEDS_HUMAN_REVIEW":
-            feedback_text = _read_bounded_text(feedback_path, max_chars=5000)
-            if attempt < total_attempts:
-                repair_hint = _validation_repair_hint(feedback_text)
-                print(
-                    "iteration_loop: retrying with structured validation feedback"
+        if decision == PROPOSAL_DECISION and _requires_patch_apply_check(context):
+            patch_check = _run_frozen_baseline_patch_check(context)
+            if canonical.read_bytes() != original_bytes:
+                raise RuntimeError(
+                    "frozen Planning assignment changed during patch apply-check"
                 )
-                continue
-            return AgentRunResult(
-                succeeded=False,
-                decision=decision,
-                failure_kind="response_validation",
-                attempts=attempt,
-                detail=feedback_text or "model response failed local validation",
+            detail = _patch_apply_check_detail(context, patch_check)
+            if not patch_check.ok:
+                _write_patch_check_attempt_status(
+                    attempt_status,
+                    status,
+                    detail=detail,
+                    patch_check=patch_check,
+                )
+                _append_patch_check_feedback(
+                    context,
+                    attempt=attempt,
+                    detail=detail,
+                )
+                if attempt < total_attempts:
+                    repair_hint = _patch_apply_repair_hint(detail)
+                    requested_source_files = patch_check.target_paths
+                    print(
+                        "iteration_loop: retrying after strict frozen-baseline "
+                        "patch apply-check failed"
+                    )
+                    continue
+                return AgentRunResult(
+                    succeeded=False,
+                    decision=decision,
+                    failure_kind="patch_apply_check",
+                    attempts=attempt,
+                    retryable=True,
+                    detail=detail,
+                )
+            _write_patch_check_attempt_status(
+                attempt_status,
+                status,
+                detail=detail,
+                patch_check=patch_check,
             )
+            requested_source_files = patch_check.target_paths
+
+            if build_candidate_binary:
+                compile_ok, compile_detail = _run_candidate_compile_check(
+                    context,
+                    assignment_path=attempt_assignment,
+                    attempt=attempt,
+                    build_jobs=build_jobs,
+                    build_timeout_seconds=build_timeout_seconds,
+                )
+                if not compile_ok:
+                    _append_compile_check_feedback(
+                        context,
+                        attempt=attempt,
+                        detail=compile_detail,
+                    )
+                    if attempt < total_attempts:
+                        repair_hint = _compile_repair_hint(compile_detail)
+                        print(
+                            "iteration_loop: retrying after candidate C/C++ "
+                            "compile failed"
+                        )
+                        continue
+                    return AgentRunResult(
+                        succeeded=False,
+                        decision=decision,
+                        failure_kind="compile_check",
+                        attempts=attempt,
+                        retryable=True,
+                        detail=compile_detail,
+                        build_materialized=True,
+                    )
+                return AgentRunResult(
+                    succeeded=True,
+                    decision=decision,
+                    failure_kind="",
+                    attempts=attempt,
+                    build_materialized=True,
+                )
 
         if decision == PROPOSAL_DECISION or decision in SETTLED_NONPROPOSAL_DECISIONS:
             return AgentRunResult(
@@ -261,8 +388,16 @@ def _attempt_assignment_payload(
     original: Mapping[str, Any],
     *,
     repair_hint: str,
+    requested_source_files: Sequence[str] = (),
 ) -> dict[str, Any]:
     payload = json.loads(json.dumps(dict(original)))
+    if requested_source_files:
+        # Retry-only source selection hint.  Flow/Logic may use this to put an
+        # otherwise index-only target into Key Source Context.  It never enters
+        # the coordinator-owned frozen assignment.
+        payload["source_context_requested_files"] = list(
+            dict.fromkeys(str(path) for path in requested_source_files)
+        )
     if repair_hint:
         original_hypothesis = str(original.get("planner_hypothesis", "")).strip()
         payload["planner_hypothesis"] = (
@@ -290,6 +425,296 @@ def _provider_repair_hint(failure_kind: str, detail: str) -> str:
         "keep the patch concise enough to finish within the output budget.\n\n"
         f"failure_kind: {failure_kind}\n"
         f"detail: {detail[:2000]}"
+    )
+
+
+def _reset_agent_attempts(context: CycleContext) -> None:
+    """Remove artifacts from an older execution of the same candidate lane."""
+
+    root = agent_attempt_root(context)
+    if root.is_dir():
+        shutil.rmtree(root)
+    elif root.exists():
+        root.unlink()
+
+
+def _reset_attempt_implementation_outputs(context: CycleContext) -> None:
+    """Remove build/evaluation evidence owned by an older model attempt."""
+
+    root = implementation_root(context)
+    if root.is_dir():
+        shutil.rmtree(root)
+    elif root.exists():
+        root.unlink()
+
+
+def _snapshot_validation_feedback(
+    *,
+    source: Path,
+    destination: Path,
+) -> tuple[str, str]:
+    """Persist exact per-attempt feedback and return bounded text plus its hash."""
+
+    data = source.read_bytes() if source.is_file() else b""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    temporary.write_bytes(data)
+    temporary.replace(destination)
+    return (
+        data.decode("utf-8", errors="replace")[:5000],
+        hashlib.sha256(data).hexdigest(),
+    )
+
+
+def _write_validation_attempt_status(
+    path: Path,
+    status: Mapping[str, Any],
+    *,
+    context: CycleContext,
+    feedback_path: Path,
+    feedback_sha256: str,
+    feedback_text: str,
+) -> Mapping[str, Any]:
+    """Finalize a locally rejected response as a typed, auditable failure."""
+
+    detail = _safe_error_text(
+        feedback_text or "validation feedback artifact was empty",
+        context=context,
+        max_chars=4000,
+    )
+    payload = dict(status)
+    payload.update(
+        {
+            "status": "failed",
+            "failure_kind": "response_validation",
+            "retryable": True,
+            "decision": "NEEDS_HUMAN_REVIEW",
+            "error_type": "LocalResponseValidationError",
+            "error_message": detail,
+            "validation_feedback_path": feedback_path.relative_to(
+                context.repo_root
+            ).as_posix(),
+            "validation_feedback_sha256": feedback_sha256,
+        }
+    )
+    _write_json_atomic(path, payload)
+    return payload
+
+
+def _requires_patch_apply_check(context: CycleContext) -> bool:
+    return (
+        str(context.assignment.get("source_patch_mode", "")).strip()
+        == FLOW_CANDIDATE_SOURCE_PATCH_DIFF
+    )
+
+
+def _run_frozen_baseline_patch_check(
+    context: CycleContext,
+) -> PatchApplyCheckResult:
+    patch_path = source_patch_diff_path(context)
+    try:
+        return check_candidate_patch_against_frozen_baseline(
+            context=context,
+            patch_path=patch_path,
+        )
+    except (OSError, ValueError) as exc:
+        detail = _safe_error_text(str(exc), context=context, max_chars=2000)
+        return PatchApplyCheckResult(
+            patch_path=patch_path,
+            target_paths=(),
+            exit_code=1,
+            status="patch_apply_check_failed",
+            log_lines=(f"preflight_error: {type(exc).__name__}: {detail}",),
+        )
+
+
+def _patch_apply_check_detail(
+    context: CycleContext,
+    result: PatchApplyCheckResult,
+) -> str:
+    targets = ", ".join(result.target_paths) or "unavailable"
+    useful_lines: list[str] = []
+    for raw_line in result.log_lines:
+        line = _safe_error_text(raw_line, context=context, max_chars=1000)
+        lowered = line.lower()
+        if not line or lowered.startswith(("workspace_root:", "check_command:")):
+            continue
+        if (
+            "error:" in lowered
+            or "failed" in lowered
+            or "does not apply" in lowered
+            or "corrupt patch" in lowered
+            or "return_code" in lowered
+            or lowered.startswith("preflight_error:")
+        ):
+            useful_lines.append(line)
+    if not useful_lines:
+        useful_lines.append(f"strict git apply check exited {result.exit_code}")
+    diagnostics = " | ".join(useful_lines)[-2500:]
+    return (
+        f"status={result.status}; targets={targets}; "
+        f"diagnostics={diagnostics}"
+    )
+
+
+def _safe_error_text(
+    value: str,
+    *,
+    context: CycleContext,
+    max_chars: int,
+) -> str:
+    text = " ".join(value.split()).replace(str(context.repo_root), "<repo>")
+    return text[:max_chars]
+
+
+def _patch_apply_repair_hint(detail: str) -> str:
+    return (
+        "PREVIOUS SOURCE_PATCH_DIFF FAILED THE STRICT FROZEN-BASELINE "
+        "APPLY-CHECK. Return a fresh complete JSON object with a regenerated "
+        "unified diff. Keep the same narrow hypothesis and target, but copy "
+        "the exact surrounding context, indentation, and symbols from the "
+        "source excerpt; do not use fuzzy or approximate hunks.\n\n"
+        f"patch_apply_check: {detail[:3000]}"
+    )
+
+
+def _run_candidate_compile_check(
+    context: CycleContext,
+    *,
+    assignment_path: Path,
+    attempt: int,
+    build_jobs: int,
+    build_timeout_seconds: float,
+) -> tuple[bool, str]:
+    """Materialize/apply/build inside the same model repair attempt."""
+
+    command = (
+        sys.executable,
+        "-B",
+        "-m",
+        "scripts.agents.self_evolved_abc.flow.source_patch_runner",
+        "--repo-root",
+        str(context.repo_root),
+        "--assignment",
+        str(assignment_path),
+        "--apply-candidate-patch",
+        "--record-build-gate",
+        "--build-candidate-binary",
+        "--build-jobs",
+        str(max(1, build_jobs)),
+        "--build-timeout-seconds",
+        f"{build_timeout_seconds:g}",
+    )
+    completed = subprocess.run(command, cwd=context.repo_root, check=False)
+    impl_root = implementation_root(context)
+    build_info = impl_root / "candidate_modified" / "build_info.json"
+    build_log = impl_root / "candidate_modified" / "build.log"
+    status = "missing"
+    if build_info.is_file():
+        try:
+            payload = json.loads(build_info.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = {}
+        status = str(payload.get("status", "missing"))
+    snapshot = agent_attempt_root(context) / f"attempt_{attempt:02d}.compile.log"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    if build_log.is_file():
+        shutil.copy2(build_log, snapshot)
+        log_text = build_log.read_text(encoding="utf-8", errors="replace")
+    else:
+        log_text = "candidate build log was not produced"
+        snapshot.write_text(log_text + "\n", encoding="utf-8")
+    detail = (
+        f"status={status}; return_code={completed.returncode}; "
+        f"attempt_log={snapshot.relative_to(context.repo_root)}; "
+        "compiler_tail=" + " ".join(log_text[-6000:].split())
+    )[:7000]
+    return (
+        completed.returncode == 0
+        and status == "candidate_binary_build_passed",
+        detail,
+    )
+
+
+def _append_compile_check_feedback(
+    context: CycleContext,
+    *,
+    attempt: int,
+    detail: str,
+) -> None:
+    path = context.artifact_paths().feedback
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_bounded_text(path, max_chars=20_000).rstrip()
+    section = (
+        "## Candidate Compile Self-Debug\n\n"
+        f"- attempt: {attempt}\n"
+        "- status: failed\n"
+        f"- bounded compiler evidence: {detail}\n"
+    )
+    path.write_text(
+        (existing + "\n\n" if existing else "") + section,
+        encoding="utf-8",
+    )
+
+
+def _compile_repair_hint(detail: str) -> str:
+    return (
+        "PREVIOUS PATCH APPLIED BUT THE ISOLATED CANDIDATE C/C++ BUILD FAILED. "
+        "Preserve the original hypothesis and role scope. Regenerate the full "
+        "JSON/diff while fixing the actionable compiler tail below; use only "
+        "symbols, types, includes, and APIs visible in the supplied source.\n\n"
+        f"compile_check: {detail[:5000]}"
+    )
+
+
+def _write_patch_check_attempt_status(
+    path: Path,
+    status: Mapping[str, Any],
+    *,
+    detail: str,
+    patch_check: PatchApplyCheckResult,
+) -> None:
+    payload = dict(status)
+    payload.update(
+        {
+            "patch_apply_check": patch_check.status,
+            "patch_apply_check_exit_code": patch_check.exit_code,
+            "patch_apply_check_targets": list(patch_check.target_paths),
+        }
+    )
+    if not patch_check.ok:
+        payload.update(
+            {
+                "status": "failed",
+                "failure_kind": "patch_apply_check",
+                "retryable": True,
+                "decision": "NEEDS_HUMAN_REVIEW",
+                "error_type": "PatchApplyCheckError",
+                "error_message": detail[:4000],
+            }
+        )
+    _write_json_atomic(path, payload)
+
+
+def _append_patch_check_feedback(
+    context: CycleContext,
+    *,
+    attempt: int,
+    detail: str,
+) -> None:
+    path = context.artifact_paths().feedback
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = _read_bounded_text(path, max_chars=20_000).rstrip()
+    section = (
+        "## Frozen Baseline Patch Apply Check\n\n"
+        f"- attempt: {attempt}\n"
+        "- status: failed\n"
+        "- semantics: strict git apply; no fuzz or whitespace relaxation\n"
+        f"- detail: {detail}\n"
+    )
+    path.write_text(
+        (existing + "\n\n" if existing else "") + section,
+        encoding="utf-8",
     )
 
 
@@ -352,6 +777,100 @@ def _assignment_agent_name(repo_root: Path, assignment: Path) -> str:
     return get_coding_agent_spec(agent_name).name
 
 
+def _materialize_promoted_batch_replay(
+    context: CycleContext,
+) -> AgentRunResult | None:
+    """Replay a fully validated batch patch without another lossy model hop.
+
+    The deterministic batch already compiled and evaluated this exact diff
+    against the same frozen baseline.  Re-materializing it in the Flow branch
+    lets the normal paired fan-in judge the candidate while preserving all
+    build/CEC/QoR gates and avoiding provider/JSON/patch transcription failure.
+    """
+
+    raw = context.assignment.get("batch_search_evidence")
+    if not isinstance(raw, Mapping) or not bool(raw.get("exact_replay_required")):
+        return None
+    if context.agent_name != "flow_agent":
+        raise ValueError("promoted batch replay is restricted to the Flow lane")
+    if not bool(raw.get("promotion_found")):
+        raise ValueError("batch replay was requested without a promoted probe")
+    if not bool(raw.get("planning_consumed")):
+        raise ValueError("batch replay started before post-batch Planning completed")
+
+    relative = str(raw.get("winner_patch_path", "")).strip()
+    expected_sha256 = str(raw.get("winner_patch_sha256", "")).strip().lower()
+    if not relative or len(expected_sha256) != 64:
+        raise ValueError("batch replay patch path or sha256 is missing")
+    source = context.resolve_repo_path(relative)
+    if not source.is_file():
+        raise ValueError(f"batch replay patch is missing: {relative}")
+    patch_bytes = source.read_bytes()
+    actual_sha256 = hashlib.sha256(patch_bytes).hexdigest()
+    if not patch_bytes or actual_sha256 != expected_sha256:
+        raise ValueError("batch replay patch no longer matches its validated sha256")
+
+    destination = source_patch_diff_path(context)
+    if source.resolve() == destination.resolve():
+        raise ValueError("batch replay source aliases the active candidate patch")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_bytes(patch_bytes)
+
+    batch_id = str(raw.get("batch_id", "unknown"))
+    variant_id = str(raw.get("variant_id", "unknown"))
+    winner_cycle = str(raw.get("winner_cycle_id", "unknown"))
+    audit = "\n".join(
+        (
+            f"# Promoted Batch Replay — {context.cycle_id} {context.candidate_id}",
+            "",
+            "## Rationale",
+            "",
+            "Planning selected a deterministic Flow probe that already passed "
+            "build, full CEC, and QoR. The exact validated diff is replayed "
+            "against this round's unchanged frozen baseline so it can enter "
+            "the paired Flow/Logic fan-in.",
+            "",
+            f"- Batch: `{batch_id}`",
+            f"- Probe cycle: `{winner_cycle}`",
+            f"- Variant: `{variant_id}`",
+            f"- Source patch: `{relative}`",
+            f"- SHA-256: `{actual_sha256}`",
+            "- New optimization hypothesis introduced: `false`",
+            "- Required gates: isolated build, exact benchmark coverage, full "
+            "CEC, and correctness-backed QoR",
+            "",
+        )
+    )
+    paths = context.artifact_paths()
+    paths.ensure_parent_dirs()
+    paths.plan.write_text(audit, encoding="utf-8")
+    paths.candidate_change.write_text(audit, encoding="utf-8")
+    paths.feedback.write_text(
+        "# Promoted Batch Replay Feedback\n\n"
+        "Awaiting fresh build, CEC, and QoR review in the paired candidate lane.\n",
+        encoding="utf-8",
+    )
+    paths.rule_update.write_text(
+        "# Promoted Batch Replay Rule Update\n\n"
+        "No rulebase change; the measured patch remains subject to fresh gates.\n",
+        encoding="utf-8",
+    )
+    replay_plan = source_patch_plan_path(context)
+    replay_plan.parent.mkdir(parents=True, exist_ok=True)
+    replay_plan.write_text(audit, encoding="utf-8")
+    print(
+        "iteration_loop: materialized coordinator-locked promoted batch replay "
+        f"variant={variant_id} sha256={actual_sha256}"
+    )
+    return AgentRunResult(
+        succeeded=True,
+        decision=PROPOSAL_DECISION,
+        failure_kind="",
+        attempts=0,
+        detail="promoted_batch_replay",
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     repo_root = args.repo_root.resolve()
@@ -365,16 +884,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     expected_review_path = review_decision_path(context)
     commands: list[tuple[tuple[str, ...], bool]] = []
+    build_materialized = False
     if not args.skip_agent:
         try:
-            agent_result = _run_agent_with_retry(
-                repo_root=repo_root,
-                assignment=assignment_path,
-                max_retries=2,
-            )
+            agent_result = _materialize_promoted_batch_replay(context)
+            if agent_result is None:
+                agent_result = _run_agent_with_retry(
+                    repo_root=repo_root,
+                    assignment=assignment_path,
+                    max_retries=2,
+                    build_candidate_binary=args.build_candidate_binary,
+                    build_jobs=max(1, args.build_jobs),
+                    build_timeout_seconds=args.build_timeout_seconds,
+                )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(f"iteration_loop: invalid assignment: {exc}", file=sys.stderr)
-            return 2
+            agent_result = AgentRunResult(
+                succeeded=False,
+                decision="",
+                failure_kind="agent_preparation",
+                attempts=0,
+                detail=f"promoted batch replay validation failed: {exc}",
+            )
         if not agent_result.should_evaluate:
             if agent_result.succeeded:
                 print(
@@ -388,7 +918,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"attempts={agent_result.attempts}"
                 )
             return _write_agent_failure_review(context, agent_result)
-    if not args.skip_patch_apply:
+        build_materialized = agent_result.build_materialized
+    if build_materialized:
+        print(
+            "iteration_loop: candidate build already passed inside the coding "
+            "self-debug loop"
+        )
+    elif not args.skip_patch_apply:
         source_patch_command = [
             sys.executable,
             "-B",
@@ -413,7 +949,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             str(assignment),
             "--record-build-gate",
         ]
-    if args.build_candidate_binary:
+    if args.build_candidate_binary and not build_materialized:
         source_patch_command.extend(
             (
                 "--build-candidate-binary",
@@ -423,7 +959,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 f"{args.build_timeout_seconds:g}",
             )
         )
-    commands.append((tuple(source_patch_command), True))
+    if not build_materialized:
+        commands.append((tuple(source_patch_command), True))
 
     baseline_abc_bin = args.baseline_abc_bin or args.abc_bin
     candidate_abc_bin = args.candidate_abc_bin or args.abc_bin
@@ -539,24 +1076,56 @@ def _write_agent_failure_review(
 
     impl_root = implementation_root(context)
     decision = review_impl_compare(context, impl_root)
-    if decision.decision != "REPAIR_VALIDATION":
+    expected_local_decision = (
+        "REPAIR_COMPILE"
+        if result.failure_kind == "compile_check"
+        else "REPAIR_VALIDATION"
+    )
+    if decision.decision != expected_local_decision:
         raise RuntimeError(
-            "agent failure without build evidence must classify as "
-            f"REPAIR_VALIDATION, got {decision.decision}"
+            "agent failure review classification mismatch: expected "
+            f"{expected_local_decision}, got {decision.decision}"
         )
     build_status, reason, next_action = _agent_failure_review_fields(result)
     review_decision = {
         "DEFER": "DEFERRED_BY_AGENT",
         "NEEDS_PLANNER_APPROVAL": "NEEDS_PLANNER_APPROVAL",
     }.get(result.decision, decision.decision)
+    if result.failure_kind == "patch_apply_check":
+        review_decision = "REPAIR_PATCH"
     if is_coding_infrastructure_failure_status(build_status):
         review_decision = "CODING_INFRASTRUCTURE_FAILURE"
+    validation_feedback = (
+        validation_feedback_payload(context)
+        if result.failure_kind == "response_validation"
+        else None
+    )
     decision = replace(
         decision,
         decision=review_decision,
         build_status=build_status,
         reason=reason,
         next_action=next_action,
+        validation_evidence_type=(
+            str(validation_feedback.get("evidence_type", ""))
+            if validation_feedback is not None
+            else ""
+        ),
+        validation_issues_markdown=(
+            str(validation_feedback.get("issues_markdown", ""))
+            if validation_feedback is not None
+            else ""
+        ),
+        validation_evidence_source=(
+            str(validation_feedback.get("source", ""))
+            if validation_feedback is not None
+            else ""
+        ),
+        validation_evidence_sha256=(
+            str(validation_feedback.get("issues_sha256", ""))
+            if validation_feedback is not None
+            else ""
+        ),
     )
     paths = write_review_artifacts(context, impl_root, decision)
     print(f"review_decision: {paths['decision']}")
@@ -630,6 +1199,22 @@ def _agent_failure_review_fields(
             f"the local role/patch contract after {attempts} attempt(s).{suffix}",
             "Feed the exact validation issues to Planning and narrow the next "
             "hypothesis or patch scope.",
+        ),
+        "patch_apply_check": (
+            "agent_patch_apply_check_failed",
+            "The model produced a structurally valid source_patch_diff, but "
+            "its unified-diff context did not apply exactly to the frozen "
+            f"baseline after {attempts} attempt(s).{suffix}",
+            "Regenerate the diff from the exact frozen-baseline source context; "
+            "do not use fuzzy hunks or approximate whitespace.",
+        ),
+        "compile_check": (
+            "candidate_binary_build_failed",
+            "The patch applied, but the isolated candidate C/C++ build still "
+            f"failed after {attempts} same-candidate self-debug attempt(s).{suffix}",
+            "Use the persisted per-attempt compiler log to repair the exact "
+            "file/line diagnostics; do not spend a new optimization cycle on "
+            "an unrelated hypothesis.",
         ),
     }
     if result.failure_kind.startswith("model_response_"):

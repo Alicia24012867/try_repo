@@ -120,17 +120,25 @@ without checking local APIs and ownership.
 Gate order is fixed:
 
 1. Strict JSON, unified-diff, declared-target, and role-scope validation.
-2. Apply the diff only in the isolated candidate workspace and compile ABC.
-3. Run a command smoke on the shared evaluation recipe.
-4. Run CEC/`dsat` for every evaluated design.
-5. Only CEC-backed rows may contribute AIG node/depth/runtime QoR.
-6. Review accepts, repairs, rejects, or rolls back; accepted source becomes the
+2. Strictly apply-check the diff in a disposable copy of the exact frozen
+   `baseline_ref.source_root`. A context mismatch re-enters the bounded Coding
+   repair loop with the target file promoted into key source context.
+3. Apply the diff only in the isolated candidate workspace and compile ABC.
+4. Run a command smoke on the shared evaluation recipe.
+5. Run CEC/`dsat` for every evaluated design.
+6. Only CEC-backed rows may contribute AIG node/depth/runtime QoR.
+7. Review accepts, repairs, rejects, or rolls back; accepted source becomes the
    next champion lineage, while concise evaluated lessons become next-cycle
    `evolved_rules`.
 
-A Python-smoke-only status cannot enter step 4. Source-patch comparison requires
+A Python-smoke-only status cannot enter step 5. Source-patch comparison requires
 `candidate_binary_build_passed`, and a candidate binary resolving to the
 baseline binary is rejected as self-comparison.
+
+Prompt source and patch application resolve the same authoritative
+`baseline_ref.source_root`; a missing snapshot or alias drift fails closed and
+never falls back to the live vanilla tree. Patch application uses strict
+`git apply` semantics without fuzzy hunks or whitespace relaxation.
 
 ## Local verification and Linux handoff
 

@@ -154,13 +154,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"cycle_driver: agent_preparation: {exc}", file=sys.stderr)
         return EXIT_AGENT_PREPARATION
 
+    validation_failed = artifacts.decision == "NEEDS_HUMAN_REVIEW"
     _write_attempt_status(
         context,
         args.attempt_index,
-        status="completed",
-        failure_kind="",
-        retryable=False,
+        status="failed" if validation_failed else "completed",
+        failure_kind="response_validation" if validation_failed else "",
+        retryable=validation_failed,
         decision=artifacts.decision,
+        error_type="LocalResponseValidationError" if validation_failed else "",
+        error_message=(
+            artifacts.feedback_markdown if validation_failed else ""
+        ),
     )
 
     print(f"agent: {spec.name}")
@@ -179,6 +184,8 @@ def _write_attempt_status(
     retryable: bool,
     decision: str = "",
     error: BaseException | None = None,
+    error_type: str = "",
+    error_message: str = "",
 ) -> Path:
     payload: dict[str, object] = {
         "schema_version": 1,
@@ -190,8 +197,13 @@ def _write_attempt_status(
         "failure_kind": failure_kind,
         "retryable": retryable,
         "decision": decision,
-        "error_type": type(error).__name__ if error is not None else "",
-        "error_message": _bounded_error(error),
+        "error_type": (
+            error_type
+            or (type(error).__name__ if error is not None else "")
+        ),
+        "error_message": (
+            _bounded_text(error_message) if error_message else _bounded_error(error)
+        ),
     }
     path = agent_attempt_path(context, attempt, "status")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,8 +220,11 @@ def _write_attempt_status(
 def _bounded_error(error: BaseException | None) -> str:
     if error is None:
         return ""
-    text = " ".join(str(error).split())
-    return text[:4000]
+    return _bounded_text(str(error))
+
+
+def _bounded_text(value: str) -> str:
+    return " ".join(value.split())[:4000]
 
 
 if __name__ == "__main__":

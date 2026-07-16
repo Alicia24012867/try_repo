@@ -21,10 +21,12 @@ Use the following principles exactly:
 - Prefer small subsystem-local edits whose effect can be attributed.
 - Treat FlowTune, AIG optimization, and mapping as complementary subsystems.
 - Accumulate only validated improvements into the current champion.
-- Interpret percentage and absolute reduction as alternative magnitude views:
-  after CEC, require zero primary-metric regressions and sufficient benchmark
-  breadth, then accept when either configured magnitude gate is met. Do not
-  require every correlated area statistic to cross an independent hard gate.
+- Interpret percentage and absolute AND reduction as alternative magnitude
+  views in the scalar lane: after full CEC/coverage, require zero AND
+  regressions and sufficient breadth, then accept when either magnitude gate is
+  met. A separate structural lane may accept positive node/depth-product Pareto
+  reward under the coordinator's bounded per-design node/depth guardrails. Do
+  not invent new thresholds or weaken either lane's hard gates.
 - Roll back candidates that are broad, unstable, benchmark-specific, or
   semantically unsafe.
 - Update the rulebase only when feedback provides evidence that a rule is too
@@ -49,8 +51,9 @@ subsystems. Your plan must therefore preserve these properties:
   available.
 - The planner may propose rulebase changes, but it must not silently mutate the
   active rulebase. Rule changes require evidence from cycle artifacts.
-- Early cycles must be conservative. Prefer instrumentation, flow scripts, and
-  reversible local changes before source-level heuristic rewrites.
+- Early cycles must be conservative. Later `diversify`/`structural` phases may
+  use source-level scoring, tie-break, stopping, or precedent-recombination
+  changes when repeated correctness-backed evidence justifies them.
 
 ## Evidence Interpretation Rules
 
@@ -106,10 +109,11 @@ Plan each cycle using the paper's sequence:
    - promote, repair, hold, or roll back
    - propose rulebase updates
 
-For this small reproduction, the same workflow is scaled down: the benchmark
-subset is smaller, source edits may be disabled, and first-cycle correctness
-may be provisional until CEC automation is connected. You must label any such
-provisional status explicitly.
+For this small reproduction, the same workflow is scaled down to two coding
+roles, 30 ABC-native promotion designs, and one frozen AIG recipe. Source edits
+are enabled only in isolated role-owned workspaces, and promotion requires the
+automated full-scope CEC result. Do not claim the missing Mapper/eight-flow/
+ASAP7 physical metrics have already been reproduced.
 
 ## Repository Context
 
@@ -192,6 +196,23 @@ Summarize the current accepted version:
 {{CURRENT_CHAMPION_SUMMARY}}
 ```
 
+## Input: Campaign Recovery State
+
+This coordinator-owned state controls the paper's conservative-to-structural
+transition. Treat a retained frontier candidate as evidence, never as the
+active baseline. Its `flow_target_command` and `logic_target_command` are
+frozen coordinator choices; keep the two tasks aligned to their own target and
+do not copy one branch's family into the other.
+
+When measured batch evidence says `exact_replay_required=true`, keep the Flow
+dispatch as an exact replay of its hash-bound winning patch so the real
+candidate enters paired fan-in. Do not replace it with a speculative follow-up;
+the Logic dispatch remains an independent orthogonal candidate.
+
+```json
+{{CAMPAIGN_RECOVERY_STATE}}
+```
+
 Include if available:
 
 - source snapshot or git commit
@@ -207,6 +228,13 @@ Include if available:
 - known unsupported designs
 
 ## Input: Latest Feedback
+
+Exact role-tagged local validation issues (authoritative; do not generalize or
+merge Flow and Logic failures):
+
+```text
+{{BRANCH_FAILURE_FEEDBACK}}
+```
 
 Compile and smoke feedback:
 
@@ -378,6 +406,15 @@ Use these paper-aligned heuristics:
   unknown.
 - Combined subsystem evolution is high risk. Use it only after single-subsystem
   candidates have stable evidence.
+- In the `diversify` phase, the two dispatches must target different command or
+  decision families and must not repeat the same file/mechanism signature.
+- In the `structural` phase, prefer a feature-guarded score/tie-break, reached
+  stopping rule, or recombination of existing ABC precedents over another
+  capacity-only constant edit.
+- A `RETAIN_FOR_SYNERGY` candidate is a non-promoting frontier point. Planning
+  may cite it when defining a fresh follow-up or composed experiment, but the
+  new candidate must repeat isolated build, exact-scope CEC, and QoR before it
+  can update the champion.
 - FlowTune candidates are the safest current target because they can test
   flow-level hypotheses within a bounded source-patch scope.
 - AIG optimization candidates should be chosen when AIG node/depth deltas show

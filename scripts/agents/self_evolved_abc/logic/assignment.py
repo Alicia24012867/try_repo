@@ -79,9 +79,10 @@ def normalize_logic_assignment_scope(
     payload.setdefault("repository_context_max_chars", 72_000)
     payload.setdefault("repository_context_min_available", 9)
     payload.setdefault("repository_context_enforce_minimum", True)
-    payload.setdefault(
-        "repository_context_query_terms",
-        _target_query_terms(target_command),
+    # Query terms are target-derived coordinator state, not sticky user/model
+    # input.  Recompute them whenever Planning rotates the Logic family.
+    payload["repository_context_query_terms"] = _target_query_terms(
+        target_command
     )
 
     planning_meta = payload.get("_planning_meta")

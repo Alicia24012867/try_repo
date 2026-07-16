@@ -30,6 +30,12 @@ print("python runtime ready: {}".format(sys.version.split()[0]))
 # explicitly configured in .env.
 export EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS="${EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS:-16384}"
 
+# Bound only newly advanced evaluation cycles in this invocation. Completed,
+# lineage-valid history is fast-forwarded without consuming this budget. A
+# budget stop prepares the next dispatch; the absolute target stop does not.
+EDA_AGENT_NEW_CYCLE_BUDGET="${EDA_AGENT_NEW_CYCLE_BUDGET:-10}"
+EDA_AGENT_TARGET_CYCLE="${EDA_AGENT_TARGET_CYCLE:-10}"
+
 # The paper front-loads repository profiling before cycle 0.  Fail before any
 # model call if a pinned prior-knowledge checkout is absent, dirty, incomplete,
 # or at the wrong revision.
@@ -51,7 +57,8 @@ export EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS="${EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS:-1
   --max-workers 2 \
   --build-candidate-binary \
   --build-jobs 8 \
-  --max-cycles 5
+  --new-cycle-budget "$EDA_AGENT_NEW_CYCLE_BUDGET" \
+  --target-cycle "$EDA_AGENT_TARGET_CYCLE"
 #
 # Arguments:
 #   --max-workers 2            Run Flow and Logic concurrently. Use 1 for a
@@ -64,8 +71,22 @@ export EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS="${EDA_AGENT_MODEL_MAX_OUTPUT_TOKENS:-1
 #
 #   --build-jobs 8             Number of parallel make jobs.
 #
-#   --max-cycles 5             Maximum number of automatic cycles, including
-#                              the starting Planning dispatch.
+#   --new-cycle-budget N       Maximum number of unfinished cycles advanced by
+#                              this invocation. Valid completed history is
+#                              fast-forwarded for free. The Nth review is fed
+#                              into a prepared N+1 Planning dispatch, whose
+#                              candidates remain unexecuted until the next run,
+#                              unless N reaches --target-cycle.
+#                              Set EDA_AGENT_NEW_CYCLE_BUDGET to configure it;
+#                              the run.sh safety default is 10.
+#
+#   --target-cycle N           Absolute final cycle to execute. The default is
+#                              cycle 10, so resuming after cycle 5 executes
+#                              cycles 6-10 and stops after cycle 10's review
+#                              without preparing an unused cycle 11 dispatch.
+#                              The terminal champion is written to
+#                              planning/final_champion.json; exit is nonzero if
+#                              no correctness-backed champion exists.
 #
 #   Other dual_agent_loop options:
 #     --timeout-seconds 300    ABC runtime timeout per benchmark, in seconds.

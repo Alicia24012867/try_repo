@@ -73,7 +73,11 @@ The executable scaffold follows the paper's agent naming:
   a typed per-attempt provider/response/decision status.
 - `scripts/agents/self_evolved_abc/workflow/candidate_pipeline.py`: bounded
   coding repair state machine. Attempt assignments are generated separately;
-  the frozen Planning assignment is byte-stable.
+  the frozen Planning assignment is byte-stable. A hash-bound promoted batch
+  patch is materialized here as an exact Flow replay before the normal gates.
+- `scripts/agents/self_evolved_abc/workflow/dual_agent_loop.py`: absolute-cycle
+  Planning → (Flow ∥ Logic) → fan-in coordinator. The target cycle writes
+  `planning/final_champion.json` and returns nonzero when no champion exists.
 - `scripts/agents/self_evolved_abc/workflow/failure_status.py`: shared boundary
   between settled experimental negatives and provider/model/runtime failures.
 - `scripts/agents/self_evolved_abc/flow/`: Flow Agent loop implementation:
@@ -82,7 +86,9 @@ The executable scaffold follows the paper's agent naming:
   comparison, review feedback, and next-cycle handoff.
   `planner_batch.py` executes planner-requested sensitivity probes and writes
   the winner evidence back into the pending assignment, while `batch_search.py`
-  owns deterministic source-patch variant generation and evaluation.
+  owns deterministic source-patch variant generation and evaluation. Automatic
+  batches are bound to a generation hash covering portfolio lineage and the
+  exact source/patch space; stale or partial winners fail closed.
   Current implementation comparison uses the assignment's
   `evaluation_benchmark_scope` for CEC-backed promotion and keeps unsupported
   frontend samples visible in `unsupported_benchmark_scope`.
@@ -161,14 +167,15 @@ Each experiment cycle keeps generated artifacts together:
 - `logs/`: raw ABC, FlowTune, compile, and CEC logs.
 - `outputs/`: generated AIG/BLIF/netlist files.
 - `results/`: parsed CSV/JSON summaries and final tables.
-- `impl_compare/`: baseline/candidate implementation manifests, isolated
-  candidate workspace and binary, CEC logs, QoR delta tables, review decision,
-  and comparison summary for source-evolution cycles.
+- `candidates/<candidate_id>/impl_compare/`: active paired workflow 的
+  baseline/candidate manifests、隔离 workspace/binary、CEC logs、QoR delta、
+  review decision 与 comparison summary。cycle 根下的 `impl_compare/` 仅属于
+  legacy/internal single-branch 诊断布局，不是双 Agent campaign 的恢复输入。
 
 For the first small reproduction, `experiments/cycle_000/` is the parsed
-baseline and `experiments/cycle_001/` is the first LLM-agent source-patch cycle
-skeleton. The `cycle_001` assignment is in `source_patch_diff` mode and targets
-`third_party/FlowTune/src/src/opt` plus `third_party/FlowTune/src/src/base/abci`
-while keeping generated artifacts inside the active cycle directory. The default
-evaluation flow includes `fx`, `rewrite`, `resub`, `dc2`, `csweep`, and
-`refactor` to improve the chance that source patches are exercised.
+baseline and `experiments/cycle_001/` is the first source-patch skeleton. The
+current paired workflow freezes two candidate-scoped assignments: Flow owns
+`third_party/FlowTune/src/src/opt`, while Logic owns
+`third_party/FlowTune/src/src/base/abci`; generated artifacts stay inside the
+active candidate lane. The shared evaluation recipe includes `fx`, `rewrite`,
+`resub`, `dc2`, `csweep`, and `refactor` so both source domains are exercised.
