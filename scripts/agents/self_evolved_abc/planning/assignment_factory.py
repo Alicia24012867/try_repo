@@ -125,9 +125,9 @@ def build_initial_assignment(
             if is_logic
             else DEFAULT_EVAL_FLOW_COMMANDS
         ),
-        # The first item sources the candidate-specific recipe.  The remaining
-        # recipes are independent structural views, so a source edit is judged
-        # by more than one command ordering before a portfolio can promote it.
+        # These are the eight independent, frozen ABC structural views used by
+        # the promotion evaluator. ``evaluation_flow_commands`` remains the
+        # branch-local diagnostic/reachability recipe and is not one of them.
         "evaluation_flows": default_evaluation_flows(),
         "flow_aggregation": default_flow_aggregation(),
         "repository_context_manifest": "configs/agents/context/repositories.json",

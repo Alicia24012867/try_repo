@@ -76,8 +76,9 @@ QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
 
 This is a correctness-backed foundation for reproducing the paper, not yet its
 full Table-level physical-design experiment. The current campaign has two of
-the paper's three coding roles, evaluates three frozen technology-independent
-AIG recipes rather than the paper's eight downstream flows, and reports AIG
+the paper's three coding roles, evaluates the eight frozen
+technology-independent ABC recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`,
+`compress`, `compress2`, `resyn2rs`, and `compress2rs`), and reports AIG
 node/depth proxies rather than the final ASAP7 timing/area reward. Its Flow lane edits command kernels under
 `src/opt`; the legacy fork's MAB `ftune` scheduler lives in
 `src/base/abc/abcBayestune.cpp` and is not invoked by the frozen recipe. These
@@ -227,6 +228,8 @@ PYTHONPATH=. python3 -B scripts/test_planning_portfolio_evidence.py
 PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 
 PYTHONPATH=. python3 -B scripts/test_verilog_frontend_multi_flow.py
+
+PYTHONPATH=. python3 -B scripts/test_frontend_cli_passthrough.py
 
 PYTHONPATH=. python3 -B scripts/bootstrap_agent_context.py --check
 
@@ -378,7 +381,9 @@ python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
   --manifest experiments/batches/flow_wide_cycle_020/manifest.json \
   --run \
   --build-candidate-binary \
-  --build-jobs 8
+  --build-jobs 8 \
+  --yosys-bin /opt/yosys/bin/yosys \
+  --frontend-timeout-seconds 600
 
 # Rebuild summary.csv and winner.json without rerunning ABC.
 python3 -B -m scripts.agents.self_evolved_abc.flow.batch_search \
@@ -513,13 +518,13 @@ persisted.
 
 `cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair,
 two candidate-scoped implementation roots, and a shared hash-bound
-`evaluation_contract`. Each benchmark is judged across three frozen flows;
+`evaluation_contract`. Each benchmark is judged across eight frozen flows;
 candidate metrics are median-aggregated only after every flow's CEC result is
 available, and a vote cannot hide a per-flow AND regression.
 The Flow lane is limited to `third_party/FlowTune/src/src/opt`; the Logic lane
 is limited to existing `.c`/`.h` files in
-`third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG command
-recipe and CEC-backed QoR review. This reaches the edited rewrite/resub/refactor
+`third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG recipe
+portfolio and CEC-backed QoR review. This reaches the edited rewrite/resub/refactor
 command kernels, but it does not exercise the separate `ftune` MAB scheduler.
 
 ## Planning Agent

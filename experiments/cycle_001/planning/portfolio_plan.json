@@ -105,33 +105,136 @@
     "build_timeout_seconds": 900.0,
     "evaluation_flows": [
       {
-        "flow_id": "candidate_recipe",
-        "kind": "candidate_recipe"
-      },
-      {
         "commands": [
-          "strash",
+          "balance",
+          "rewrite",
           "rewrite -z",
-          "refactor -z",
+          "balance",
           "rewrite -z",
-          "resub -K 8",
-          "strash",
-          "print_stats"
+          "balance"
         ],
-        "flow_id": "rewrite_refactor",
+        "flow_id": "resyn",
         "kind": "commands"
       },
       {
         "commands": [
-          "strash",
-          "resub -K 8",
-          "dc2",
+          "balance",
+          "rewrite",
+          "refactor",
+          "balance",
+          "rewrite",
+          "rewrite -z",
+          "balance",
           "refactor -z",
-          "resub -K 8",
-          "strash",
-          "print_stats"
+          "rewrite -z",
+          "balance"
         ],
-        "flow_id": "resub_dc2",
+        "flow_id": "resyn2",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance",
+          "rewrite",
+          "balance",
+          "rewrite",
+          "rewrite -z",
+          "balance",
+          "rewrite -z",
+          "balance"
+        ],
+        "flow_id": "resyn2a",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance",
+          "resub",
+          "resub -K 6",
+          "balance",
+          "resub -z",
+          "resub -z -K 6",
+          "balance",
+          "resub -z -K 5",
+          "balance"
+        ],
+        "flow_id": "resyn3",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance -l",
+          "rewrite -l",
+          "rewrite -z -l",
+          "balance -l",
+          "rewrite -z -l",
+          "balance -l"
+        ],
+        "flow_id": "compress",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance -l",
+          "rewrite -l",
+          "refactor -l",
+          "balance -l",
+          "rewrite -l",
+          "rewrite -z -l",
+          "balance -l",
+          "refactor -z -l",
+          "rewrite -z -l",
+          "balance -l"
+        ],
+        "flow_id": "compress2",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance",
+          "resub -K 6",
+          "rewrite",
+          "resub -K 6 -N 2",
+          "refactor",
+          "resub -K 8",
+          "balance",
+          "resub -K 8 -N 2",
+          "rewrite",
+          "resub -K 10",
+          "rewrite -z",
+          "resub -K 10 -N 2",
+          "balance",
+          "resub -K 12",
+          "refactor -z",
+          "resub -K 12 -N 2",
+          "rewrite -z",
+          "balance"
+        ],
+        "flow_id": "resyn2rs",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "balance -l",
+          "resub -K 6 -l",
+          "rewrite -l",
+          "resub -K 6 -N 2 -l",
+          "refactor -l",
+          "resub -K 8 -l",
+          "balance -l",
+          "resub -K 8 -N 2 -l",
+          "rewrite -l",
+          "resub -K 10 -l",
+          "rewrite -z -l",
+          "resub -K 10 -N 2 -l",
+          "balance -l",
+          "resub -K 12 -l",
+          "refactor -z -l",
+          "resub -K 12 -N 2 -l",
+          "rewrite -z -l",
+          "balance -l"
+        ],
+        "flow_id": "compress2rs",
         "kind": "commands"
       }
     ],
@@ -162,7 +265,7 @@
     "target_metric": "and_count",
     "timeout_seconds": 300.0
   },
-  "evaluation_contract_hash": "ec9c12af66ee8d4b435c7cc06245d3c20cbda5724b30ea6ecf3d2a30c77e48bc",
+  "evaluation_contract_hash": "bbea1408a07e331658dbbb0b98a61a63d0b225452932dd50eb14e0ac25d175ad",
   "parent_plan_hash": "",
   "parent_review_hash": "",
   "planner_advice_hash": "55cc4aaaf65958742471e607816aae004957c9850e777cd70b87f78cdc5c0980",

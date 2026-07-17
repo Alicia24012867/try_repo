@@ -11,35 +11,143 @@ from typing import Mapping, Sequence
 
 FLOW_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MULTI_FLOW_SCHEMA_VERSION = 1
+# These are the eight standard technology-independent ABC aliases from
+# ``abc.rc``.  They are expanded here so the frozen evaluation contract does
+# not silently change if a candidate binary ships a different alias file.
+# ``render_qor_script`` strashes the input before these recipes run; that setup
+# command and its final output strash are not part of the named aliases.
 DEFAULT_EVALUATION_FLOWS = (
     {
-        "flow_id": "candidate_recipe",
-        "kind": "candidate_recipe",
-    },
-    {
-        "flow_id": "rewrite_refactor",
+        "flow_id": "resyn",
         "kind": "commands",
         "commands": (
-            "strash",
+            "balance",
+            "rewrite",
             "rewrite -z",
-            "refactor -z",
+            "balance",
             "rewrite -z",
-            "resub -K 8",
-            "strash",
-            "print_stats",
+            "balance",
         ),
     },
     {
-        "flow_id": "resub_dc2",
+        "flow_id": "resyn2",
         "kind": "commands",
         "commands": (
-            "strash",
-            "resub -K 8",
-            "dc2",
+            "balance",
+            "rewrite",
+            "refactor",
+            "balance",
+            "rewrite",
+            "rewrite -z",
+            "balance",
             "refactor -z",
+            "rewrite -z",
+            "balance",
+        ),
+    },
+    {
+        "flow_id": "resyn2a",
+        "kind": "commands",
+        "commands": (
+            "balance",
+            "rewrite",
+            "balance",
+            "rewrite",
+            "rewrite -z",
+            "balance",
+            "rewrite -z",
+            "balance",
+        ),
+    },
+    {
+        "flow_id": "resyn3",
+        "kind": "commands",
+        "commands": (
+            "balance",
+            "resub",
+            "resub -K 6",
+            "balance",
+            "resub -z",
+            "resub -z -K 6",
+            "balance",
+            "resub -z -K 5",
+            "balance",
+        ),
+    },
+    {
+        "flow_id": "compress",
+        "kind": "commands",
+        "commands": (
+            "balance -l",
+            "rewrite -l",
+            "rewrite -z -l",
+            "balance -l",
+            "rewrite -z -l",
+            "balance -l",
+        ),
+    },
+    {
+        "flow_id": "compress2",
+        "kind": "commands",
+        "commands": (
+            "balance -l",
+            "rewrite -l",
+            "refactor -l",
+            "balance -l",
+            "rewrite -l",
+            "rewrite -z -l",
+            "balance -l",
+            "refactor -z -l",
+            "rewrite -z -l",
+            "balance -l",
+        ),
+    },
+    {
+        "flow_id": "resyn2rs",
+        "kind": "commands",
+        "commands": (
+            "balance",
+            "resub -K 6",
+            "rewrite",
+            "resub -K 6 -N 2",
+            "refactor",
             "resub -K 8",
-            "strash",
-            "print_stats",
+            "balance",
+            "resub -K 8 -N 2",
+            "rewrite",
+            "resub -K 10",
+            "rewrite -z",
+            "resub -K 10 -N 2",
+            "balance",
+            "resub -K 12",
+            "refactor -z",
+            "resub -K 12 -N 2",
+            "rewrite -z",
+            "balance",
+        ),
+    },
+    {
+        "flow_id": "compress2rs",
+        "kind": "commands",
+        "commands": (
+            "balance -l",
+            "resub -K 6 -l",
+            "rewrite -l",
+            "resub -K 6 -N 2 -l",
+            "refactor -l",
+            "resub -K 8 -l",
+            "balance -l",
+            "resub -K 8 -N 2 -l",
+            "rewrite -l",
+            "resub -K 10 -l",
+            "rewrite -z -l",
+            "resub -K 10 -N 2 -l",
+            "balance -l",
+            "resub -K 12 -l",
+            "refactor -z -l",
+            "resub -K 12 -N 2 -l",
+            "rewrite -z -l",
+            "balance -l",
         ),
     },
 )
@@ -60,7 +168,7 @@ class EvaluationFlow:
 
 
 def default_evaluation_flows() -> list[dict[str, object]]:
-    """Return a JSON-safe copy of the standard three-flow portfolio."""
+    """Return a JSON-safe copy of the frozen eight-flow ABC portfolio."""
 
     return [
         {

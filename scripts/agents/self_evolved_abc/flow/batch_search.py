@@ -20,7 +20,7 @@ import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from scripts.agents.self_evolved_abc.benchmarks import (
     apply_benchmark_patterns as apply_benchmark_patterns_to_assignment,
@@ -202,6 +202,23 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--build-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--cec-timeout-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--yosys-bin",
+        default=None,
+        help=(
+            "Yosys executable forwarded to implementation_compare. "
+            "Omit to use EDA_AGENT_YOSYS_BIN or yosys."
+        ),
+    )
+    parser.add_argument(
+        "--frontend-timeout-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Per-Verilog frontend timeout forwarded to implementation_compare. "
+            "Defaults there to --timeout-seconds."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -290,6 +307,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_timeout_seconds=args.build_timeout_seconds,
             timeout_seconds=args.timeout_seconds,
             cec_timeout_seconds=args.cec_timeout_seconds,
+            yosys_bin=args.yosys_bin,
+            frontend_timeout_seconds=args.frontend_timeout_seconds,
         )
 
     summary_path = summarize_batch(repo_root=repo_root, manifest=manifest)
@@ -983,6 +1002,8 @@ def run_batch(
     build_timeout_seconds: float,
     timeout_seconds: float,
     cec_timeout_seconds: float,
+    yosys_bin: Optional[str] = None,
+    frontend_timeout_seconds: Optional[float] = None,
 ) -> None:
     for item in manifest.get("items", ()):
         assignment = repo_path(repo_root, Path(item["assignment_path"]))
@@ -1028,6 +1049,12 @@ def run_batch(
             "--cec-timeout-seconds",
             f"{cec_timeout_seconds:g}",
         ]
+        if yosys_bin is not None:
+            compare_cmd.extend(("--yosys-bin", yosys_bin))
+        if frontend_timeout_seconds is not None:
+            compare_cmd.extend(
+                ("--frontend-timeout-seconds", f"{frontend_timeout_seconds:g}")
+            )
         run_command(repo_root, compare_cmd)
 
         review_cmd = [

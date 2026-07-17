@@ -110,12 +110,13 @@ Plan each cycle using the paper's sequence:
    - propose rulebase updates
 
 For this small reproduction, the same workflow is scaled down to two coding
-roles, 70 frontend-enabled promotion designs, and three frozen AIG recipes.
+roles, 70 frontend-enabled promotion designs, and eight frozen standard ABC AIG
+recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`, `compress`, `compress2`,
+`resyn2rs`, and `compress2rs`).
 Verilog sources are lowered by Yosys before ABC; source edits are enabled only
 in isolated role-owned workspaces, and promotion requires every flow's
 automated full-scope CEC result plus the conservative aggregate guard. Do not
-claim the missing Mapper/eight-flow/ASAP7 physical metrics have already been
-reproduced.
+claim the missing Mapper/ASAP7 physical metrics have already been reproduced.
 
 ## Repository Context
 

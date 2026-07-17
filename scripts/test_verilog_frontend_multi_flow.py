@@ -127,23 +127,45 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
     def test_multi_flow_median_vote_and_guard(self) -> None:
         flows = default_evaluation_flows()
         flow_ids = [str(flow["flow_id"]) for flow in flows]
+        self.assertEqual(
+            flow_ids,
+            [
+                "resyn",
+                "resyn2",
+                "resyn2a",
+                "resyn3",
+                "compress",
+                "compress2",
+                "resyn2rs",
+                "compress2rs",
+            ],
+        )
         normalize_evaluation_flows(flows)
         benchmark = "benchmarks/itc99/b11.v"
         rows = [
             _comparison_row(benchmark=benchmark, flow_id=flow_ids[0], and_delta=-8),
-            _comparison_row(benchmark=benchmark, flow_id=flow_ids[1], and_delta=-4),
-            _comparison_row(benchmark=benchmark, flow_id=flow_ids[2], and_delta=3),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[1], and_delta=-6),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[2], and_delta=-4),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[3], and_delta=-2),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[4], and_delta=-1),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[5], and_delta=0),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[6], and_delta=0),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[7], and_delta=3),
         ]
+        for row in rows[5:7]:
+            row["candidate_aig_depth"] = "10"
+            row["depth_delta_candidate_minus_baseline"] = "0"
         aggregate, votes, summary = aggregate_flow_comparison_rows(
             rows,
             flow_ids=flow_ids,
             aggregation=default_flow_aggregation(),
         )
         self.assertEqual(aggregate[0]["flow_vote_outcome"], "candidate_wins")
-        self.assertEqual(aggregate[0]["and_delta_candidate_minus_baseline"], -4)
+        self.assertEqual(aggregate[0]["and_delta_candidate_minus_baseline"], -2)
         self.assertFalse(aggregate[0]["all_flows_nonregressing"])
         self.assertFalse(aggregate[0]["safe_for_promotion"])
-        self.assertEqual(votes[0]["candidate_vote_count"], 2)
+        self.assertEqual(votes[0]["candidate_vote_count"], 5)
+        self.assertEqual(votes[0]["vote_quorum"], 5)
         self.assertEqual(summary["candidate_vote_wins"], 1)
 
 

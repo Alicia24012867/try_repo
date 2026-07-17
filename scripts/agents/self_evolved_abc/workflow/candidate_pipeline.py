@@ -86,6 +86,23 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         help="Explicit candidate ABC binary for S5/F7. Defaults to S4 manifest.",
     )
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
+    parser.add_argument(
+        "--yosys-bin",
+        default=None,
+        help=(
+            "Yosys executable forwarded to implementation_compare. "
+            "Omit to use EDA_AGENT_YOSYS_BIN or yosys."
+        ),
+    )
+    parser.add_argument(
+        "--frontend-timeout-seconds",
+        type=float,
+        default=None,
+        help=(
+            "Per-Verilog frontend timeout forwarded to implementation_compare. "
+            "Defaults there to --timeout-seconds."
+        ),
+    )
     parser.add_argument("--build-timeout-seconds", type=float, default=900.0)
     parser.add_argument("--build-jobs", type=int, default=4)
     parser.add_argument("--next-cycle", default=None)
@@ -980,6 +997,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         compare_command.extend(("--baseline-abc-bin", baseline_abc_bin))
     if candidate_abc_bin:
         compare_command.extend(("--candidate-abc-bin", candidate_abc_bin))
+    if args.yosys_bin is not None:
+        compare_command.extend(("--yosys-bin", args.yosys_bin))
+    if args.frontend_timeout_seconds is not None:
+        compare_command.extend(
+            ("--frontend-timeout-seconds", f"{args.frontend_timeout_seconds:g}")
+        )
     commands.extend(
         (
             (tuple(compare_command), True),

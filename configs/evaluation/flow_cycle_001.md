@@ -13,12 +13,22 @@ then shared by the baseline and candidate binary.
 
 ## Frozen Flow Portfolio
 
-1. `candidate_recipe`: candidate-specific recipe materialized from the frozen
-   assignment's `evaluation_flow_commands`.
-2. `rewrite_refactor`: `strash; rewrite -z; refactor -z; rewrite -z; resub -K
-   8; strash; print_stats`.
-3. `resub_dc2`: `strash; resub -K 8; dc2; refactor -z; resub -K 8; strash;
-   print_stats`.
+The default portfolio is the eight standard ABC technology-independent flows:
+
+1. `resyn`
+2. `resyn2`
+3. `resyn2a`
+4. `resyn3`
+5. `compress`
+6. `compress2`
+7. `resyn2rs`
+8. `compress2rs`
+
+`multi_flow.py` stores the expanded command sequence for each alias in the
+frozen assignment. The runner applies a common `strash` setup before every
+flow, so the commands always run on the same AIG representation. A custom
+assignment may still opt into `candidate_recipe`, but it is not part of the
+default eight-flow portfolio.
 
 ## Decision Artifacts
 

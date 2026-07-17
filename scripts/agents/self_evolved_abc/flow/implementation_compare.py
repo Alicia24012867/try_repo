@@ -1227,6 +1227,7 @@ def render_qor_script(
         (
             f"source {ABC_RC_PATH}",
             f"read {resolved_input}",
+            "strash",
             *flow_commands(
                 resolved_flow,
                 candidate_flow_path=candidate_flow.as_posix(),
