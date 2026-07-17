@@ -5,10 +5,11 @@ substituted for the paper's mapped timing/area measurements.  This module
 replays the FlowTune STA-demo sequence against the bundled ASAP7 Liberty file:
 ``read_lib; map; topo; upsize; dnsize; topo; stime``.
 
-It intentionally does not invent a clock constraint.  When a frozen contract
-supplies ``clock_period_ps``, worst slack is derived from the measured critical
-path delay.  Otherwise the output is explicitly a critical-path-delay result,
-not a falsely labelled WNS result.
+The frozen default uses a 1000 ps (1 GHz) repository reference constraint so
+all flows and benchmarks have one comparable WNS basis.  It is deliberately
+recorded as a project reference, rather than presented as an undisclosed paper
+SDC.  A frozen assignment may still override ``clock_period_ps`` and
+``clock_period_source`` when the authoritative constraint is available.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from scripts.agents.self_evolved_abc.flow.verilog_frontend import benchmark_key
 
 ASAP7_QOR_SCHEMA_VERSION = 1
 ASAP7_DEFAULT_LIBRARY = "third_party/FlowTune/7nm_lvt_ff.lib"
+ASAP7_REFERENCE_CLOCK_PERIOD_PS = 1000.0
+ASAP7_REFERENCE_CLOCK_SOURCE = "project_reference_1ghz"
 ASAP7_FLOWTUNE_STA_COMMANDS = (
     "map",
     "topo",
@@ -100,7 +103,8 @@ def default_asap7_qor_config() -> dict[str, object]:
         "enabled": True,
         "library_path": ASAP7_DEFAULT_LIBRARY,
         "flowtune_sta_commands": list(ASAP7_FLOWTUNE_STA_COMMANDS),
-        "clock_period_ps": None,
+        "clock_period_ps": ASAP7_REFERENCE_CLOCK_PERIOD_PS,
+        "clock_period_source": ASAP7_REFERENCE_CLOCK_SOURCE,
     }
 
 
@@ -155,6 +159,10 @@ def normalize_asap7_qor_config(
         if not math.isfinite(parsed_clock) or parsed_clock <= 0.0:
             raise ValueError("asap7_qor.clock_period_ps must be a positive number")
         payload["clock_period_ps"] = parsed_clock
+    clock_source = payload["clock_period_source"]
+    if not isinstance(clock_source, str) or not clock_source.strip():
+        raise ValueError("asap7_qor.clock_period_source must be a non-empty string")
+    payload["clock_period_source"] = clock_source.strip()
     payload["schema_version"] = ASAP7_QOR_SCHEMA_VERSION
     return payload
 
@@ -530,6 +538,7 @@ def write_asap7_qor_summary(
         "library_path": normalized["library_path"],
         "flowtune_sta_commands": list(ASAP7_FLOWTUNE_STA_COMMANDS),
         "clock_period_ps": normalized["clock_period_ps"],
+        "clock_period_source": normalized["clock_period_source"],
         "timing_metric": (
             "worst_slack_ps"
             if normalized["clock_period_ps"] is not None
@@ -552,13 +561,15 @@ def write_asap7_qor_summary(
         and len(static) == len(all_static_rows)
         and bool(all_static_rows),
         "table_comparability_note": (
-            "ASAP7 Liberty mapping, post-sizing area, and STA WNS are present."
+            "ASAP7 Liberty mapping, post-sizing area, and STA WNS are present "
+            f"under {normalized['clock_period_source']}."
             if normalized["clock_period_ps"] is not None
             else "ASAP7 area and critical-path delay are present, but WNS is not "
             "reported because the frozen contract has no clock period."
         ),
     }
     path = output_root / "comparison" / "asap7_qor_summary.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
 

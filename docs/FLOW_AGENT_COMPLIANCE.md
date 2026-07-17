@@ -188,9 +188,10 @@ MAB scheduler is implemented in `src/base/abc/abcBayestune.cpp` and exposed by
 the `ftune` command in `src/base/abci/abc.c`. The frozen evaluation recipes do
 call `ftune` through a bounded, isolated MAB scheduler/replay lane. Every
 CEC-backed flow output is now mapped with the bundled ASAP7 Liberty and reported
-with post-sizing area plus STA critical-path delay. WNS is emitted only when
-the frozen contract supplies a clock period, so an unconstrained run cannot be
-mislabelled as the paper's worst-slack result.
+with post-sizing area plus STA critical-path delay. The frozen contract uses a
+1000 ps (1 GHz) project-reference period to report WNS consistently; the
+paper's numeric SDC is not disclosed, so this must not be labelled as an exact
+reproduction of its absolute worst-slack result.
 
 ## Remaining Remote Evidence Needed
 

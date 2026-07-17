@@ -53,10 +53,12 @@ read_lib; map; topo; upsize; dnsize; topo; stime
 
 It records post-sizing cell area and STA critical-path delay in
 `comparison/asap7_qor_by_flow.csv`, together with normalized area, delay, and
-area-delay-product ratios in `comparison/asap7_qor_summary.json`. A clock
-period is not guessed: set `asap7_qor.clock_period_ps` in the frozen assignment
-to additionally report worst slack. Without it, the report is physical
-Liberty-based delay evidence but is explicitly not a WNS/Table claim.
+area-delay-product ratios in `comparison/asap7_qor_summary.json`. The frozen
+assignment sets `asap7_qor.clock_period_ps: 1000.0`, yielding WNS on a uniform
+1 GHz reference basis. The paper does not disclose a numeric SDC, so this is a
+project-reference WNS comparison rather than a claim that absolute paper WNS
+has been reproduced. Any override must freeze both `clock_period_ps` and its
+`clock_period_source` in the contract.
 
 ## Decision Artifacts
 

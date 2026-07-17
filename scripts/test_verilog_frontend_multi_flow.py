@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,7 @@ from scripts.agents.self_evolved_abc.flow.asap7_qor import (
     collect_asap7_qor_result,
     default_asap7_qor_config,
     render_asap7_sta_script,
+    write_asap7_qor_summary,
 )
 from scripts.agents.self_evolved_abc.flow.verilog_frontend import (
     FrontendResult,
@@ -277,7 +279,15 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
                 assignment={"cycle_id": "cycle_001", "candidate_id": "flow_candidate_001"},
             )
             config = default_asap7_qor_config()
-            config.update({"library_path": "libraries/asap7.lib", "clock_period_ps": 100.0})
+            self.assertEqual(config["clock_period_ps"], 1000.0)
+            self.assertEqual(config["clock_period_source"], "project_reference_1ghz")
+            config.update(
+                {
+                    "library_path": "libraries/asap7.lib",
+                    "clock_period_ps": 100.0,
+                    "clock_period_source": "test_fixture",
+                }
+            )
             script = render_asap7_sta_script(
                 aig_path=Path("outputs/tiny.aig"),
                 library_path=Path("libraries/asap7.lib"),
@@ -317,6 +327,16 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
             )
             self.assertTrue(rows[0]["correctness_backed"])
             self.assertEqual(rows[0]["adp_improve_pct"], "0")
+            summary_path = write_asap7_qor_summary(
+                root / "impl_compare",
+                rows,
+                config=config,
+                static_flow_ids=["resyn"],
+            )
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            self.assertTrue(summary["table_comparable"])
+            self.assertEqual(summary["timing_metric"], "worst_slack_ps")
+            self.assertEqual(summary["clock_period_source"], "test_fixture")
 
 
 if __name__ == "__main__":

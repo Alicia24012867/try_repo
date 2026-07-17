@@ -82,10 +82,10 @@ technology-independent ABC recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`,
 maps the resulting AIG with the bundled `ASAP7_7nm_LVT_FF` Liberty, runs the
 FlowTune sizing/STA sequence, and records post-sizing area plus STA critical
 path delay in `asap7_qor_by_flow.csv`. AIG node/depth remain auxiliary signals,
-not the final PPA claim. WNS is emitted only when the frozen `asap7_qor`
-contract provides a clock period; without that external constraint the report
-is deliberately labelled critical-path delay rather than Table-comparable
-worst slack.
+not the final PPA claim. The frozen `asap7_qor` contract uses one 1000 ps
+(1 GHz) reference clock period, so WNS is available consistently across every
+flow. This is a project reference constraint; the paper does not disclose its
+numeric SDC, so results are not claimed to reproduce its absolute WNS values.
 
 ## Repository Knowledge Bootstrap
 
@@ -532,8 +532,9 @@ command kernels and also exercises the separate `ftune` MAB scheduler with a
 bounded AIG-node budget. Each CEC-backed flow output is then passed through the
 bundled ASAP7 Liberty mapping/gate-sizing/STA chain; see
 `comparison/asap7_qor_by_flow.csv` and `comparison/asap7_qor_summary.json`.
-The remaining Table-comparability prerequisite is an explicitly frozen clock
-period (for WNS), not an invented default constraint.
+The frozen 1000 ps reference clock period supplies a consistent WNS basis. It
+is explicitly a project reference, not a claimed recovery of the paper's
+undisclosed SDC.
 
 ## Planning Agent
 

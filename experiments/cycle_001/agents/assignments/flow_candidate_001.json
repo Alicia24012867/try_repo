@@ -31,7 +31,8 @@
   ],
   "artifact_layout": "candidate_scoped_v2",
   "asap7_qor": {
-    "clock_period_ps": null,
+    "clock_period_ps": 1000.0,
+    "clock_period_source": "project_reference_1ghz",
     "enabled": true,
     "flowtune_sta_commands": [
       "map",
@@ -139,7 +140,7 @@
     "flow_target_command": "csweep",
     "frontier_policy": "Partial candidates are evidence only; a combined candidate must repeat build, full CEC, and QoR before promotion.",
     "logic_target_command": "rewrite",
-    "policy_version": 7
+    "policy_version": 8
   },
   "candidate_id": "flow_candidate_001",
   "cycle_id": "cycle_001",
@@ -229,7 +230,8 @@
   ],
   "evaluation_contract": {
     "asap7_qor": {
-      "clock_period_ps": null,
+      "clock_period_ps": 1000.0,
+      "clock_period_source": "project_reference_1ghz",
       "enabled": true,
       "flowtune_sta_commands": [
         "map",
@@ -492,11 +494,11 @@
       "min_improved_benchmarks": 5,
       "min_total_and_reduction": 20
     },
-    "schema_version": 2,
+    "schema_version": 3,
     "target_metric": "and_count",
     "timeout_seconds": 300.0
   },
-  "evaluation_contract_hash": "8936ba1f10202ee2f0542c78723e67f785b032d06353ca3f620ac10ebe96c7c9",
+  "evaluation_contract_hash": "766cf53e0c2143e71451c1fa624a38df64952ef610d1ffc7cd934236b163c179",
   "evaluation_flow_commands": [
     "fx",
     "strash",

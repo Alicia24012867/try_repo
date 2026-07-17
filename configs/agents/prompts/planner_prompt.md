@@ -118,8 +118,9 @@ candidate binary and must also pass CEC; it is not a ninth paper Table recipe.
 Verilog sources are lowered by Yosys before ABC; source edits are enabled only
 in isolated role-owned workspaces, and promotion requires every flow's
 automated full-scope CEC result plus the conservative aggregate guard. Do not
-claim a Table-level WNS result unless the frozen ASAP7 contract includes the
-clock period used to derive it. ASAP7 mapped area and critical-path delay are
+claim reproduction of the paper's absolute WNS without its original SDC. The
+frozen ASAP7 contract uses a 1000 ps project-reference period to derive a
+consistent WNS comparison. ASAP7 mapped area and critical-path delay are
 available as physical evidence; Mapper evolution remains outside the current
 two-agent source scope.
 

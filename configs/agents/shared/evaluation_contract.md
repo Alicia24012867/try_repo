@@ -62,9 +62,11 @@ binary build is required before implementation comparison.
   and Liberty STA critical-path delay, collected for every CEC-backed flow in
   `asap7_qor_by_flow.csv` using `read_lib; map; topo; upsize; dnsize; topo;
   stime`.
-- Worst slack is derived only if the frozen `asap7_qor.clock_period_ps` is
-  supplied. The harness must never fabricate a period; an unconstrained run is
-  labelled critical-path delay and is not asserted to reproduce the Table WNS.
+- The frozen `asap7_qor.clock_period_ps` is **1000 ps (1 GHz)**, a single
+  project-reference constraint used to derive WNS for every design/flow. The
+  paper does not disclose a numeric SDC; therefore its Table enables
+  WNS-shaped comparison but does not establish reproduction of absolute paper
+  WNS values.
 - AIG AND count/depth, runtime, skipped design count, crash/assertion count,
   mapper estimates, and LUT results remain dense auxiliary feedback and CEC
   diagnostics.
