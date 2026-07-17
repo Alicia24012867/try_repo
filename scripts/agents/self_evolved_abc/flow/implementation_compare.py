@@ -5,13 +5,14 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import shlex
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.command_io import render_command_log
@@ -27,6 +28,13 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
 from scripts.agents.self_evolved_abc.flow.materialization import (
     candidate_flow_relative_path,
 )
+from scripts.agents.self_evolved_abc.flow.multi_flow import (
+    EvaluationFlow,
+    aggregate_flow_comparison_rows,
+    flow_commands,
+    normalize_evaluation_flows,
+    normalize_flow_aggregation,
+)
 from scripts.agents.self_evolved_abc.flow.metrics import (
     parse_last_ps_metrics_text,
     parse_log_header_float,
@@ -39,8 +47,19 @@ from scripts.agents.self_evolved_abc.flow.paths import (
     repo_relative_path,
     repo_relative_existing_path,
 )
+from scripts.agents.self_evolved_abc.flow.verilog_frontend import (
+    FrontendResult,
+    benchmark_key,
+    prepare_benchmark_frontend,
+    write_frontend_summary_csv,
+)
 QOR_FIELDS = (
+    "flow_id",
     "benchmark",
+    "frontend_kind",
+    "frontend_status",
+    "frontend_input_path",
+    "frontend_log_path",
     "implementation_label",
     "abc_exit_code",
     "aig_nodes",
@@ -51,6 +70,7 @@ QOR_FIELDS = (
     "skipped_reason",
 )
 CEC_FIELDS = (
+    "flow_id",
     "benchmark",
     "baseline_aig",
     "candidate_aig",
@@ -61,7 +81,10 @@ CEC_FIELDS = (
     "skipped_reason",
 )
 QOR_DELTA_FIELDS = (
+    "flow_id",
     "benchmark",
+    "frontend_kind",
+    "frontend_status",
     "cec_status",
     "correctness_backed",
     "baseline_aig_nodes",
@@ -74,14 +97,38 @@ QOR_DELTA_FIELDS = (
     "baseline_runtime_seconds",
     "candidate_runtime_seconds",
     "runtime_delta_seconds",
+    "flow_count",
+    "cec_pass_flow_count",
+    "candidate_vote_count",
+    "baseline_vote_count",
+    "tie_vote_count",
+    "invalid_flow_count",
+    "flow_vote_outcome",
+    "all_flows_nonregressing",
+    "safe_for_promotion",
     "skipped_reason",
+)
+FLOW_VOTE_FIELDS = (
+    "benchmark",
+    "flow_count",
+    "vote_quorum",
+    "candidate_vote_count",
+    "baseline_vote_count",
+    "tie_vote_count",
+    "invalid_flow_count",
+    "flow_vote_outcome",
+    "all_flows_cec_pass",
+    "all_flows_nonregressing",
+    "safe_for_promotion",
 )
 
 
 @dataclass(frozen=True)
 class ImplRunResult:
     benchmark: str
+    flow_id: str
     implementation_label: str
+    frontend: FrontendResult
     command: str
     log_path: Path
     aig_path: Path
@@ -95,6 +142,7 @@ class ImplRunResult:
 @dataclass(frozen=True)
 class CecResult:
     benchmark: str
+    flow_id: str
     baseline_aig: Path
     candidate_aig: Path
     command: str
@@ -130,6 +178,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--timeout-seconds", type=float, default=300.0)
     parser.add_argument("--cec-timeout-seconds", type=float, default=300.0)
     parser.add_argument(
+        "--yosys-bin",
+        default=os.environ.get("EDA_AGENT_YOSYS_BIN", "yosys"),
+        help="Yosys executable used to normalize Verilog benchmarks to BLIF.",
+    )
+    parser.add_argument(
+        "--frontend-timeout-seconds",
+        type=float,
+        default=None,
+        help="Timeout per Verilog frontend run. Defaults to --timeout-seconds.",
+    )
+    parser.add_argument(
         "--from-existing-logs",
         action="store_true",
         help="Rebuild comparison CSVs from existing impl_compare logs and AIGs.",
@@ -151,6 +210,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     output_root = impl_compare_root(context)
     ensure_compare_dirs(output_root)
+    frontend_timeout = (
+        args.frontend_timeout_seconds
+        if args.frontend_timeout_seconds is not None
+        else args.timeout_seconds
+    )
+    if frontend_timeout <= 0:
+        raise ValueError("frontend timeout must be > 0")
 
     build_status = read_candidate_build_status(output_root)
     candidate_mode = str(context.assignment.get("source_patch_mode", "")).strip()
@@ -195,44 +261,65 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 2
 
+    flow_specs = normalize_evaluation_flows(
+        context.assignment.get("evaluation_flows")
+    )
+    flow_aggregation = normalize_flow_aggregation(
+        context.assignment.get("flow_aggregation")
+    )
+    frontend_results: list[FrontendResult] = []
     baseline_results: list[ImplRunResult] = []
     candidate_results: list[ImplRunResult] = []
     cec_results: list[CecResult] = []
     for benchmark_text in context.evaluation_benchmark_scope:
         benchmark = repo_relative_existing_path(context, Path(benchmark_text))
-        baseline = collect_impl_result(
+        frontend = prepare_benchmark_frontend(
             context=context,
             output_root=output_root,
             benchmark=benchmark,
-            candidate_flow=candidate_flow,
-            implementation_label=BASELINE_LABEL,
-            abc_bin=baseline_abc_bin,
-            timeout_seconds=args.timeout_seconds,
+            yosys_bin=args.yosys_bin,
+            timeout_seconds=frontend_timeout,
             from_existing_logs=args.from_existing_logs,
         )
-        candidate = collect_impl_result(
-            context=context,
-            output_root=output_root,
-            benchmark=benchmark,
-            candidate_flow=candidate_flow,
-            implementation_label=CANDIDATE_LABEL,
-            abc_bin=candidate_abc_bin,
-            timeout_seconds=args.timeout_seconds,
-            from_existing_logs=args.from_existing_logs,
-        )
-        baseline_results.append(baseline)
-        candidate_results.append(candidate)
-        cec_results.append(
-            collect_cec_result(
+        frontend_results.append(frontend)
+        for flow in flow_specs:
+            baseline = collect_impl_result(
                 context=context,
                 output_root=output_root,
-                baseline=baseline,
-                candidate=candidate,
+                benchmark=benchmark,
+                frontend=frontend,
+                flow=flow,
+                candidate_flow=candidate_flow,
+                implementation_label=BASELINE_LABEL,
                 abc_bin=baseline_abc_bin,
-                timeout_seconds=args.cec_timeout_seconds,
+                timeout_seconds=args.timeout_seconds,
                 from_existing_logs=args.from_existing_logs,
             )
-        )
+            candidate = collect_impl_result(
+                context=context,
+                output_root=output_root,
+                benchmark=benchmark,
+                frontend=frontend,
+                flow=flow,
+                candidate_flow=candidate_flow,
+                implementation_label=CANDIDATE_LABEL,
+                abc_bin=candidate_abc_bin,
+                timeout_seconds=args.timeout_seconds,
+                from_existing_logs=args.from_existing_logs,
+            )
+            baseline_results.append(baseline)
+            candidate_results.append(candidate)
+            cec_results.append(
+                collect_cec_result(
+                    context=context,
+                    output_root=output_root,
+                    baseline=baseline,
+                    candidate=candidate,
+                    abc_bin=baseline_abc_bin,
+                    timeout_seconds=args.cec_timeout_seconds,
+                    from_existing_logs=args.from_existing_logs,
+                )
+            )
 
     write_impl_summary_csv(
         context,
@@ -246,23 +333,56 @@ def main(argv: Sequence[str] | None = None) -> int:
         "candidate_flow_summary.csv",
         candidate_results,
     )
-    write_cec_summary_csv(context, output_root, cec_results)
-    delta_rows = build_qor_delta_rows(baseline_results, candidate_results, cec_results)
+    write_frontend_summary_csv(
+        context=context,
+        output_root=output_root,
+        results=frontend_results,
+    )
+    write_cec_summary_csv(
+        context,
+        output_root,
+        aggregate_cec_results(cec_results, flow_specs),
+    )
+    write_cec_summary_csv(
+        context,
+        output_root,
+        cec_results,
+        filename="cec_by_flow.csv",
+    )
+    detailed_delta_rows = build_qor_delta_rows(
+        baseline_results, candidate_results, cec_results
+    )
+    write_qor_delta_csv(
+        output_root, detailed_delta_rows, filename="qor_delta_by_flow.csv"
+    )
+    delta_rows, vote_rows, multi_flow_summary = aggregate_flow_comparison_rows(
+        detailed_delta_rows,
+        flow_ids=[flow.flow_id for flow in flow_specs],
+        aggregation=flow_aggregation,
+    )
     write_qor_delta_csv(output_root, delta_rows)
+    write_flow_vote_csv(output_root, vote_rows)
+    write_multi_flow_summary(output_root, multi_flow_summary)
     summary = write_impl_compare_summary(
         context=context,
         output_root=output_root,
         build_status=build_status or "unknown",
         baseline_results=baseline_results,
         candidate_results=candidate_results,
-        cec_results=cec_results,
+        cec_results=aggregate_cec_results(cec_results, flow_specs),
         delta_rows=delta_rows,
+        flow_specs=flow_specs,
+        multi_flow_summary=multi_flow_summary,
     )
 
     print(f"comparison_summary: {summary}")
-    print(f"cec_rows: {len(cec_results)}")
+    print(f"cec_rows: {len(delta_rows)}")
+    print(f"cec_by_flow_rows: {len(cec_results)}")
     print(f"qor_delta_rows: {len(delta_rows)}")
-    return 0 if all(result.cec_status == "cec_pass" for result in cec_results) else 1
+    return 0 if all(
+        result.cec_status == "cec_pass"
+        for result in aggregate_cec_results(cec_results, flow_specs)
+    ) else 1
 
 
 def collect_impl_result(
@@ -270,19 +390,26 @@ def collect_impl_result(
     context: CycleContext,
     output_root: Path,
     benchmark: Path,
+    frontend: FrontendResult,
+    flow: EvaluationFlow,
     candidate_flow: Path,
     implementation_label: str,
     abc_bin: str,
     timeout_seconds: float,
     from_existing_logs: bool,
 ) -> ImplRunResult:
-    design = benchmark.stem
+    design = benchmark_key(benchmark)
     side_root = output_root / implementation_label
-    log_path = side_root / "logs" / f"{design}.qor.log"
-    aig_path = side_root / "outputs" / f"{design}.aig"
+    log_path = side_root / "logs" / flow.flow_id / f"{design}.qor.log"
+    aig_path = side_root / "outputs" / flow.flow_id / f"{design}.aig"
     abc_script = render_qor_script(
-        benchmark=benchmark,
+        input_path=(
+            frontend.input_path.relative_to(context.repo_root)
+            if frontend.input_path is not None
+            else Path("missing_frontend_input.blif")
+        ),
         candidate_flow=candidate_flow,
+        flow=flow,
         aig_path=aig_path.relative_to(context.repo_root),
     )
     command = render_shell_command(abc_bin, abc_script)
@@ -290,6 +417,8 @@ def collect_impl_result(
         return load_impl_result_from_log(
             context=context,
             benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
             implementation_label=implementation_label,
             command=command,
             log_path=log_path,
@@ -298,6 +427,8 @@ def collect_impl_result(
     return run_impl_command(
         context=context,
         benchmark=benchmark,
+        frontend=frontend,
+        flow=flow,
         implementation_label=implementation_label,
         command=command,
         abc_argv=(abc_bin, "-c", abc_script),
@@ -311,6 +442,8 @@ def run_impl_command(
     *,
     context: CycleContext,
     benchmark: Path,
+    frontend: FrontendResult,
+    flow: EvaluationFlow,
     implementation_label: str,
     command: str,
     abc_argv: Sequence[str],
@@ -320,6 +453,33 @@ def run_impl_command(
 ) -> ImplRunResult:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     aig_path.parent.mkdir(parents=True, exist_ok=True)
+    if not frontend.ready:
+        log_path.write_text(
+            render_command_log(
+                command=command,
+                return_code=None,
+                runtime_seconds=0.0,
+                output=(
+                    "FRONTEND_SKIPPED: "
+                    f"{frontend.frontend_status}: {frontend.skipped_reason}\n"
+                ),
+            ),
+            encoding="utf-8",
+        )
+        return ImplRunResult(
+            benchmark=str(benchmark),
+            flow_id=flow.flow_id,
+            implementation_label=implementation_label,
+            frontend=frontend,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            abc_exit_code=None,
+            aig_nodes=None,
+            aig_depth=None,
+            runtime_seconds=None,
+            skipped_reason=f"frontend:{frontend.frontend_status}",
+        )
     start = time.monotonic()
     try:
         completed = subprocess.run(
@@ -344,7 +504,9 @@ def run_impl_command(
         )
         return ImplRunResult(
             benchmark=str(benchmark),
+            flow_id=flow.flow_id,
             implementation_label=implementation_label,
+            frontend=frontend,
             command=command,
             log_path=log_path,
             aig_path=aig_path,
@@ -368,7 +530,9 @@ def run_impl_command(
         )
         return ImplRunResult(
             benchmark=str(benchmark),
+            flow_id=flow.flow_id,
             implementation_label=implementation_label,
+            frontend=frontend,
             command=command,
             log_path=log_path,
             aig_path=aig_path,
@@ -400,7 +564,9 @@ def run_impl_command(
         skipped_reason = "missing_expected_aig_output"
     return ImplRunResult(
         benchmark=str(benchmark),
+        flow_id=flow.flow_id,
         implementation_label=implementation_label,
+        frontend=frontend,
         command=command,
         log_path=log_path,
         aig_path=aig_path,
@@ -416,6 +582,8 @@ def load_impl_result_from_log(
     *,
     context: CycleContext,
     benchmark: Path,
+    frontend: FrontendResult,
+    flow: EvaluationFlow,
     implementation_label: str,
     command: str,
     log_path: Path,
@@ -424,7 +592,9 @@ def load_impl_result_from_log(
     if not log_path.exists():
         return ImplRunResult(
             benchmark=str(benchmark),
+            flow_id=flow.flow_id,
             implementation_label=implementation_label,
+            frontend=frontend,
             command=command,
             log_path=log_path,
             aig_path=aig_path,
@@ -447,7 +617,9 @@ def load_impl_result_from_log(
         skipped_reason = "missing_expected_aig_output"
     return ImplRunResult(
         benchmark=str(benchmark),
+        flow_id=flow.flow_id,
         implementation_label=implementation_label,
+        frontend=frontend,
         command=command,
         log_path=log_path,
         aig_path=aig_path,
@@ -469,8 +641,14 @@ def collect_cec_result(
     timeout_seconds: float,
     from_existing_logs: bool,
 ) -> CecResult:
-    design = Path(baseline.benchmark).stem
-    log_path = output_root / "comparison" / "logs" / f"{design}.cec.log"
+    design = benchmark_key(Path(baseline.benchmark))
+    log_path = (
+        output_root
+        / "comparison"
+        / "logs"
+        / baseline.flow_id
+        / f"{design}.cec.log"
+    )
     abc_script = f"cec {baseline.aig_path.relative_to(context.repo_root)} {candidate.aig_path.relative_to(context.repo_root)}"
     command = render_shell_command(abc_bin, abc_script)
     if baseline.skipped_reason or candidate.skipped_reason:
@@ -485,6 +663,7 @@ def collect_cec_result(
         write_cec_skip_log(log_path, command=command, skipped_reason=skipped)
         return CecResult(
             benchmark=baseline.benchmark,
+            flow_id=baseline.flow_id,
             baseline_aig=baseline.aig_path,
             candidate_aig=candidate.aig_path,
             command=command,
@@ -502,6 +681,7 @@ def collect_cec_result(
         )
         return CecResult(
             benchmark=baseline.benchmark,
+            flow_id=baseline.flow_id,
             baseline_aig=baseline.aig_path,
             candidate_aig=candidate.aig_path,
             command=command,
@@ -514,6 +694,7 @@ def collect_cec_result(
     if from_existing_logs:
         return load_cec_result_from_log(
             benchmark=baseline.benchmark,
+            flow_id=baseline.flow_id,
             baseline_aig=baseline.aig_path,
             candidate_aig=candidate.aig_path,
             command=command,
@@ -522,6 +703,7 @@ def collect_cec_result(
     return run_cec_command(
         context=context,
         benchmark=baseline.benchmark,
+        flow_id=baseline.flow_id,
         baseline_aig=baseline.aig_path,
         candidate_aig=candidate.aig_path,
         command=command,
@@ -535,6 +717,7 @@ def run_cec_command(
     *,
     context: CycleContext,
     benchmark: str,
+    flow_id: str,
     baseline_aig: Path,
     candidate_aig: Path,
     command: str,
@@ -567,6 +750,7 @@ def run_cec_command(
         )
         return CecResult(
             benchmark=benchmark,
+            flow_id=flow_id,
             baseline_aig=baseline_aig,
             candidate_aig=candidate_aig,
             command=command,
@@ -590,6 +774,7 @@ def run_cec_command(
         )
         return CecResult(
             benchmark=benchmark,
+            flow_id=flow_id,
             baseline_aig=baseline_aig,
             candidate_aig=candidate_aig,
             command=command,
@@ -614,6 +799,7 @@ def run_cec_command(
     status = parse_cec_status(output, completed.returncode)
     return CecResult(
         benchmark=benchmark,
+        flow_id=flow_id,
         baseline_aig=baseline_aig,
         candidate_aig=candidate_aig,
         command=command,
@@ -628,6 +814,7 @@ def run_cec_command(
 def load_cec_result_from_log(
     *,
     benchmark: str,
+    flow_id: str,
     baseline_aig: Path,
     candidate_aig: Path,
     command: str,
@@ -636,6 +823,7 @@ def load_cec_result_from_log(
     if not log_path.exists():
         return CecResult(
             benchmark=benchmark,
+            flow_id=flow_id,
             baseline_aig=baseline_aig,
             candidate_aig=candidate_aig,
             command=command,
@@ -651,6 +839,7 @@ def load_cec_result_from_log(
     status = parse_cec_status(text, exit_code)
     return CecResult(
         benchmark=benchmark,
+        flow_id=flow_id,
         baseline_aig=baseline_aig,
         candidate_aig=candidate_aig,
         command=command,
@@ -693,6 +882,9 @@ def build_qor_delta_rows(
         rows.append(
             {
                 "benchmark": baseline.benchmark,
+                "flow_id": baseline.flow_id,
+                "frontend_kind": baseline.frontend.frontend_kind,
+                "frontend_status": baseline.frontend.frontend_status,
                 "cec_status": cec.cec_status,
                 "correctness_backed": correctness_backed,
                 "baseline_aig_nodes": empty_if_none(baseline.aig_nodes),
@@ -741,6 +933,19 @@ def write_impl_summary_csv(
             writer.writerow(
                 {
                     "benchmark": result.benchmark,
+                    "flow_id": result.flow_id,
+                    "frontend_kind": result.frontend.frontend_kind,
+                    "frontend_status": result.frontend.frontend_status,
+                    "frontend_input_path": (
+                        display_repo_path(context, result.frontend.input_path)
+                        if result.frontend.input_path is not None
+                        else ""
+                    ),
+                    "frontend_log_path": (
+                        display_repo_path(context, result.frontend.log_path)
+                        if result.frontend.log_path is not None
+                        else ""
+                    ),
                     "implementation_label": result.implementation_label,
                     "abc_exit_code": empty_if_none(result.abc_exit_code),
                     "aig_nodes": empty_if_none(result.aig_nodes),
@@ -758,8 +963,9 @@ def write_cec_summary_csv(
     context: CycleContext,
     output_root: Path,
     results: Sequence[CecResult],
+    filename: str = "cec_summary.csv",
 ) -> Path:
-    path = output_root / "comparison" / "cec_summary.csv"
+    path = output_root / "comparison" / filename
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=CEC_FIELDS)
         writer.writeheader()
@@ -767,6 +973,7 @@ def write_cec_summary_csv(
             writer.writerow(
                 {
                     "benchmark": result.benchmark,
+                    "flow_id": result.flow_id,
                     "baseline_aig": display_repo_path(context, result.baseline_aig),
                     "candidate_aig": display_repo_path(context, result.candidate_aig),
                     "cec_exit_code": empty_if_none(result.cec_exit_code),
@@ -783,13 +990,106 @@ def display_repo_path(context: CycleContext, path: Path) -> str:
     return str(repo_relative_path(context, path))
 
 
-def write_qor_delta_csv(output_root: Path, rows: Sequence[dict[str, object]]) -> Path:
-    path = output_root / "comparison" / "qor_delta.csv"
+def write_qor_delta_csv(
+    output_root: Path,
+    rows: Sequence[dict[str, object]],
+    *,
+    filename: str = "qor_delta.csv",
+) -> Path:
+    path = output_root / "comparison" / filename
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=QOR_DELTA_FIELDS)
         writer.writeheader()
         writer.writerows(rows)
     return path
+
+
+def write_flow_vote_csv(
+    output_root: Path,
+    rows: Sequence[dict[str, object]],
+) -> Path:
+    path = output_root / "comparison" / "flow_vote_summary.csv"
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=FLOW_VOTE_FIELDS)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def write_multi_flow_summary(
+    output_root: Path,
+    summary: Mapping[str, object],
+) -> Path:
+    path = output_root / "comparison" / "multi_flow_summary.json"
+    path.write_text(
+        json.dumps(dict(summary), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def aggregate_cec_results(
+    results: Sequence[CecResult],
+    flow_specs: Sequence[EvaluationFlow],
+) -> list[CecResult]:
+    """Collapse per-flow CEC evidence into the legacy one-row-per-design gate."""
+
+    expected = tuple(flow.flow_id for flow in flow_specs)
+    grouped: dict[str, list[CecResult]] = {}
+    for result in results:
+        grouped.setdefault(result.benchmark, []).append(result)
+    aggregate: list[CecResult] = []
+    for benchmark in sorted(grouped):
+        group = grouped[benchmark]
+        by_flow = {result.flow_id: result for result in group}
+        ordered = [by_flow[flow_id] for flow_id in expected if flow_id in by_flow]
+        first = ordered[0] if ordered else group[0]
+        statuses = [result.cec_status for result in ordered]
+        all_present = len(ordered) == len(expected) and len(group) == len(expected)
+        if all_present and statuses and all(status == "cec_pass" for status in statuses):
+            status = "cec_pass"
+            skipped_reason = ""
+        else:
+            status = _aggregate_cec_status(statuses)
+            missing = [flow_id for flow_id in expected if flow_id not in by_flow]
+            reasons = [result.skipped_reason for result in ordered if result.skipped_reason]
+            if missing:
+                reasons.append(f"missing_flow={','.join(missing)}")
+            if len(group) != len(by_flow):
+                reasons.append("duplicate_flow_rows")
+            skipped_reason = "; ".join(sorted(set(reasons))) or status
+        exit_codes = [
+            result.cec_exit_code
+            for result in ordered
+            if result.cec_exit_code is not None
+        ]
+        runtimes = [
+            result.runtime_seconds
+            for result in ordered
+            if result.runtime_seconds is not None
+        ]
+        aggregate.append(
+            CecResult(
+                benchmark=benchmark,
+                flow_id="aggregate_all",
+                baseline_aig=first.baseline_aig,
+                candidate_aig=first.candidate_aig,
+                command="multi-flow CEC aggregate",
+                log_path=first.log_path,
+                cec_exit_code=(0 if status == "cec_pass" else (exit_codes[-1] if exit_codes else None)),
+                cec_status=status,
+                runtime_seconds=sum(runtimes) if runtimes else None,
+                skipped_reason=skipped_reason,
+            )
+        )
+    return aggregate
+
+
+def _aggregate_cec_status(statuses: Sequence[str]) -> str:
+    for status in ("cec_fail", "cec_timeout", "cec_crash", "cec_skipped"):
+        if status in statuses:
+            return status
+    return "cec_unparseable"
 
 
 def write_cec_skip_log(path: Path, *, command: str, skipped_reason: str) -> None:
@@ -814,6 +1114,8 @@ def write_impl_compare_summary(
     candidate_results: Sequence[ImplRunResult],
     cec_results: Sequence[CecResult],
     delta_rows: Sequence[dict[str, object]],
+    flow_specs: Sequence[EvaluationFlow],
+    multi_flow_summary: Mapping[str, object],
 ) -> Path:
     path = output_root / "comparison" / "impl_compare_summary.md"
     cec_pass = sum(1 for result in cec_results if result.cec_status == "cec_pass")
@@ -835,10 +1137,13 @@ def write_impl_compare_summary(
         "## Decision Gate",
         "",
         f"- Candidate build status: `{build_status}`",
-        f"- QoR rows complete: {complete_rows}/{len(baseline_results)}",
+        f"- QoR rows complete: {complete_rows}/{len(baseline_results)} per-flow runs",
+        f"- Frozen flows: {', '.join(flow.flow_id for flow in flow_specs)}",
         f"- CEC pass: {cec_pass}/{len(cec_results)}",
         f"- Correctness-backed delta rows: {len(backed_rows)}/{len(delta_rows)}",
         f"- Average AND improvement pct: `{format_float(avg_and_improve)}`",
+        f"- Candidate flow-vote wins: {multi_flow_summary.get('candidate_vote_wins', 0)}/{len(delta_rows)}",
+        f"- Safe multi-flow rows: {multi_flow_summary.get('safe_for_promotion_count', 0)}/{len(delta_rows)}",
         f"- Comparison reviewable: `{str(comparison_reviewable).lower()}`",
         "- Champion promotion: decided only by `review_decision.json` thresholds",
         "",
@@ -846,16 +1151,21 @@ def write_impl_compare_summary(
         "",
         "- `baseline_flow_summary.csv`",
         "- `candidate_flow_summary.csv`",
+        "- `frontend_summary.csv`",
         "- `cec_summary.csv`",
+        "- `cec_by_flow.csv`",
         "- `qor_delta.csv`",
+        "- `qor_delta_by_flow.csv`",
+        "- `flow_vote_summary.csv` and `multi_flow_summary.json`",
         f"- logs under `../{BASELINE_LABEL}/logs/`, `../{CANDIDATE_LABEL}/logs/`, and `logs/`",
         f"- AIG outputs under `../{BASELINE_LABEL}/outputs/` and `../{CANDIDATE_LABEL}/outputs/`",
         "",
         "## Policy",
         "",
         "- QoR deltas are reviewable only when `correctness_backed` is true.",
-        "- Any CEC fail, timeout, crash, skip, or unparseable result blocks promotion.",
-        "- Benchmarks outside `evaluation_benchmark_scope` are tracked as frontend-pending and do not count as CEC failures.",
+        "- Any CEC fail, timeout, crash, skip, frontend failure, or unparseable result blocks promotion.",
+        "- Verilog benchmarks are normalized once by Yosys to BLIF, then reused by every flow and both implementations.",
+        "- Median QoR aggregation is paired with strict-majority voting; promotion additionally requires no per-flow AND regression by default.",
         "- This runner does not update the active rulebase.",
         "",
     ]
@@ -890,12 +1200,37 @@ def write_blocked_summary(
     return path
 
 
-def render_qor_script(*, benchmark: Path, candidate_flow: Path, aig_path: Path) -> str:
+def render_qor_script(
+    *,
+    input_path: Path | None = None,
+    benchmark: Path | None = None,
+    candidate_flow: Path,
+    flow: EvaluationFlow | None = None,
+    aig_path: Path,
+) -> str:
+    """Render one ABC QoR command, preserving the legacy keyword shape.
+
+    ``benchmark=`` was the original direct-ABC API. New callers pass
+    ``input_path=`` after the frontend has prepared a normalized BLIF. Keeping
+    both forms makes manual BLIF/bench invocations continue to work.
+    """
+
+    resolved_input = input_path or benchmark
+    if resolved_input is None:
+        raise ValueError("render_qor_script requires input_path or benchmark")
+    resolved_flow = flow or EvaluationFlow(
+        flow_id="candidate_recipe",
+        kind="candidate_recipe",
+        commands=(),
+    )
     return "; ".join(
         (
             f"source {ABC_RC_PATH}",
-            f"read {benchmark}",
-            f"source {candidate_flow}",
+            f"read {resolved_input}",
+            *flow_commands(
+                resolved_flow,
+                candidate_flow_path=candidate_flow.as_posix(),
+            ),
             "strash",
             f"write_aiger {aig_path}",
             "ps",

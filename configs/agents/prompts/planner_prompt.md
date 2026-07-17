@@ -110,10 +110,12 @@ Plan each cycle using the paper's sequence:
    - propose rulebase updates
 
 For this small reproduction, the same workflow is scaled down to two coding
-roles, 30 ABC-native promotion designs, and one frozen AIG recipe. Source edits
-are enabled only in isolated role-owned workspaces, and promotion requires the
-automated full-scope CEC result. Do not claim the missing Mapper/eight-flow/
-ASAP7 physical metrics have already been reproduced.
+roles, 70 frontend-enabled promotion designs, and three frozen AIG recipes.
+Verilog sources are lowered by Yosys before ABC; source edits are enabled only
+in isolated role-owned workspaces, and promotion requires every flow's
+automated full-scope CEC result plus the conservative aggregate guard. Do not
+claim the missing Mapper/eight-flow/ASAP7 physical metrics have already been
+reproduced.
 
 ## Repository Context
 
@@ -208,6 +210,15 @@ When measured batch evidence says `exact_replay_required=true`, keep the Flow
 dispatch as an exact replay of its hash-bound winning patch so the real
 candidate enters paired fan-in. Do not replace it with a speculative follow-up;
 the Logic dispatch remains an independent orthogonal candidate.
+
+When batch evidence says `status=no_eligible_probe` or `diagnostic_only=true`,
+the batch completed but no probe passed every eligibility gate: build,
+exact-scope CEC, correctness-backed QoR, and an eligible review decision. Treat
+`outcome.json`, the representative review/CEC table, and failed patch as
+negative diagnostics only. Do not rank its unbacked QoR, do not request exact
+replay, and do not update the baseline. Give Flow a correctness-preserving
+repair or materially different reached strategy; still give Logic an
+independent task so the paired round can continue.
 
 ```json
 {{CAMPAIGN_RECOVERY_STATE}}

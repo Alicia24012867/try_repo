@@ -1,10 +1,12 @@
-# Cycle 000 Agent Workspace
+# Cycle 000 Baseline Evidence
 
-TODO use this directory for cycle-000 planning and feedback artifacts.
+`cycle_000` predates the paired Coding-Agent campaign. It is immutable
+historical baseline evidence, not a Flow or Logic candidate lane.
 
-Suggested usage:
+- `../planning/baseline.json` records the baseline contract and limitations.
+- `../results/` preserves the parsed EPFL QoR evidence used by initial Planning.
+- `../logs/` and `../outputs/` preserve the original run material and are not
+  reinterpreted as CEC-backed dual-agent artifacts.
 
-- `plans/`: TODO planner outputs.
-- `candidate_changes/`: TODO candidate patch notes, not source patches yet.
-- `feedback/`: TODO compile, CEC, and QoR feedback summaries.
-- `rule_updates/`: TODO proposed rulebase changes.
+New work begins in `cycle_001`, where each role owns a separate directory under
+`candidates/<candidate_id>/impl_compare/` and shares only frozen Planning data.

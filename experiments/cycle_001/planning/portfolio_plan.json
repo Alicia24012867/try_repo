@@ -1,0 +1,174 @@
+{
+  "baseline_ref": {
+    "abc_bin": "third_party/FlowTune/FlowTune-OpenFPGA/abc",
+    "candidate_id": "",
+    "cycle_id": "cycle_000",
+    "kind": "vanilla",
+    "source_root": "third_party/FlowTune/src"
+  },
+  "branches": [
+    {
+      "agent_name": "flow_agent",
+      "assignment_path": "experiments/cycle_001/agents/assignments/flow_candidate_001.json",
+      "branch_role": "flow",
+      "candidate_id": "flow_candidate_001"
+    },
+    {
+      "agent_name": "logic_minimization_agent",
+      "assignment_path": "experiments/cycle_001/agents/assignments/logic_candidate_001.json",
+      "branch_role": "logic",
+      "candidate_id": "logic_candidate_001"
+    }
+  ],
+  "cycle_id": "cycle_001",
+  "evaluation_contract": {
+    "baseline_ref": {
+      "abc_bin": "third_party/FlowTune/FlowTune-OpenFPGA/abc",
+      "candidate_id": "",
+      "cycle_id": "cycle_000",
+      "kind": "vanilla",
+      "source_root": "third_party/FlowTune/src"
+    },
+    "benchmark_frontend": "abc_native_and_yosys_verilog",
+    "benchmark_scope": [
+      "benchmarks/epfl/epfl_adder.blif",
+      "benchmarks/epfl/epfl_bar.blif",
+      "benchmarks/epfl/epfl_div.blif",
+      "benchmarks/epfl/epfl_hyp.blif",
+      "benchmarks/epfl/epfl_log2.blif",
+      "benchmarks/epfl/epfl_max.blif",
+      "benchmarks/epfl/epfl_multiplier.blif",
+      "benchmarks/epfl/epfl_sin.blif",
+      "benchmarks/epfl/epfl_sqrt.blif",
+      "benchmarks/epfl/epfl_square.blif",
+      "benchmarks/iscas85/C1355.blif",
+      "benchmarks/iscas85/C17.blif",
+      "benchmarks/iscas85/C1908.blif",
+      "benchmarks/iscas85/C2670.blif",
+      "benchmarks/iscas85/C3540.blif",
+      "benchmarks/iscas85/C432.blif",
+      "benchmarks/iscas85/C499.blif",
+      "benchmarks/iscas85/C5315.blif",
+      "benchmarks/iscas85/C6288.blif",
+      "benchmarks/iscas85/C880.blif",
+      "benchmarks/iscas89/s208.blif",
+      "benchmarks/iscas89/s27.blif",
+      "benchmarks/iscas89/s298.blif",
+      "benchmarks/iscas89/s344.blif",
+      "benchmarks/iscas89/s349.blif",
+      "benchmarks/iscas89/s382.blif",
+      "benchmarks/iscas89/s386.blif",
+      "benchmarks/iscas89/s400.blif",
+      "benchmarks/iscas89/s420.blif",
+      "benchmarks/iscas89/s444.blif",
+      "benchmarks/iscas99/b01.v",
+      "benchmarks/iscas99/b02.v",
+      "benchmarks/iscas99/b03.v",
+      "benchmarks/iscas99/b04.v",
+      "benchmarks/iscas99/b05.v",
+      "benchmarks/iscas99/b06.v",
+      "benchmarks/iscas99/b07.v",
+      "benchmarks/iscas99/b08.v",
+      "benchmarks/iscas99/b09.v",
+      "benchmarks/iscas99/b10.v",
+      "benchmarks/itc99/b11.v",
+      "benchmarks/itc99/b12.v",
+      "benchmarks/itc99/b13.v",
+      "benchmarks/itc99/b14.v",
+      "benchmarks/itc99/b15.v",
+      "benchmarks/itc99/b17.v",
+      "benchmarks/itc99/b18.v",
+      "benchmarks/itc99/b19.v",
+      "benchmarks/itc99/b20.v",
+      "benchmarks/itc99/b21.v",
+      "benchmarks/vtr/bfly.v",
+      "benchmarks/vtr/bgm.v",
+      "benchmarks/vtr/diffeq1.v",
+      "benchmarks/vtr/dscg.v",
+      "benchmarks/vtr/fir.v",
+      "benchmarks/vtr/mm3.v",
+      "benchmarks/vtr/ode.v",
+      "benchmarks/vtr/or1200.v",
+      "benchmarks/vtr/syn2.v",
+      "benchmarks/vtr/syn7.v",
+      "benchmarks/arithmetic/adder_tree_2L_004bits.v",
+      "benchmarks/arithmetic/adder_tree_2L_008bits.v",
+      "benchmarks/arithmetic/adder_tree_3L_004bits.v",
+      "benchmarks/arithmetic/adder_tree_3L_008bits.v",
+      "benchmarks/arithmetic/mult_4x4.v",
+      "benchmarks/arithmetic/mult_5x5.v",
+      "benchmarks/arithmetic/mult_6x6.v",
+      "benchmarks/arithmetic/mult_7x7.v",
+      "benchmarks/arithmetic/mult_8x8.v",
+      "benchmarks/arithmetic/mult_9x9.v"
+    ],
+    "build_timeout_seconds": 900.0,
+    "evaluation_flows": [
+      {
+        "flow_id": "candidate_recipe",
+        "kind": "candidate_recipe"
+      },
+      {
+        "commands": [
+          "strash",
+          "rewrite -z",
+          "refactor -z",
+          "rewrite -z",
+          "resub -K 8",
+          "strash",
+          "print_stats"
+        ],
+        "flow_id": "rewrite_refactor",
+        "kind": "commands"
+      },
+      {
+        "commands": [
+          "strash",
+          "resub -K 8",
+          "dc2",
+          "refactor -z",
+          "resub -K 8",
+          "strash",
+          "print_stats"
+        ],
+        "flow_id": "resub_dc2",
+        "kind": "commands"
+      }
+    ],
+    "flow_aggregation": {
+      "metric_aggregation": "median",
+      "require_all_flows_cec": true,
+      "require_all_flows_nonregressing": true,
+      "schema_version": 1,
+      "vote_rule": "strict_majority"
+    },
+    "flow_commands": [
+      "fx",
+      "strash",
+      "rewrite -z",
+      "resub -K 8",
+      "dc2",
+      "csweep",
+      "refactor -z",
+      "strash",
+      "print_stats"
+    ],
+    "promotion_thresholds": {
+      "min_average_and_improve_pct": 1.2,
+      "min_improved_benchmarks": 5,
+      "min_total_and_reduction": 20
+    },
+    "schema_version": 1,
+    "target_metric": "and_count",
+    "timeout_seconds": 300.0
+  },
+  "evaluation_contract_hash": "ec9c12af66ee8d4b435c7cc06245d3c20cbda5724b30ea6ecf3d2a30c77e48bc",
+  "parent_plan_hash": "",
+  "parent_review_hash": "",
+  "planner_advice_hash": "55cc4aaaf65958742471e607816aae004957c9850e777cd70b87f78cdc5c0980",
+  "planner_advice_source": "deterministic_fallback",
+  "planner_dispatch_id": "flow_logic_campaign:cycle_001",
+  "portfolio_id": "flow_logic_campaign",
+  "previous_cycle_id": "cycle_000",
+  "schema_version": 2
+}

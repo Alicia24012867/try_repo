@@ -21,7 +21,8 @@ experiments/**/logs*/*
 # Per-branch subprocess output may contain provider errors or request metadata.
 experiments/**/planning/branch_logs/
 # Provider/validation attempt sidecars and temporary repair assignments.
-experiments/**/agents/attempts/
+experiments/**/agents/attempts/*
+!experiments/**/agents/attempts/.gitkeep
 experiments/**/results*/*
 !experiments/**/results*/.gitkeep
 !experiments/**/results*/README.md

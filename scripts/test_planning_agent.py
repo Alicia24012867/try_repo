@@ -40,14 +40,17 @@ from scripts.agents.self_evolved_abc.flow.promotion import (
     structural_qor_stats,
 )
 from scripts.agents.self_evolved_abc.flow.review import (
+    _classify_cec_failure,
     _meets_bootstrap_champion_policy,
     review_impl_compare,
 )
 from scripts.agents.self_evolved_abc.flow.batch_search import (
+    batch_review_row_schema_issue,
     build_variants,
     current_csw_floors,
     expected_winner_payload,
     set_csw_floors,
+    summarize_batch_outcomes,
     variant_command,
 )
 from scripts.agents.self_evolved_abc.flow.planner_batch import (
@@ -177,6 +180,16 @@ check(
         unchanged_benchmark_count=0, correctness_backed_rows=0,
     ).is_cec_fail,
 )
+semantic_cec = _classify_cec_failure(
+    [{"cec_status": "cec_fail"}], cec_pass=0
+)
+evaluation_cec = _classify_cec_failure(
+    [{"cec_status": "cec_timeout"}], cec_pass=0
+)
+check("§3.3(3): semantic CEC counterexample is rejected",
+      semantic_cec[0] == "REJECT_CEC")
+check("§3.3(3): CEC timeout is repaired as evaluation failure",
+      evaluation_cec[0] == "REPAIR_EVALUATION")
 
 # §3.3 (4) "Beneficial changes are retained"
 check(
@@ -944,12 +957,12 @@ check("10d: large_70 includes standard_30", set(standard_30).issubset(large_70))
 large_70_payload = with_abc_native_evaluation_scope(
     {"benchmark_suite": "large_70", "benchmark_scope": large_70}
 )
-check("10e: large_70 ABC-native evaluation scope has 30 designs",
-      len(large_70_payload.get("evaluation_benchmark_scope", ())) == 30)
-check("10f: large_70 unsupported frontend scope has 40 designs",
-      len(large_70_payload.get("unsupported_benchmark_scope", ())) == 40)
-check("10g: promotion benchmark count uses evaluation scope",
-      promotion_benchmark_count(large_70_payload) == 30)
+check("10e: large_70 frontend-enabled evaluation scope has 70 designs",
+      len(large_70_payload.get("evaluation_benchmark_scope", ())) == 70)
+check("10f: large_70 has no unsupported frontend inputs",
+      len(large_70_payload.get("unsupported_benchmark_scope", ())) == 0)
+check("10g: promotion benchmark count uses full frontend-enabled scope",
+      promotion_benchmark_count(large_70_payload) == 70)
 
 
 # ===================================================================
@@ -974,12 +987,13 @@ check("11c: benchmark path still matches",
 
 smoke_ctx = SmokeContext.from_assignment_file(
     repo_root,
-    repo_root / "experiments/cycle_001/agents/assignments/candidate_001.json",
+    repo_root
+    / "experiments/cycle_001/agents/assignments/flow_candidate_001.json",
 )
 check("11d: checked-in benchmark_scope tracks all 70 designs",
       len(smoke_ctx.benchmark_scope) == 70)
-check("11e: checked-in evaluation_benchmark_scope has 30 designs",
-      len(smoke_ctx.evaluation_benchmark_scope) == 30)
+check("11e: checked-in evaluation_benchmark_scope has 70 designs",
+      len(smoke_ctx.evaluation_benchmark_scope) == 70)
 smoke_result = run_python_smoke_gate(smoke_ctx)
 check("11f: Python smoke passes with large_70 assignment",
       smoke_result.exit_code == 0)
@@ -1399,6 +1413,34 @@ check("14g.3: failed/partial CEC probes cannot teach batch winner or frontier",
           item["variant_id"] != "dc2_partial_cec"
           for item in filtered_batch["diverse_frontier"]
       ))
+all_invalid_batch = expected_winner_payload(
+    [invalid_better_probe], lineage_hash="lineage"
+)
+check("14g.4: all-invalid batch has no synthetic winner or frontier",
+      all_invalid_batch["winner"] is None
+      and all_invalid_batch["promotion_found"] is False
+      and all_invalid_batch["diverse_frontier"] == [])
+negative_batch_summary = summarize_batch_outcomes([invalid_better_probe])
+check("14g.5: all-invalid reviewed batch becomes explicit negative evidence",
+      negative_batch_summary["status"] == "no_eligible_probe"
+      and negative_batch_summary["probe_count"] == 1
+      and negative_batch_summary["reviewed_probe_count"] == 1
+      and negative_batch_summary["evidence_eligible_probe_count"] == 0
+      and negative_batch_summary["cec_rejected_probe_count"] == 1)
+valid_reject_row = {
+    **invalid_better_probe,
+    "correctness_backed_rows": 1,
+}
+check("14g.6: complete partial-CEC rejection can settle negative batch",
+      batch_review_row_schema_issue(valid_reject_row) == "")
+check("14g.7: missing decision cannot masquerade as negative batch",
+      bool(batch_review_row_schema_issue({**valid_reject_row, "decision": ""})))
+check("14g.8: full-pass REJECT_CEC contradiction fails closed",
+      bool(batch_review_row_schema_issue({
+          **valid_reject_row,
+          "cec_pass_count": 30,
+          "correctness_backed_rows": 30,
+      })))
 
 with tempfile.TemporaryDirectory() as td:
     temp_repo = Path(td)

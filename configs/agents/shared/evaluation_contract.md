@@ -43,11 +43,16 @@ binary build is required before implementation comparison.
 - Standard suite: `standard_30` (EPFL + ISCAS85 + ISCAS89 BLIF designs).
 - Large suite: `large_70` (all seven 10-design sampled suites under
   `benchmarks/`, including Verilog designs).
-- Current frontend: `abc_native`. S5/F7 invokes ABC directly, so the current
-  promotion gate evaluates only ABC-native inputs (`.blif`, `.bench`, `.aig`).
-  Verilog entries from `large_70` remain in `benchmark_scope` for paper-family
-  coverage tracking but are listed in `unsupported_benchmark_scope` until a
-  Verilog/Yosys frontend is connected.
+- Current frontend: `abc_native_and_yosys_verilog`. S5/F7 reads `.blif`,
+  `.bench`, and `.aig` directly; each `.v`/`.sv` input is deterministically
+  lowered by Yosys to a candidate-lane BLIF before ABC runs. All 70 `large_70`
+  entries are therefore in `evaluation_benchmark_scope`; unsupported scope is
+  reserved only for genuinely unknown file types.
+- Every evaluated design runs the frozen candidate recipe plus two independent
+  structural recipes. Detailed per-flow CEC/QoR artifacts are retained, while
+  `qor_delta.csv` contains one median aggregate row per design with voting and
+  non-regression fields. Promotion requires every flow's CEC and the configured
+  all-flow regression guard; a majority vote alone never overrides a hard gate.
 - Every benchmark run must record design name, input path, flow path, log path,
   output path, exit status, runtime, AND count, depth, and skip reason.
 

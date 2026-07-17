@@ -25,6 +25,16 @@ if current < minimum:
 print("python runtime ready: {}".format(sys.version.split()[0]))
 '
 
+# All large_70 Verilog designs use the same deterministic Yosys-to-BLIF
+# frontend before ABC runs. Fail before any model call if the execution host
+# cannot provide it; setting EDA_AGENT_YOSYS_BIN supports a pinned local path.
+YOSYS_BIN="${EDA_AGENT_YOSYS_BIN:-yosys}"
+if ! command -v "$YOSYS_BIN" >/dev/null 2>&1; then
+  echo "run.sh requires Yosys for large_70 Verilog frontend: $YOSYS_BIN" >&2
+  exit 2
+fi
+echo "yosys frontend ready: $(command -v "$YOSYS_BIN")"
+
 # Source-patch JSON responses include code context, validation plans, and a
 # unified diff. Use a larger default while preserving provider-specific values
 # explicitly configured in .env.

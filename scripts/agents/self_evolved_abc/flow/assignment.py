@@ -18,6 +18,12 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
 from scripts.agents.self_evolved_abc.flow.promotion import (
     DEFAULT_PROMOTION_THRESHOLDS,
 )
+from scripts.agents.self_evolved_abc.flow.multi_flow import (
+    default_evaluation_flows,
+    default_flow_aggregation,
+    normalized_evaluation_flows,
+    normalize_flow_aggregation,
+)
 from scripts.agents.self_evolved_abc.workflow.artifacts import (
     CANDIDATE_SCOPED_LAYOUT,
     LEGACY_CYCLE_LAYOUT,
@@ -168,6 +174,12 @@ def normalize_flow_assignment_scope(
     if source_roots:
         payload["source_patch_allowed_roots"] = list(source_roots)
     payload.setdefault("evaluation_flow_commands", list(DEFAULT_EVAL_FLOW_COMMANDS))
+    payload["evaluation_flows"] = normalized_evaluation_flows(
+        payload.get("evaluation_flows", default_evaluation_flows())
+    )
+    payload["flow_aggregation"] = normalize_flow_aggregation(
+        payload.get("flow_aggregation", default_flow_aggregation())
+    )
     payload.setdefault("flow_source_touchpoints", dict(FLOW_SOURCE_TOUCHPOINTS))
     payload.setdefault("promotion_thresholds", DEFAULT_PROMOTION_THRESHOLDS.as_dict())
     payload.setdefault(

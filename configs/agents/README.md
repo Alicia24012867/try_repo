@@ -89,10 +89,13 @@ For `cycle_001`, use the source-level feedback loop with a named benchmark
 suite:
 
 - Agent: Flow Agent.
-- Benchmark suite: `large_70` for broader remote tracking. Current
-  ABC-native promotion evaluates the 30 BLIF designs in that scope and records
-  the 40 Verilog designs as frontend-pending; use `standard_30` or `epfl_10`
-  only for faster smoke/debug runs.
+- Benchmark suite: `large_70` for full remote evaluation. ABC-native designs
+  run directly; the 40 Verilog designs are normalized by Yosys and enter the
+  same CEC/QoR gate. Use `standard_30` or `epfl_10` only for faster smoke/debug
+  runs.
+- Evaluation portfolio: candidate recipe, rewrite/refactor, and resub/dc2;
+  promotion consumes median aggregate metrics plus strict voting and an
+  all-flow non-regression guard.
 - Candidate type: `source_patch_diff`.
 - Source patch scope: `third_party/FlowTune/src/src/opt`. Command wrappers under
   `src/base/abci` belong to the concurrent Logic lane and are read-only to Flow.

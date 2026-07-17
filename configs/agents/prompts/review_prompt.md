@@ -13,10 +13,14 @@ an improvement unless it is semantically valid.
 
 - Compilation and CEC are mandatory gates.
 - QoR gains from failed, skipped, or invalid designs do not count.
-- Distinguish evaluated designs from frontend-pending designs. A skip inside
-  `evaluation_benchmark_scope` is a hard correctness/evaluation failure; a
-  design listed only in `unsupported_benchmark_scope` is a planned frontend
-  limitation and must not be counted as a candidate CEC failure.
+- A skip inside `evaluation_benchmark_scope` is a hard
+  correctness/evaluation failure, including a failed Verilog/Yosys frontend.
+  A design listed only in `unsupported_benchmark_scope` is an explicitly
+  unsupported extension and must not be counted as a candidate CEC failure.
+- For multi-flow evaluation, inspect per-flow evidence and vote artifacts, but
+  require the aggregate row's full CEC coverage and `safe_for_promotion: true`.
+  A majority vote cannot conceal a failed CEC run or a guarded per-flow
+  regression.
 - Normalize against the correct baseline or current champion.
 - Report both average improvement and per-design regressions.
 - Prefer a slightly smaller reliable improvement over a larger unstable one.

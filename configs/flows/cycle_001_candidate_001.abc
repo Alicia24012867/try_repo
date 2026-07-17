@@ -1,9 +1,0 @@
-fx;
-strash;
-rewrite -z;
-resub -K 8;
-dc2;
-csweep;
-refactor -z;
-strash;
-print_stats;

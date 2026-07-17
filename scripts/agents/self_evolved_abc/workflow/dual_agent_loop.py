@@ -454,6 +454,17 @@ def _honor_flow_planner_control(
         )
         if result is None:
             return None
+        (
+            _integrated_branch,
+            _integrated_payload,
+            _integrated_meta,
+            integrated_skip,
+            integrated_pending,
+        ) = _flow_planner_control_state(plan)
+        if integrated_skip or not integrated_pending:
+            raise ValueError(
+                "planner batch returned success without a pending post-batch replan"
+            )
         replanned = PlanningAgent.refresh_parallel_coding_dispatch(
             repo_root=repo_root,
             plan=plan,
@@ -462,6 +473,15 @@ def _honor_flow_planner_control(
         if not isinstance(replanned, PortfolioPlan):
             raise ValueError("post-batch Planning did not return a portfolio plan")
         validate_portfolio_plan(replanned, repo_root=repo_root)
+        (
+            _replanned_branch,
+            _replanned_payload,
+            _replanned_meta,
+            replanned_skip,
+            replanned_pending,
+        ) = _flow_planner_control_state(replanned)
+        if replanned_skip or replanned_pending:
+            raise ValueError("post-batch Planning did not settle coordinator control")
     except (OSError, ValueError) as exc:
         print(f"dual_agent_loop: planner batch integration failed: {exc}")
         return None

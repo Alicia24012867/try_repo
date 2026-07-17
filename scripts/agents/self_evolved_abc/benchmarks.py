@@ -8,6 +8,9 @@ from typing import Mapping, Sequence
 
 DEFAULT_BENCHMARK_SUITE = "standard_30"
 ABC_NATIVE_EXTENSIONS = frozenset((".aig", ".bench", ".blif"))
+VERILOG_EXTENSIONS = frozenset((".v", ".sv"))
+BENCHMARK_FRONTEND_ABC_NATIVE = "abc_native"
+BENCHMARK_FRONTEND_YOSYS_VERILOG = "abc_native_and_yosys_verilog"
 
 BENCHMARK_SUITES: Mapping[str, tuple[str, ...]] = {
     "epfl_10": (
@@ -98,23 +101,41 @@ def apply_benchmark_patterns(
 def with_abc_native_evaluation_scope(
     assignment: Mapping[str, object],
 ) -> dict[str, object]:
-    """Add current ABC-native evaluation scope metadata to an assignment.
+    """Add frontend-aware evaluation scope metadata to an assignment.
 
-    The repository also contains Verilog samples, but the current S5/F7 runner
-    invokes ABC directly and reliably supports only ABC-native network files.
-    Unsupported frontends are tracked instead of being counted as CEC failures.
+    ABC-native inputs are read directly.  Verilog inputs are normalized by the
+    runner through the pinned Yosys-to-BLIF frontend before the same ABC flow,
+    CEC, and QoR gates run.  Unknown file types remain visible as unsupported
+    rather than being silently dropped from the declared benchmark scope.
     """
 
     updated = dict(assignment)
     benchmark_scope = [str(item) for item in updated.get("benchmark_scope", ())]
     evaluation_scope = [
-        item for item in benchmark_scope if Path(item).suffix.lower() in ABC_NATIVE_EXTENSIONS
+        item
+        for item in benchmark_scope
+        if benchmark_frontend_kind(item) is not None
     ]
     unsupported_scope = [item for item in benchmark_scope if item not in evaluation_scope]
-    updated["benchmark_frontend"] = "abc_native"
+    updated["benchmark_frontend"] = (
+        BENCHMARK_FRONTEND_YOSYS_VERILOG
+        if any(Path(item).suffix.lower() in VERILOG_EXTENSIONS for item in evaluation_scope)
+        else BENCHMARK_FRONTEND_ABC_NATIVE
+    )
     updated["evaluation_benchmark_scope"] = evaluation_scope
     updated["unsupported_benchmark_scope"] = unsupported_scope
     return updated
+
+
+def benchmark_frontend_kind(path: str | Path) -> str | None:
+    """Return the runner frontend that can evaluate one benchmark input."""
+
+    suffix = Path(path).suffix.lower()
+    if suffix in ABC_NATIVE_EXTENSIONS:
+        return "abc_native"
+    if suffix in VERILOG_EXTENSIONS:
+        return "yosys_verilog"
+    return None
 
 
 def promotion_benchmark_count(assignment: Mapping[str, object]) -> int:

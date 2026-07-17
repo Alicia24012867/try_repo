@@ -85,13 +85,16 @@ The executable scaffold follows the paper's agent naming:
   application, candidate workspace ABC build, CEC-first implementation
   comparison, review feedback, and next-cycle handoff.
   `planner_batch.py` executes planner-requested sensitivity probes and writes
-  the winner evidence back into the pending assignment, while `batch_search.py`
-  owns deterministic source-patch variant generation and evaluation. Automatic
+  either correctness-backed winner evidence or a non-promotable
+  `no_eligible_probe` diagnostic outcome back into the pending assignment,
+  while `batch_search.py` owns deterministic source-patch variant generation
+  and evaluation. Automatic
   batches are bound to a generation hash covering portfolio lineage and the
   exact source/patch space; stale or partial winners fail closed.
   Current implementation comparison uses the assignment's
-  `evaluation_benchmark_scope` for CEC-backed promotion and keeps unsupported
-  frontend samples visible in `unsupported_benchmark_scope`.
+  `evaluation_benchmark_scope` for CEC-backed promotion. ABC-native inputs are
+  read directly and Verilog inputs are prepared by a Yosys-to-BLIF frontend;
+  only genuinely unknown extensions remain in `unsupported_benchmark_scope`.
 - `scripts/agents/self_evolved_abc/logic/`: Logic Agent role boundary,
   assignment normalization, evaluation recipe, and repository-context policy.
 - `scripts/agents/self_evolved_abc/repository_context.py`: bounded profiling

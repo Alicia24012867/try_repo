@@ -20,6 +20,10 @@ from scripts.agents.self_evolved_abc.flow.contracts import (
     FLOWTUNE_ABCI_SCOPE,
     FLOWTUNE_SOURCE_SCOPE_PRIMARY,
 )
+from scripts.agents.self_evolved_abc.flow.multi_flow import (
+    default_evaluation_flows,
+    default_flow_aggregation,
+)
 from scripts.agents.self_evolved_abc.flow.promotion import (
     DEFAULT_PROMOTION_THRESHOLDS,
 )
@@ -121,6 +125,11 @@ def build_initial_assignment(
             if is_logic
             else DEFAULT_EVAL_FLOW_COMMANDS
         ),
+        # The first item sources the candidate-specific recipe.  The remaining
+        # recipes are independent structural views, so a source edit is judged
+        # by more than one command ordering before a portfolio can promote it.
+        "evaluation_flows": default_evaluation_flows(),
+        "flow_aggregation": default_flow_aggregation(),
         "repository_context_manifest": "configs/agents/context/repositories.json",
         "repository_context_max_chars": 72000 if is_logic else 60000,
         "repository_context_max_repositories": 9 if is_logic else 6,

@@ -47,6 +47,7 @@ from scripts.agents.self_evolved_abc.flow.materialization import (
     candidate_flow_relative_path,
     render_abc_flow_script,
 )
+from scripts.agents.self_evolved_abc.flow.review import REVIEW_DECISIONS
 from scripts.agents.self_evolved_abc.flow.source_patch import (
     source_patch_diff_relative_path,
 )
@@ -401,6 +402,8 @@ def generate_batch(
             context.assignment.get("unsupported_benchmark_scope", ())
         ),
         "benchmark_frontend": context.assignment.get("benchmark_frontend", ""),
+        "evaluation_flows": context.assignment.get("evaluation_flows", ()),
+        "flow_aggregation": context.assignment.get("flow_aggregation", {}),
         "manifest_path": str(
             (batch_dir / "manifest.json").relative_to(context.repo_root)
         ),
@@ -1164,6 +1167,116 @@ def expected_winner_payload(
     }
 
 
+def summarize_batch_outcomes(
+    rows: Sequence[dict[str, object]],
+) -> dict[str, object]:
+    """Summarize every probe without turning invalid QoR into winner evidence.
+
+    A planner-requested batch may be perfectly complete while every probe is
+    rejected by build or CEC.  That is useful negative feedback, but it must
+    remain distinct from the correctness-backed QoR winner/frontier channel.
+    """
+
+    decision_counts: dict[str, int] = {}
+    build_status_counts: dict[str, int] = {}
+    command_decision_counts: dict[str, dict[str, int]] = {}
+    reviewed: list[dict[str, object]] = []
+    eligible: list[dict[str, object]] = []
+    promoted: list[dict[str, object]] = []
+    full_cec_count = 0
+    for row in rows:
+        decision = str(row.get("decision", "")).strip() or "missing"
+        build_status = str(row.get("build_status", "")).strip() or "missing"
+        decision_counts[decision] = decision_counts.get(decision, 0) + 1
+        build_status_counts[build_status] = (
+            build_status_counts.get(build_status, 0) + 1
+        )
+        command = variant_command(str(row.get("variant_id", ""))) or "unknown"
+        family_counts = command_decision_counts.setdefault(command, {})
+        family_counts[decision] = family_counts.get(decision, 0) + 1
+        if decision != "missing":
+            reviewed.append(row)
+        if _batch_row_is_evidence_eligible(row):
+            eligible.append(row)
+            if str(row.get("promotion_allowed", "")).lower() == "true":
+                promoted.append(row)
+        expected = parse_whole_number(row.get("evaluation_benchmark_count"))
+        if (
+            expected is not None
+            and expected > 0
+            and parse_whole_number(row.get("cec_pass_count")) == expected
+            and parse_whole_number(row.get("cec_total_count")) == expected
+            and parse_whole_number(row.get("correctness_backed_rows")) == expected
+        ):
+            full_cec_count += 1
+
+    if promoted:
+        status = "promotion_found"
+    elif eligible:
+        status = "sensitivity_only"
+    elif reviewed:
+        status = "no_eligible_probe"
+    else:
+        status = "no_reviewed_probe"
+
+    invalid_reviewed = [row for row in reviewed if row not in eligible]
+    diagnostic = (
+        sorted(
+            invalid_reviewed,
+            key=lambda row: (
+                0
+                if str(row.get("build_status", ""))
+                in CANDIDATE_BUILD_READY_STATUSES
+                else 1,
+                -(parse_whole_number(row.get("cec_pass_count")) or 0),
+                str(row.get("variant_id", "")),
+            ),
+        )[0]
+        if invalid_reviewed
+        else None
+    )
+    diagnostic_fields = (
+        "batch_id",
+        "cycle_id",
+        "variant_id",
+        "decision",
+        "build_status",
+        "cec_pass_count",
+        "cec_total_count",
+        "correctness_backed_rows",
+        "evaluation_benchmark_count",
+        "target_file",
+        "description",
+    )
+    return {
+        "status": status,
+        "probe_count": len(rows),
+        "reviewed_probe_count": len(reviewed),
+        "full_cec_probe_count": full_cec_count,
+        "evidence_eligible_probe_count": len(eligible),
+        "promotion_probe_count": len(promoted),
+        "cec_rejected_probe_count": decision_counts.get("REJECT_CEC", 0),
+        "decision_counts": {
+            key: decision_counts[key] for key in sorted(decision_counts)
+        },
+        "build_status_counts": {
+            key: build_status_counts[key] for key in sorted(build_status_counts)
+        },
+        "command_decision_counts": {
+            command: {
+                decision: command_decision_counts[command][decision]
+                for decision in sorted(command_decision_counts[command])
+            }
+            for command in sorted(command_decision_counts)
+        },
+        "diagnostic_probe": (
+            {key: diagnostic.get(key) for key in diagnostic_fields}
+            if diagnostic is not None
+            else None
+        ),
+    }
+
+
 def _batch_row_is_evidence_eligible(row: Mapping[str, object]) -> bool:
     """Require the same hard gates before a probe can teach Planning."""
 
@@ -1245,6 +1358,10 @@ def validate_batch_measurements(
         manifest=manifest,
         require_reviews=True,
     )
+    for row in rows:
+        issue = batch_review_row_schema_issue(row)
+        if issue:
+            raise ValueError(f"planner batch review row is invalid: {issue}")
     batch_dir = repo_path(repo_root, Path(str(manifest["manifest_path"]))).parent
     summary_path = batch_dir / "summary.csv"
     if not summary_path.is_file():
@@ -1264,6 +1381,21 @@ def validate_batch_measurements(
     if dict(winner_payload) != expected_winner:
         raise ValueError("planner batch winner diverges from reviewed QoR")
     winner = expected_winner.get("winner")
+    if winner is None:
+        # A complete batch whose probes all fail build/CEC is durable negative
+        # evidence.  The exact payload comparison above proves that no
+        # correctness-backed row was silently discarded or promoted.
+        outcome = summarize_batch_outcomes(rows)
+        if (
+            int(outcome.get("probe_count", 0) or 0) < 1
+            or outcome.get("reviewed_probe_count") != outcome.get("probe_count")
+            or int(outcome.get("evidence_eligible_probe_count", 0) or 0) != 0
+            or int(outcome.get("promotion_probe_count", 0) or 0) != 0
+        ):
+            raise ValueError(
+                "planner batch no-winner result is not a complete negative outcome"
+            )
+        return
     if not isinstance(winner, Mapping) or any(
         winner.get(key) in (None, "")
         for key in (
@@ -1294,6 +1426,48 @@ def validate_batch_measurements(
     winner_qor = impl_compare_root(winner_context) / "comparison" / "qor_delta.csv"
     if not winner_qor.is_file() or winner_qor.stat().st_size == 0:
         raise ValueError("planner batch winner has no QoR vector")
+
+
+def batch_review_row_schema_issue(row: Mapping[str, object]) -> str:
+    """Return why a reviewed probe cannot settle a positive or negative batch."""
+
+    decision = str(row.get("decision", "")).strip()
+    if decision not in REVIEW_DECISIONS:
+        return f"unsupported decision {decision or 'missing'}"
+    if not str(row.get("build_status", "")).strip():
+        return "build_status is missing"
+    expected = parse_whole_number(row.get("evaluation_benchmark_count"))
+    cec_pass = parse_whole_number(row.get("cec_pass_count"))
+    cec_total = parse_whole_number(row.get("cec_total_count"))
+    backed = parse_whole_number(row.get("correctness_backed_rows"))
+    if expected is None or expected < 1:
+        return "evaluation benchmark count is invalid"
+    if any(value is None or value < 0 for value in (cec_pass, cec_total, backed)):
+        return "CEC or correctness-backed counts are invalid"
+    assert cec_pass is not None and cec_total is not None and backed is not None
+    if (
+        cec_pass > cec_total
+        or cec_total > expected
+        or backed > cec_pass
+        or backed > expected
+    ):
+        return "CEC or correctness-backed counts exceed their bounds"
+    if (
+        str(row.get("build_status", "")).strip()
+        in CANDIDATE_BUILD_READY_STATUSES
+        and cec_total != expected
+    ):
+        return "build-ready probe lacks exact CEC scope coverage"
+    full_backed = cec_pass == expected and cec_total == expected and backed == expected
+    if decision == "REJECT_CEC" and cec_pass == expected:
+        return "REJECT_CEC contradicts full CEC pass coverage"
+    if decision in {
+        "ACCEPT_FOR_NEXT_CYCLE",
+        "REPAIR_QOR",
+        "RETAIN_FOR_SYNERGY",
+    } and not full_backed:
+        return f"{decision} lacks full CEC-backed coverage"
+    return ""
 
 
 def write_winner(
@@ -1586,6 +1760,8 @@ def build_batch_lineage(
         "evaluation_benchmark_scope",
         "unsupported_benchmark_scope",
         "evaluation_flow_commands",
+        "evaluation_flows",
+        "flow_aggregation",
         "source_patch_mode",
         "source_patch_allowed_roots",
     )
@@ -1677,6 +1853,8 @@ def validate_manifest_base_assignment(
         "evaluation_benchmark_scope",
         "unsupported_benchmark_scope",
         "benchmark_frontend",
+        "evaluation_flows",
+        "flow_aggregation",
     ):
         if key in manifest:
             effective_assignment[key] = manifest[key]
@@ -1772,6 +1950,8 @@ def validate_manifest_base_assignment(
             "evaluation_benchmark_scope",
             "unsupported_benchmark_scope",
             "evaluation_flow_commands",
+            "evaluation_flows",
+            "flow_aggregation",
             "source_patch_mode",
             "source_patch_allowed_roots",
         ):

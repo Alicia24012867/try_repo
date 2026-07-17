@@ -12,10 +12,15 @@ structured feedback drives the next iteration.
 ## Current Status
 
 - `cycle_000` is the parsed baseline cycle (10 EPFL designs, 9 complete).
-- **Benchmark scope expanded** to `large_70`: 70 sampled designs are tracked
-  across EPFL, ISCAS, ITC/VTR, and arithmetic families. The current ABC-native
-  S5/F7 runner evaluates the 30 BLIF designs for CEC-backed promotion and
-  records the 40 Verilog designs as frontend-pending.
+- **Benchmark scope expanded** to `large_70`: all 70 sampled designs across
+  EPFL, ISCAS, ITC/VTR, and arithmetic families now enter CEC-backed testing.
+  BLIF/AIG/bench inputs go directly to ABC; the other 40 Verilog inputs are
+  normalized once through Yosys-to-BLIF and reused by baseline, candidate, and
+  every frozen evaluation flow.
+- **Multi-flow comparison is active** — each design runs the candidate recipe,
+  a rewrite/refactor view, and a resub/dc2 view. Per-flow CEC/QoR evidence is
+  retained, then median metrics, strict-majority votes, and a no-regression
+  guard form the one-row-per-design promotion vector.
 - **Planning Agent implemented as the round coordinator** — one model or
   deterministic Planning call freezes exactly two assignments on one baseline:
   `flow_candidate_001` and `logic_candidate_001`. Planner advice is persisted
@@ -71,9 +76,9 @@ QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
 
 This is a correctness-backed foundation for reproducing the paper, not yet its
 full Table-level physical-design experiment. The current campaign has two of
-the paper's three coding roles, evaluates one frozen AIG command recipe rather
-than eight downstream flows, and reports AIG node/depth proxies rather than the
-final ASAP7 timing/area reward. Its Flow lane edits command kernels under
+the paper's three coding roles, evaluates three frozen technology-independent
+AIG recipes rather than the paper's eight downstream flows, and reports AIG
+node/depth proxies rather than the final ASAP7 timing/area reward. Its Flow lane edits command kernels under
 `src/opt`; the legacy fork's MAB `ftune` scheduler lives in
 `src/base/abc/abcBayestune.cpp` and is not invoked by the frozen recipe. These
 gaps are recorded explicitly so an AIG winner is not misreported as the full
@@ -125,20 +130,14 @@ QoR misses, the scalar channel also permits a one-row/one-node positive
 increment under full build, coverage, and CEC so beneficial changes can
 accumulate across generations.
 
-The recent `CEC 30/70` diagnostic was a harness-front-end issue, not evidence
-that the candidate failed 40 extra equivalence checks. `large_70` includes 40
-Verilog files, while the current implementation-comparison script invokes ABC
-directly and reliably supports only ABC-native `.blif/.bench/.aig` inputs. The
-assignment now keeps:
-
-- `benchmark_scope`: all 70 tracked paper-family samples.
-- `evaluation_benchmark_scope`: the 30 ABC-native designs used for current
-  CEC-backed promotion.
-- `unsupported_benchmark_scope`: the 40 Verilog designs waiting for a
-  Verilog/Yosys frontend.
-
-This means a valid remote run should report CEC coverage such as `30/30`, not
-`30/70`, until the Verilog frontend is implemented.
+The old `CEC 30/70` diagnostic was a missing-frontend issue, not evidence that
+the candidate failed 40 extra equivalence checks. `large_70` now keeps all 70
+designs in both `benchmark_scope` and `evaluation_benchmark_scope`; its
+`unsupported_benchmark_scope` is empty. For each Verilog source, Yosys runs a
+deterministic behavioral lowering and writes a candidate-lane BLIF before ABC
+starts. A valid remote run therefore reports `70/70` aggregate CEC coverage and
+also writes `frontend_summary.csv`, `cec_by_flow.csv`, `qor_delta_by_flow.csv`,
+and `flow_vote_summary.csv` for auditability.
 
 The active lineage reported for this campaign has no centralized winner through
 cycles 1–5. Earlier single-lane or differently versioned `ACCEPT` artifacts are
@@ -175,7 +174,7 @@ try_repo/
   README.md                   project entry point and quickstart
   run.sh                      one-command autonomous loop launcher
   requirements.txt            Python dependencies
-  benchmarks/                 sampled benchmark suites (70 tracked, 30 ABC-native evaluated)
+  benchmarks/                 sampled benchmark suites (70 frontend-enabled evaluations)
   configs/                    prompts, rules, checklists, flows, evaluation config
     agents/context/           pinned repo manifest + read-only code profiles
   docs/                       structure notes and local paper copy
@@ -227,9 +226,11 @@ PYTHONPATH=. python3 -B scripts/test_planning_portfolio_evidence.py
 
 PYTHONPATH=. python3 -B scripts/test_python38_compat.py
 
+PYTHONPATH=. python3 -B scripts/test_verilog_frontend_multi_flow.py
+
 PYTHONPATH=. python3 -B scripts/bootstrap_agent_context.py --check
 
-PYTHONPATH=. python3 -B -c "from pathlib import Path; from scripts.agents.self_evolved_abc.cycle_context import CycleContext; from scripts.agents.self_evolved_abc.flow.source_patch_runner import run_validation_fixture_smoke; ctx=CycleContext.from_assignment_file(Path('.').resolve(), Path('experiments/cycle_001/agents/assignments/candidate_001.json')); lines=[]; code=run_validation_fixture_smoke(ctx, lines); print('\n'.join(lines)); raise SystemExit(code)"
+PYTHONPATH=. python3 -B -c "from pathlib import Path; from scripts.agents.self_evolved_abc.cycle_context import CycleContext; from scripts.agents.self_evolved_abc.flow.source_patch_runner import run_validation_fixture_smoke; ctx=CycleContext.from_assignment_file(Path('.').resolve(), Path('experiments/cycle_001/agents/assignments/flow_candidate_001.json')); lines=[]; code=run_validation_fixture_smoke(ctx, lines); print('\n'.join(lines)); raise SystemExit(code)"
 ```
 
 The checked-in FlowTune binary is a Linux executable. On macOS it may fail with
@@ -257,6 +258,9 @@ On the Linux/ABC host after syncing the repository:
 # 1. Install dependencies
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+
+# 1b. Install or expose Yosys (required for the 40 Verilog inputs)
+yosys -V
 
 # 2. Configure model (edit .env with your credentials)
 #    EDA_AGENT_MODEL_PROVIDER=deepseek
@@ -291,12 +295,12 @@ If a retried review changes, an unstarted stale downstream Planning dispatch is
 regenerated from the new lineage. A dispatch that already has branch work is
 never overwritten; parent-lineage drift is reported for explicit recovery.
 
-After syncing a fresh tree, this quick sanity check should print `70 30 40`:
+After syncing a fresh tree, this quick sanity check should print `70 70 0`:
 
 ```bash
 python3 - <<'PY'
 import json
-a = json.load(open("experiments/cycle_001/agents/assignments/candidate_001.json"))
+a = json.load(open("experiments/cycle_001/agents/assignments/flow_candidate_001.json"))
 print(len(a["benchmark_scope"]), len(a["evaluation_benchmark_scope"]), len(a["unsupported_benchmark_scope"]))
 PY
 ```
@@ -314,12 +318,21 @@ guess. `rewrite` probes stay inside Flow's `src/opt/rwr` ownership, while
 csweep/fx and other variants use their own source touchpoints. In particular,
 the wide set now includes opt-only, recipe-reached `resub` window probes and
 `dc2` DAR rewrite/refactor-default probes that were previously lost when ABCI
-wrapper variants were filtered by Flow ownership. The measured
-summary, winner, and QoR vector are then passed
-through a refreshed Planning call for both Flow and Logic. That refresh may
-change hypotheses and tasks, but it cannot change their shared baseline or
-frozen evaluation contract. If either the batch or refreshed Planning fails,
-neither Coding branch starts and the pending evidence is resumed on rerun.
+wrapper variants were filtered by Flow ownership. When at least one probe
+passes every eligibility gate (build, exact-scope CEC, correctness-backed QoR,
+and an eligible review decision), its measured summary, winner, and QoR vector
+are passed through a refreshed Planning call for both Flow and Logic. If every
+reviewed probe fails an eligibility gate, `winner.json`
+canonically contains `winner: null`; this is a completed
+`no_eligible_probe` result, not a batch crash. The coordinator writes a bounded
+`outcome.json` with decision/build counts, CEC status and exit-code histograms,
+failed benchmark samples, and review/CEC/log paths. Failed-probe QoR never
+enters the winner/frontier or automatic QoR evidence channel. Planning consumes
+the negative diagnostics, then the same Flow/Logic round continues without a
+baseline update or exact replay. The refresh may change hypotheses and tasks,
+but it cannot change their shared baseline or frozen evaluation contract. Only
+a missing, incomplete, stale, malformed, or tampered batch—or a failed Planning
+refresh—blocks both Coding branches; pending control is resumed on rerun.
 If a batch probe passes promotion gates, its exact hash-bound diff is replayed
 in the current Flow branch and re-runs build/full CEC/QoR so it participates in
 the paired fan-in instead of remaining evidence-only. At the absolute target,
@@ -391,8 +404,10 @@ Use `--benchmark-suite standard_30` for the smaller BLIF-only suite, or
 `--benchmark-glob` repeatedly for a custom scope. Omit `--target-command` for
 the full cross-command batch.
 
-Outputs live in `experiments/batches/<batch-id>/summary.csv` and
-`experiments/batches/<batch-id>/winner.json`. Automatic batches use
+Outputs live in `experiments/batches/<batch-id>/summary.csv`, `winner.json`,
+and the derived diagnostic `outcome.json`. A fully reviewed batch may
+legitimately have `winner: null`; it remains non-promotable but is consumed as
+negative Planning evidence. Automatic batches use
 `experiments/probe_NNN/` so normal `cycle_NNN` auto-resume is unaffected; each
 probe still uses the standard S4/S5/review artifact layout. Loaded manifests
 are fail-closed: their base assignment, complete variant set, source and patch
@@ -496,7 +511,11 @@ experiments/cycle_NNN/
 only after both branch reviews settle and the centralized portfolio review is
 persisted.
 
-`cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair.
+`cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair,
+two candidate-scoped implementation roots, and a shared hash-bound
+`evaluation_contract`. Each benchmark is judged across three frozen flows;
+candidate metrics are median-aggregated only after every flow's CEC result is
+available, and a vote cannot hide a per-flow AND regression.
 The Flow lane is limited to `third_party/FlowTune/src/src/opt`; the Logic lane
 is limited to existing `.c`/`.h` files in
 `third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG command
@@ -582,7 +601,8 @@ S5/F7 impl_compare    baseline/champion CEC verification + QoR delta
 | `REPAIR_PATCH` | Diff context doesn't match real source |
 | `REPAIR_SMOKE` | Python smoke gate failed |
 | `REPAIR_COMPILE` | C compilation failed |
-| `REJECT_CEC` | CEC equivalence check failed |
+| `REJECT_CEC` | CEC produced a semantic counterexample / explicit inequivalence |
+| `REPAIR_EVALUATION` | CEC/QoR coverage or tooling was inconclusive (timeout, crash, skipped, unparseable, or incomplete metrics) |
 | `REPAIR_QOR` | CEC passed but QoR didn't improve |
 | `RETAIN_FOR_SYNERGY` | Full CEC passed and the size/depth vector is useful, but this trade-off cannot update the baseline until a fresh combined/follow-up candidate passes every gate |
 | `ACCEPT_FOR_NEXT_CYCLE` | Full CEC passed and either the scalar AND lane or guarded structural Pareto lane improved — eligible for centralized selection |

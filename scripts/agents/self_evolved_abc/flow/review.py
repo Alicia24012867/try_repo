@@ -168,6 +168,7 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         cec_rows=cec_rows,
         qor_rows=qor_rows,
     )
+    multi_flow_issue = _multi_flow_safety_issue(backed_rows)
 
     promotion = False
     promotion_basis = ""
@@ -186,9 +187,10 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
         reason = "CEC summary is missing or empty"
         next_action = "Run S5/F7 implementation comparison before judging QoR."
     elif cec_pass != len(cec_rows):
-        decision = "REJECT_CEC"
-        reason = f"CEC passed {cec_pass}/{len(cec_rows)} rows"
-        next_action = "Reject or repair the candidate before any QoR discussion."
+        decision, reason, next_action = _classify_cec_failure(
+            cec_rows,
+            cec_pass=cec_pass,
+        )
     elif not backed_rows or (
         context.evaluation_benchmark_scope
         and len(backed_rows) != len(context.evaluation_benchmark_scope)
@@ -217,6 +219,14 @@ def review_impl_compare(context: CycleContext, impl_root: Path) -> ReviewDecisio
             "Re-run implementation comparison and require finite, integral "
             "AND/depth deltas plus finite AND percentages and positive "
             "baseline/candidate node/depth values for every backed row."
+        )
+    elif multi_flow_issue:
+        decision = "REPAIR_QOR"
+        reason = multi_flow_issue
+        next_action = (
+            "Inspect qor_delta_by_flow.csv and flow_vote_summary.csv. Keep the "
+            "candidate out of the champion lineage until every frozen flow is "
+            "CEC-backed and the configured multi-flow regression guard passes."
         )
     elif _meets_bootstrap_champion_policy(
         context,
@@ -502,7 +512,10 @@ def render_feedback(
             "",
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'impl_compare_summary.md'}`",
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'cec_summary.csv'}`",
+            f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'cec_by_flow.csv'}`",
             f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'qor_delta.csv'}`",
+            f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'qor_delta_by_flow.csv'}`",
+            f"- `{impl_root.relative_to(context.repo_root) / 'comparison' / 'flow_vote_summary.csv'}`",
             f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'build.log'}`",
             f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'build_info.json'}`",
             f"- `{impl_root.relative_to(context.repo_root) / IMPL_CANDIDATE_LABEL / 'patch.diff'}`",
@@ -591,6 +604,34 @@ def _qor_metric_coverage_issue(
     return None
 
 
+def _multi_flow_safety_issue(backed_rows: Sequence[dict[str, str]]) -> str | None:
+    """Apply the conservative multi-flow guard when aggregate rows expose it."""
+
+    multi_flow_rows = [
+        row
+        for row in backed_rows
+        if str(row.get("flow_count", "")).strip() not in ("", "1")
+    ]
+    if not multi_flow_rows:
+        return None
+    unsafe = [
+        row
+        for row in multi_flow_rows
+        if str(row.get("safe_for_promotion", "")).strip().lower() != "true"
+    ]
+    if not unsafe:
+        return None
+    regressions = sum(
+        str(row.get("all_flows_nonregressing", "")).strip().lower() != "true"
+        for row in unsafe
+    )
+    return (
+        "Multi-flow aggregate rejected "
+        f"{len(unsafe)}/{len(multi_flow_rows)} correctness-backed rows "
+        f"({regressions} with a per-flow AND regression)."
+    )
+
+
 def read_build_status(impl_root: Path) -> str | None:
     path = impl_root / IMPL_CANDIDATE_LABEL / "build_info.json"
     if not path.exists():
@@ -648,6 +689,36 @@ def _classify_build_failure(build_status: str | None) -> tuple[str, str, str]:
         "REPAIR_BUILD",
         f"candidate build gate is {build_status or 'missing'}",
         "Return build/smoke logs to Flow Agent and request a repair patch.",
+    )
+
+
+def _classify_cec_failure(
+    cec_rows: Sequence[dict[str, str]],
+    *,
+    cec_pass: int,
+) -> tuple[str, str, str]:
+    """Separate semantic counterexamples from CEC tool/evaluation failures."""
+
+    counts: dict[str, int] = {}
+    for row in cec_rows:
+        status = str(row.get("cec_status", "")).strip() or "missing"
+        if status != "cec_pass":
+            counts[status] = counts.get(status, 0) + 1
+    rendered = ", ".join(f"{key}={counts[key]}" for key in sorted(counts))
+    if counts and set(counts) == {"cec_fail"}:
+        return (
+            "REJECT_CEC",
+            f"CEC passed {cec_pass}/{len(cec_rows)} rows; {rendered}",
+            "Reject or repair the semantically inequivalent candidate before "
+            "any QoR discussion.",
+        )
+    return (
+        "REPAIR_EVALUATION",
+        f"CEC evaluation was not conclusive: passed {cec_pass}/{len(cec_rows)}; "
+        f"{rendered or 'failure status missing'}",
+        "Inspect the per-benchmark CEC status, exit code, skipped reason, and "
+        "log; repair timeout/crash/skipped/unparseable evaluation failures "
+        "before judging equivalence or QoR.",
     )
 
 

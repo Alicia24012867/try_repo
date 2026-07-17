@@ -1,102 +1,42 @@
-# Legacy Flow Evaluation Plan -- cycle_001 candidate_001
+# Cycle 001 Evaluation Portfolio
 
-This file documents the earlier `.abc` flow-recipe evaluation path. The current
-autonomous Flow Agent loop uses `source_patch_diff` assignments, isolated
-candidate workspaces, candidate binary builds, and S5/F7 CEC-backed QoR
-comparison. Keep this plan as reference material for legacy `abc_flow` fixtures
-and manual flow experiments; do not treat it as the active cycle_001 execution
-plan.
+`cycle_001` is a frozen paired Flow/Logic dispatch, not the former single
+`candidate_001` flow experiment. The authoritative assignments are:
 
-## Scope
+- `experiments/cycle_001/agents/assignments/flow_candidate_001.json`
+- `experiments/cycle_001/agents/assignments/logic_candidate_001.json`
 
-- Agent: flow_agent
-- Candidate flow: `configs/flows/cycle_001_candidate_001.abc`
-- Benchmark count: 3
-- ABC command root: run from the repository root on the execution host.
-- Correctness status before CEC: `provisional_no_cec`.
+Both assignments evaluate `large_70`: 30 ABC-native designs and 40 Verilog
+designs. Verilog is lowered once with Yosys to a candidate-scoped BLIF under
+`candidates/<candidate>/impl_compare/frontend/`; the exact normalized input is
+then shared by the baseline and candidate binary.
 
-## Result CSV Schema
+## Frozen Flow Portfolio
 
-```text
-benchmark,flow_label,abc_exit_code,aig_nodes,aig_depth,runtime_seconds,skipped_reason,correctness_status
-```
+1. `candidate_recipe`: candidate-specific recipe materialized from the frozen
+   assignment's `evaluation_flow_commands`.
+2. `rewrite_refactor`: `strash; rewrite -z; refactor -z; rewrite -z; resub -K
+   8; strash; print_stats`.
+3. `resub_dc2`: `strash; resub -K 8; dc2; refactor -z; resub -K 8; strash;
+   print_stats`.
 
-## Commands
+## Decision Artifacts
 
-### benchmarks/epfl/epfl_adder.blif
+For each candidate lane, S5/F7 writes:
 
-- Baseline label: `vanilla_strash`
-- Candidate label: `candidate_flow`
-- Baseline log: `experiments/cycle_001/logs/epfl_adder.vanilla_strash.log`
-- Candidate log: `experiments/cycle_001/logs/epfl_adder.candidate_flow.log`
+- `comparison/frontend_summary.csv`: source input and Yosys result.
+- `comparison/cec_by_flow.csv` and `comparison/qor_delta_by_flow.csv`:
+  immutable detailed evidence for every design/flow pair.
+- `comparison/cec_summary.csv`: one strict all-flow CEC result per design.
+- `comparison/flow_vote_summary.csv`: strict-majority per-design vote.
+- `comparison/qor_delta.csv`: one median aggregate QoR row per design; this is
+  the only vector consumed by the promotion review.
+- `comparison/multi_flow_summary.json`: per-flow scoreboard and aggregate
+  counters.
 
-Baseline:
+CEC must pass in every flow. Median aggregation and voting make QoR comparison
+robust to a single flow's noise, but the default all-flow AND non-regression
+guard means a vote can never promote an unsafe candidate.
 
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.vanilla_strash.aig; ps'
-```
-
-Candidate:
-
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_adder.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_adder.candidate_flow.aig; ps'
-```
-
-CEC note:
-
-- CEC is not automated in F5. The commands above write `experiments/cycle_001/outputs/epfl_adder.vanilla_strash.aig` and `experiments/cycle_001/outputs/epfl_adder.candidate_flow.aig`. Check equivalence with `abc -c "cec experiments/cycle_001/outputs/epfl_adder.vanilla_strash.aig experiments/cycle_001/outputs/epfl_adder.candidate_flow.aig"`. Until then, set correctness_status to `provisional_no_cec`.
-
-### benchmarks/epfl/epfl_bar.blif
-
-- Baseline label: `vanilla_strash`
-- Candidate label: `candidate_flow`
-- Baseline log: `experiments/cycle_001/logs/epfl_bar.vanilla_strash.log`
-- Candidate log: `experiments/cycle_001/logs/epfl_bar.candidate_flow.log`
-
-Baseline:
-
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.vanilla_strash.aig; ps'
-```
-
-Candidate:
-
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_bar.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_bar.candidate_flow.aig; ps'
-```
-
-CEC note:
-
-- CEC is not automated in F5. The commands above write `experiments/cycle_001/outputs/epfl_bar.vanilla_strash.aig` and `experiments/cycle_001/outputs/epfl_bar.candidate_flow.aig`. Check equivalence with `abc -c "cec experiments/cycle_001/outputs/epfl_bar.vanilla_strash.aig experiments/cycle_001/outputs/epfl_bar.candidate_flow.aig"`. Until then, set correctness_status to `provisional_no_cec`.
-
-### benchmarks/epfl/epfl_sqrt.blif
-
-- Baseline label: `vanilla_strash`
-- Candidate label: `candidate_flow`
-- Baseline log: `experiments/cycle_001/logs/epfl_sqrt.vanilla_strash.log`
-- Candidate log: `experiments/cycle_001/logs/epfl_sqrt.candidate_flow.log`
-
-Baseline:
-
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.vanilla_strash.aig; ps'
-```
-
-Candidate:
-
-```bash
-abc -c 'source third_party/FlowTune/abc.rc; read benchmarks/epfl/epfl_sqrt.blif; source configs/flows/cycle_001_candidate_001.abc; strash; write_aiger experiments/cycle_001/outputs/epfl_sqrt.candidate_flow.aig; ps'
-```
-
-CEC note:
-
-- CEC is not automated in F5. The commands above write `experiments/cycle_001/outputs/epfl_sqrt.vanilla_strash.aig` and `experiments/cycle_001/outputs/epfl_sqrt.candidate_flow.aig`. Check equivalence with `abc -c "cec experiments/cycle_001/outputs/epfl_sqrt.vanilla_strash.aig experiments/cycle_001/outputs/epfl_sqrt.candidate_flow.aig"`. Until then, set correctness_status to `provisional_no_cec`.
-
-## Runner Responsibilities
-
-- Capture stdout and stderr for every command under `experiments/cycle_001/logs/`.
-- Record wall-clock runtime outside ABC and store it as `runtime_seconds`.
-- Parse `ps` output into `aig_nodes` and `aig_depth`.
-- Preserve AIG outputs under `experiments/cycle_001/outputs/` for later CEC.
-- Write one row per benchmark and flow label using the CSV schema above.
-- Do not promote QoR while `correctness_status` is `provisional_no_cec`.
+Run the candidate pipeline on the Linux/ABC host through `bash run.sh`; do not
+manually use the old root-level `experiments/cycle_001/outputs/` paths.

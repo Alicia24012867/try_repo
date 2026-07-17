@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "cycle_id": "cycle_000",
+  "kind": "historical_baseline_evidence",
+  "baseline_kind": "vanilla",
+  "benchmark_suite": "epfl_10",
+  "benchmark_count": 10,
+  "complete_comparable_count": 9,
+  "cec_status": "not_recorded",
+  "qor_evidence": [
+    "experiments/cycle_000/results/summary.csv",
+    "experiments/cycle_000/results/skipped.csv",
+    "experiments/cycle_000/results/run_notes.md"
+  ],
+  "layout_note": "Historical logs and AIGs remain at cycle root. Paired candidate-scoped artifacts begin at cycle_001."
+}

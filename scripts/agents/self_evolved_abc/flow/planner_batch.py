@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
+import csv
 import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -18,8 +19,11 @@ from scripts.agents.self_evolved_abc.flow.batch_search import (
     PatchVariant,
     build_batch_lineage,
     build_variants,
+    collect_batch_rows,
     describe_variant_space,
     hash_batch_lineage,
+    parse_whole_number,
+    summarize_batch_outcomes,
     validate_manifest_base_assignment,
     validate_manifest_lineage,
     validate_batch_measurements,
@@ -50,8 +54,9 @@ def run_and_integrate_planner_batch(
 ) -> str | None:
     """Run a model-free sensitivity batch and update the pending assignment.
 
-    Returns the promoted probe cycle id, an empty string when the batch only
-    produced sensitivity evidence, or ``None`` when the batch could not run.
+    Returns the promoted probe cycle id, an empty string when the batch
+    produced sensitivity or durable negative evidence, or ``None`` when the
+    batch was incomplete, malformed, stale, or could not run.
     """
 
     repo_root = repo_root.resolve()
@@ -246,29 +251,91 @@ def run_and_integrate_planner_batch(
         print(f"cycle_loop: planner batch winner is missing: {winner_path}")
         return None
     winner = winner_payload.get("winner")
-    if not isinstance(winner, dict) or str(
-        winner.get("decision", "")
-    ).strip() in ("", "missing"):
-        print(
-            "cycle_loop: planner batch did not produce a reviewed sensitivity "
-            f"winner: {winner_path}"
-        )
-        return None
-    winner_item = _winner_manifest_item(manifest, winner)
-    winner_patch_rel = str(winner_item.get("patch_path", "")).strip()
-    winner_assignment_rel = str(winner_item.get("assignment_path", "")).strip()
-    winner_patch = repo_root / winner_patch_rel
     enriched_winner_payload = dict(winner_payload)
+    rows = collect_batch_rows(
+        repo_root=repo_root,
+        manifest=manifest,
+        require_reviews=True,
+    )
+    outcome_summary = summarize_batch_outcomes(rows)
     enriched_winner_payload.update(
         {
             "manifest_path": manifest_path.relative_to(repo_root).as_posix(),
-            "winner_patch_path": winner_patch_rel,
-            "winner_patch_sha256": hashlib.sha256(
-                winner_patch.read_bytes()
-            ).hexdigest(),
-            "winner_assignment_path": winner_assignment_rel,
+            "outcome_summary": outcome_summary,
         }
     )
+    outcome_evidence_path = write_batch_outcome_evidence(
+        repo_root=repo_root,
+        manifest=manifest,
+        lineage_hash=lineage_hash,
+        outcome_summary=outcome_summary,
+    )
+    enriched_winner_payload["outcome_evidence_path"] = (
+        outcome_evidence_path.relative_to(repo_root).as_posix()
+    )
+    if isinstance(winner, dict):
+        if str(winner.get("decision", "")).strip() in ("", "missing"):
+            print(
+                "cycle_loop: planner batch winner has no reviewed decision: "
+                f"{winner_path}"
+            )
+            return None
+        winner_item = _winner_manifest_item(manifest, winner)
+        winner_patch_rel = str(winner_item.get("patch_path", "")).strip()
+        winner_assignment_rel = str(
+            winner_item.get("assignment_path", "")
+        ).strip()
+        winner_patch = repo_root / winner_patch_rel
+        enriched_winner_payload.update(
+            {
+                "winner_patch_path": winner_patch_rel,
+                "winner_patch_sha256": hashlib.sha256(
+                    winner_patch.read_bytes()
+                ).hexdigest(),
+                "winner_assignment_path": winner_assignment_rel,
+            }
+        )
+    else:
+        diagnostic = outcome_summary.get("diagnostic_probe")
+        if isinstance(diagnostic, Mapping):
+            diagnostic_item = _winner_manifest_item(manifest, diagnostic)
+            diagnostic_assignment_rel = str(
+                diagnostic_item.get("assignment_path", "")
+            ).strip()
+            diagnostic_patch_rel = str(
+                diagnostic_item.get("patch_path", "")
+            ).strip()
+            diagnostic_context = CycleContext.from_assignment_file(
+                repo_root, repo_root / diagnostic_assignment_rel
+            )
+            diagnostic_patch = repo_root / diagnostic_patch_rel
+            enriched_winner_payload.update(
+                {
+                    "diagnostic_assignment_path": diagnostic_assignment_rel,
+                    "diagnostic_patch_path": diagnostic_patch_rel,
+                    "diagnostic_patch_sha256": hashlib.sha256(
+                        diagnostic_patch.read_bytes()
+                    ).hexdigest(),
+                    "diagnostic_review_path": (
+                        impl_compare_root(diagnostic_context)
+                        / "comparison"
+                        / "review_decision.json"
+                    ).relative_to(repo_root).as_posix(),
+                    "diagnostic_cec_path": (
+                        impl_compare_root(diagnostic_context)
+                        / "comparison"
+                        / "cec_summary.csv"
+                    ).relative_to(repo_root).as_posix(),
+                }
+            )
+        print(
+            "cycle_loop: planner batch completed with no correctness-backed "
+            "eligible probe; integrating hard-gate failures as negative "
+            "Planning evidence "
+            f"probes={outcome_summary.get('probe_count', 0)} "
+            f"full_cec={outcome_summary.get('full_cec_probe_count', 0)} "
+            f"cec_rejected={outcome_summary.get('cec_rejected_probe_count', 0)}"
+        )
     return integrate_batch_winner(
         assignment_path=assignment_path,
         batch_id=batch_id,
@@ -276,6 +343,105 @@ def run_and_integrate_planner_batch(
         update_baseline=update_baseline,
         lineage_hash=lineage_hash,
     )
+
+
+def write_batch_outcome_evidence(
+    *,
+    repo_root: Path,
+    manifest: Mapping[str, object],
+    lineage_hash: str,
+    outcome_summary: Mapping[str, object],
+) -> Path:
+    """Persist bounded CEC diagnostics for post-batch Planning context."""
+
+    manifest_path = repo_root / str(manifest.get("manifest_path", ""))
+    batch_dir = manifest_path.parent
+    cec_status_counts: dict[str, int] = {}
+    cec_exit_code_counts: dict[str, int] = {}
+    failed_benchmarks: list[dict[str, object]] = []
+    probe_reviews: list[dict[str, object]] = []
+    for item in manifest.get("items", ()):
+        if not isinstance(item, Mapping):
+            continue
+        assignment_relative = str(item.get("assignment_path", "")).strip()
+        if not assignment_relative:
+            continue
+        context = CycleContext.from_assignment_file(
+            repo_root, repo_root / assignment_relative
+        )
+        comparison = impl_compare_root(context) / "comparison"
+        review_path = comparison / "review_decision.json"
+        cec_path = comparison / "cec_summary.csv"
+        review = read_json_object(review_path) or {}
+        probe_reviews.append(
+            {
+                "cycle_id": str(item.get("cycle_id", "")),
+                "variant_id": str(item.get("variant_id", "")),
+                "decision": str(review.get("decision", "missing")),
+                "reason": str(review.get("reason", ""))[:1000],
+                "next_action": str(review.get("next_action", ""))[:1000],
+                "review_path": review_path.relative_to(repo_root).as_posix(),
+                "cec_summary_path": cec_path.relative_to(repo_root).as_posix(),
+            }
+        )
+        try:
+            with cec_path.open("r", encoding="utf-8", newline="") as stream:
+                for row in csv.DictReader(stream):
+                    status = str(row.get("cec_status", "")).strip() or "missing"
+                    exit_code = str(row.get("cec_exit_code", "")).strip() or "none"
+                    cec_status_counts[status] = cec_status_counts.get(status, 0) + 1
+                    cec_exit_code_counts[exit_code] = (
+                        cec_exit_code_counts.get(exit_code, 0) + 1
+                    )
+                    if status != "cec_pass" and len(failed_benchmarks) < 24:
+                        failed_benchmarks.append(
+                            {
+                                "cycle_id": str(item.get("cycle_id", "")),
+                                "variant_id": str(item.get("variant_id", "")),
+                                "benchmark": str(row.get("benchmark", "")),
+                                "cec_status": status,
+                                "cec_exit_code": exit_code,
+                                "skipped_reason": str(
+                                    row.get("skipped_reason", "")
+                                )[:500],
+                                "log_path": str(row.get("log_path", "")),
+                            }
+                        )
+        except (OSError, csv.Error):
+            # The canonical review/summary validation remains authoritative.
+            # Missing optional detail is recorded without manufacturing data.
+            cec_status_counts["diagnostic_unavailable"] = (
+                cec_status_counts.get("diagnostic_unavailable", 0) + 1
+            )
+
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "batch_id": str(manifest.get("batch_id", "")),
+        "lineage_hash": lineage_hash,
+        "outcome_summary": dict(outcome_summary),
+        "cec_status_counts": {
+            key: cec_status_counts[key] for key in sorted(cec_status_counts)
+        },
+        "cec_exit_code_counts": {
+            key: cec_exit_code_counts[key]
+            for key in sorted(cec_exit_code_counts)
+        },
+        "failed_benchmarks_sample": failed_benchmarks,
+        "probe_reviews": probe_reviews,
+        "policy": (
+            "Only full-build, exact-scope CEC-backed rows may enter the QoR "
+            "winner/frontier. This file is negative diagnostic context and "
+            "cannot update the baseline or request exact replay."
+        ),
+    }
+    output = batch_dir / "outcome.json"
+    temporary = output.with_suffix(output.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(output)
+    return output
 
 
 def integrate_batch_winner(
@@ -286,29 +452,70 @@ def integrate_batch_winner(
     update_baseline: bool = True,
     lineage_hash: str = "",
 ) -> str | None:
-    """Write a batch winner and its sensitivity evidence into an assignment."""
+    """Write a reviewed positive or canonical negative batch outcome."""
 
     assignment = read_json_object(assignment_path)
-    winner = winner_payload.get("winner")
-    if assignment is None or not isinstance(winner, dict):
+    raw_winner = winner_payload.get("winner")
+    outcome_summary = winner_payload.get("outcome_summary")
+    if assignment is None or (
+        raw_winner is not None and not isinstance(raw_winner, dict)
+    ):
+        return None
+    has_winner = isinstance(raw_winner, dict)
+    winner = raw_winner if has_winner else {}
+    if not has_winner and (
+        bool(winner_payload.get("promotion_found"))
+        or not isinstance(outcome_summary, Mapping)
+        or str(outcome_summary.get("status", "")) != "no_eligible_probe"
+        or (parse_whole_number(outcome_summary.get("probe_count")) or 0) < 1
+        or outcome_summary.get("reviewed_probe_count")
+        != outcome_summary.get("probe_count")
+        or parse_whole_number(
+            outcome_summary.get("evidence_eligible_probe_count")
+        )
+        != 0
+        or parse_whole_number(outcome_summary.get("promotion_probe_count")) != 0
+    ):
         return None
 
     winner_cycle = str(winner.get("cycle_id", "")).strip()
-    variant_id = str(winner.get("variant_id", "unknown")).strip()
-    if not winner_cycle:
+    variant_id = str(winner.get("variant_id", "")).strip()
+    if has_winner and (not winner_cycle or not variant_id):
         return None
-
-    promoted = bool(winner_payload.get("promotion_found", False)) or str(
-        winner.get("promotion_allowed", "")
-    ).lower() == "true"
-    command = batch_variant_command(variant_id)
+    diagnostic = (
+        outcome_summary.get("diagnostic_probe")
+        if isinstance(outcome_summary, Mapping)
+        else None
+    )
+    anchor = winner if has_winner else (
+        diagnostic if isinstance(diagnostic, Mapping) else {}
+    )
+    anchor_variant = str(anchor.get("variant_id", "")).strip()
+    command = batch_variant_command(anchor_variant)
+    current_meta = assignment.get("_planning_meta")
+    if not command and isinstance(current_meta, Mapping):
+        command = str(current_meta.get("target_command", "")).strip()
+    promoted = bool(
+        has_winner
+        and (
+            bool(winner_payload.get("promotion_found", False))
+            or str(winner.get("promotion_allowed", "")).lower() == "true"
+        )
+    )
     source_dirs = FLOW_SOURCE_TOUCHPOINTS.get(command, ())
     target_source_dir = str(source_dirs[0]) if source_dirs else str(
         assignment.get("target_source_dir", "")
     )
     summary_rel = f"experiments/batches/{batch_id}/summary.csv"
     winner_rel = f"experiments/batches/{batch_id}/winner.json"
-    winner_qor_rel = winner_qor_path(assignment_path, winner_cycle)
+    outcome_evidence_rel = str(
+        winner_payload.get("outcome_evidence_path", "")
+    ).strip()
+    if not has_winner and not outcome_evidence_rel:
+        return None
+    winner_qor_rel = (
+        winner_qor_path(assignment_path, winner_cycle) if has_winner else ""
+    )
     manifest_rel = str(
         winner_payload.get(
             "manifest_path", f"experiments/batches/{batch_id}/manifest.json"
@@ -321,33 +528,76 @@ def integrate_batch_winner(
     winner_assignment_rel = str(
         winner_payload.get("winner_assignment_path", "")
     ).strip()
+    diagnostic_assignment_rel = str(
+        winner_payload.get("diagnostic_assignment_path", "")
+    ).strip()
+    diagnostic_patch_rel = str(
+        winner_payload.get("diagnostic_patch_path", "")
+    ).strip()
+    diagnostic_patch_sha256 = str(
+        winner_payload.get("diagnostic_patch_sha256", "")
+    ).strip()
+    diagnostic_review_rel = str(
+        winner_payload.get("diagnostic_review_path", "")
+    ).strip()
+    diagnostic_cec_rel = str(
+        winner_payload.get("diagnostic_cec_path", "")
+    ).strip()
     exact_replay_required = bool(
         promoted
         and not update_baseline
         and winner_patch_rel
         and winner_patch_sha256
     )
-    evidence_paths = tuple(
+    allowed_paths = tuple(
         path
         for path in (
             summary_rel,
             winner_rel,
+            outcome_evidence_rel,
             manifest_rel,
             winner_qor_rel,
             winner_assignment_rel,
             winner_patch_rel,
+            diagnostic_assignment_rel,
+            diagnostic_patch_rel,
+            diagnostic_review_rel,
+            diagnostic_cec_rel,
+        )
+        if path
+    )
+    # Failed-probe QoR is never placed in the automatic QoR evidence channel.
+    # Planning receives a bounded negative report plus the representative CEC
+    # artifacts and patch, all explicitly marked diagnostic-only.
+    recent_paths = allowed_paths if has_winner else tuple(
+        path
+        for path in (
+            outcome_evidence_rel,
+            winner_rel,
+            manifest_rel,
+            diagnostic_review_rel,
+            diagnostic_cec_rel,
+            diagnostic_patch_rel,
         )
         if path
     )
 
-    for key in ("allowed_to_read", "recent_evidence"):
+    for key, paths in (
+        ("allowed_to_read", allowed_paths),
+        ("recent_evidence", recent_paths),
+    ):
         current = [str(item) for item in assignment.get(key, ())]
-        for path in evidence_paths:
+        for path in paths:
             if path not in current:
                 current.append(path)
         assignment[key] = current
 
     assignment["batch_search_evidence"] = {
+        "status": (
+            str(outcome_summary.get("status", "winner_selected"))
+            if isinstance(outcome_summary, Mapping)
+            else "winner_selected"
+        ),
         "batch_id": batch_id,
         "lineage_hash": lineage_hash,
         "promotion_found": promoted,
@@ -374,6 +624,18 @@ def integrate_batch_winner(
         "winner_patch_sha256": winner_patch_sha256,
         "winner_assignment_path": winner_assignment_rel,
         "exact_replay_required": exact_replay_required,
+        "outcome_summary": (
+            dict(outcome_summary)
+            if isinstance(outcome_summary, Mapping)
+            else {}
+        ),
+        "outcome_evidence_path": outcome_evidence_rel,
+        "diagnostic_only": not has_winner,
+        "diagnostic_assignment_path": diagnostic_assignment_rel,
+        "diagnostic_patch_path": diagnostic_patch_rel,
+        "diagnostic_patch_sha256": diagnostic_patch_sha256,
+        "diagnostic_review_path": diagnostic_review_rel,
+        "diagnostic_cec_path": diagnostic_cec_rel,
         "requires_replanning": not update_baseline,
         "planning_consumed": update_baseline,
     }
@@ -382,7 +644,16 @@ def integrate_batch_winner(
         for item in assignment.get("evolved_rules", ())
         if str(item).strip()
     ]
-    if exact_replay_required:
+    if not has_winner:
+        batch_rule = (
+            f"Batch {batch_id} completed with zero correctness-backed eligible "
+            "probes. Treat its failed eligibility gates as negative diagnostics "
+            "only: "
+            "do not rank failed-probe QoR, update the baseline, or replay the "
+            "representative failed patch. Planning must choose a safer repair "
+            "or a different reached strategy."
+        )
+    elif exact_replay_required:
         batch_rule = (
             f"Batch {batch_id} proved `{variant_id}` under build, full CEC, and "
             f"QoR gates. The Flow lane must replay `{winner_patch_rel}` exactly "
@@ -401,15 +672,30 @@ def integrate_batch_winner(
 
     meta = assignment.get("_planning_meta")
     planning_meta = dict(meta) if isinstance(meta, dict) else {}
+    negative_cec = (
+        parse_whole_number(outcome_summary.get("cec_rejected_probe_count")) or 0
+        if isinstance(outcome_summary, Mapping)
+        else 0
+    )
     planning_meta.update(
         {
-            "task_type": "optimization",
+            "task_type": (
+                "repair" if not has_winner and negative_cec else "optimization"
+            ),
             "target_command": command,
             "target_source_dir": target_source_dir,
             "should_skip_llm": False,
             "strategy_rationale": (
-                f"Deterministic batch {batch_id} completed; use variant "
-                f"{variant_id} as measured sensitivity evidence."
+                (
+                    f"Deterministic batch {batch_id} completed with no "
+                    "correctness-backed eligible probe; consume its hard-gate "
+                    "diagnostics and produce a safer repair or different strategy."
+                )
+                if not has_winner
+                else (
+                    f"Deterministic batch {batch_id} completed; use variant "
+                    f"{variant_id} as measured sensitivity evidence."
+                )
             ),
         }
     )
@@ -419,16 +705,30 @@ def integrate_batch_winner(
     assignment["target_source_dir"] = target_source_dir
     diverse_frontier = winner_payload.get("diverse_frontier", [])
     frontier_text = json.dumps(diverse_frontier, sort_keys=True)[:5000]
-    measured_summary = (
-        f"Deterministic batch search `{batch_id}` completed. Best variant "
-        f"`{variant_id}`: decision={winner.get('decision')}, average AND "
-        f"improvement={winner.get('average_and_improve_pct')}, total AND "
-        f"delta={winner.get('total_and_delta_candidate_minus_baseline')}, "
-        f"improved/regressed={winner.get('improved_benchmark_count')}/"
-        f"{winner.get('regressed_benchmark_count')}. Diverse top probes from "
-        f"distinct command families: {frontier_text}."
-    )
-    if exact_replay_required:
+    if not has_winner:
+        measured_summary = (
+            f"Deterministic batch search `{batch_id}` completed with no "
+            "correctness-backed eligible probe. Its canonical negative summary "
+            f"is {json.dumps(outcome_summary, sort_keys=True)[:5000]}. "
+            f"Read `{outcome_evidence_rel}`, `{diagnostic_review_rel}`, and "
+            f"`{diagnostic_cec_rel}`. The representative patch "
+            f"`{diagnostic_patch_rel}` (sha256 `{diagnostic_patch_sha256}`) is "
+            "failed diagnostic context only: do not replay it and do not use "
+            "its unbacked QoR as reward. Propose a correctness-preserving repair "
+            "or a materially different reached implementation strategy."
+        )
+        assignment["planner_hypothesis"] = measured_summary
+    else:
+        measured_summary = (
+            f"Deterministic batch search `{batch_id}` completed. Best variant "
+            f"`{variant_id}`: decision={winner.get('decision')}, average AND "
+            f"improvement={winner.get('average_and_improve_pct')}, total AND "
+            f"delta={winner.get('total_and_delta_candidate_minus_baseline')}, "
+            f"improved/regressed={winner.get('improved_benchmark_count')}/"
+            f"{winner.get('regressed_benchmark_count')}. Diverse top probes from "
+            f"distinct command families: {frontier_text}."
+        )
+    if has_winner and exact_replay_required:
         assignment["planner_hypothesis"] = (
             "COORDINATOR-LOCKED PROMOTED BATCH REPLAY. "
             + measured_summary
@@ -437,7 +737,7 @@ def integrate_batch_winner(
             "unchanged against this round's frozen baseline; then repeat build, "
             "full CEC, and QoR so its real review participates in paired fan-in."
         )
-    else:
+    elif has_winner:
         assignment["planner_hypothesis"] = (
             measured_summary
             + f" Read `{summary_rel}` and `{winner_qor_rel}`. Use these "
@@ -446,7 +746,7 @@ def integrate_batch_winner(
             "unproven capacity limit."
         )
 
-    if promoted and update_baseline:
+    if has_winner and promoted and update_baseline:
         workspace = winner_workspace_path(assignment_path, winner_cycle)
         source_root = f"{workspace}/third_party/FlowTune/src"
         abc_bin = f"{source_root}/abc"
@@ -475,7 +775,7 @@ def integrate_batch_winner(
         json.dumps(normalized, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-    return winner_cycle if promoted and update_baseline else ""
+    return winner_cycle if has_winner and promoted and update_baseline else ""
 
 
 def bind_planner_batch_lineage_context(
@@ -538,7 +838,7 @@ def validate_batch_winner(
     winner_payload: dict[str, Any] | None,
     expected_lineage_hash: str,
 ) -> None:
-    """Require a winner to be one reviewed row from the bound manifest."""
+    """Validate winner identity, allowing a canonical no-eligible outcome."""
 
     if winner_payload is None:
         raise ValueError("planner batch winner is missing or invalid JSON")
@@ -547,6 +847,10 @@ def validate_batch_winner(
     if str(winner_payload.get("lineage_hash", "")) != expected_lineage_hash:
         raise ValueError("planner batch winner lineage mismatch")
     winner = winner_payload.get("winner")
+    if winner is None:
+        if bool(winner_payload.get("promotion_found")):
+            raise ValueError("planner batch cannot promote without a winner row")
+        return
     if not isinstance(winner, Mapping):
         raise ValueError("planner batch winner row is missing")
     cycle_id = str(winner.get("cycle_id", "")).strip()

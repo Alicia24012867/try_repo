@@ -23,6 +23,10 @@ from scripts.agents.self_evolved_abc.flow.next_cycle import (
     increment_cycle_id,
     write_next_assignment,
 )
+from scripts.agents.self_evolved_abc.flow.multi_flow import (
+    normalized_evaluation_flows,
+    normalize_flow_aggregation,
+)
 from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root
 from scripts.agents.self_evolved_abc.logic.contracts import (
     LOGIC_ABCI_ROOT,
@@ -1075,6 +1079,8 @@ def validate_assignment_contract(
 ) -> None:
     checks = (
         ("evaluation_flow_commands", "flow_commands"),
+        ("evaluation_flows", "evaluation_flows"),
+        ("flow_aggregation", "flow_aggregation"),
         ("evaluation_benchmark_scope", "benchmark_scope"),
         ("promotion_thresholds", "promotion_thresholds"),
         ("benchmark_frontend", "benchmark_frontend"),
@@ -1129,6 +1135,12 @@ def _evaluation_contract(
         "benchmark_frontend": assignment.get("benchmark_frontend", "abc_native"),
         "benchmark_scope": benchmark_scope,
         "flow_commands": list(DEFAULT_EVAL_FLOW_COMMANDS),
+        "evaluation_flows": normalized_evaluation_flows(
+            assignment.get("evaluation_flows")
+        ),
+        "flow_aggregation": normalize_flow_aggregation(
+            assignment.get("flow_aggregation")
+        ),
         "promotion_thresholds": dict(assignment.get("promotion_thresholds", {})),
         "target_metric": assignment.get("target_metric", "and_count"),
         "timeout_seconds": float(timeout_seconds),

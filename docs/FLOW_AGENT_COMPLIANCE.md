@@ -49,10 +49,14 @@ on the Linux server.
   Agent source-diff loop.
 - CEC is run with the baseline/champion ABC binary so the equivalence checker
   is independent of candidate source edits.
-- `large_70` now separates tracked benchmark coverage from current
-  ABC-native evaluation coverage: 70 designs remain in `benchmark_scope`, 30
-  BLIF designs form `evaluation_benchmark_scope`, and 40 Verilog designs are
-  listed in `unsupported_benchmark_scope` until a frontend is connected.
+- `large_70` is fully evaluated: 70 designs remain in both
+  `benchmark_scope` and `evaluation_benchmark_scope`. ABC-native inputs are
+  read directly; 40 Verilog inputs are normalized once by Yosys to BLIF inside
+  the isolated candidate lane. `unsupported_benchmark_scope` is empty unless a
+  future unsupported extension is explicitly added.
+- S5/F7 now executes three frozen flow views per benchmark. It retains detailed
+  per-flow CEC/QoR rows and derives the promotion vector using median metrics,
+  strict-majority votes, and an all-flow non-regression guard.
 - Bootstrap and later replacement candidates use the same two reward channels;
   every accepted candidate must still pass the real build, full frozen-scope
   CEC, complete QoR-row, and channel-specific guardrails.
@@ -78,7 +82,7 @@ on the Linux server.
 ## Local Compliance Pass: Planning Agent Integration
 
 - `cycle_001` is planner-seeded with target command `csweep`, target source
-  directory `third_party/FlowTune/src/src/opt/csw`, 30-design adaptive
+  directory `third_party/FlowTune/src/src/opt/csw`, 70-design adaptive
   thresholds, and `_planning_meta` for cross-cycle history.
 - The first no-evidence cycle remains executable by the LLM. Batch-search skip
   recommendations are reserved for evidence-backed zero-delta or repeated weak
@@ -89,16 +93,16 @@ on the Linux server.
 - Review still refuses weak follow-up improvements unless they meet the
   configured correctness-backed promotion thresholds after a champion exists.
 
-## Local Compliance Pass: `large_70` Frontend Split
+## Local Compliance Pass: `large_70` Verilog Frontend
 
-- The remote `30/70` CEC summaries came from counting Verilog samples that the
-  current direct-ABC runner cannot read, not from true candidate equivalence
-  failures on those designs.
-- S5/F7 now iterates over `evaluation_benchmark_scope`, so unsupported frontend
-  rows no longer create false `REJECT_CEC` decisions.
-- Promotion thresholds are computed from the evaluated scope. For current
-  `large_70` assignments this is 30 designs; the 70-design threshold tier should
-  be used only after Verilog conversion/read support is added.
+- The former `30/70` report was a direct-ABC frontend limitation, not a failed
+  candidate equivalence check.
+- S5/F7 prepares every `.v` input with a deterministic Yosys behavioral-lower
+  to BLIF before any ABC command runs. The one generated BLIF is shared by all
+  baseline/candidate and multi-flow comparisons for that source.
+- Promotion thresholds are computed from the full 70-design evaluated scope;
+  frontend, detailed CEC, vote, and aggregate artifacts make every failure
+  attributable to a source, frontend, or flow.
 
 ## Historical Three-Design Diagnosis: No Champion After Cycle 004
 
@@ -112,7 +116,12 @@ on the Linux server.
   was empty), so the system spent model calls on repeated narrow candidates
   rather than using CPU to sweep parameter space.
 - Next step should use `batch_search --variant-set flow_wide` before another
-  LLM cycle, then feed the batch `summary.csv`/`winner.json` back into planning.
+  LLM cycle, then feed its canonical result back into Planning. A reviewed batch
+  with no probe passing every eligibility gate (build, exact-scope CEC,
+  correctness-backed QoR, and an eligible review decision) records `winner:
+  null` plus a bounded `outcome.json`; this is negative diagnostic evidence,
+  never QoR winner evidence, and it must not stop the subsequent paired Coding
+  round.
 
 ## Historical Three-Design Diagnosis: `flow_wide_cycle_020`
 
@@ -183,4 +192,6 @@ reproduced.
 - Candidate binary build logs from the server.
 - CEC summary for every evaluated benchmark.
 - Correctness-backed QoR delta table against the declared champion.
-- Batch `summary.csv` and `winner.json` when low-API search is used.
+- Batch `summary.csv`, `winner.json`, and `outcome.json` when low-API search is
+  used. For `no_eligible_probe`, inspect the CEC status/exit-code histogram and
+  sampled failure paths in `outcome.json`; do not interpret failed-probe QoR.

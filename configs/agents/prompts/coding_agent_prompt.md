@@ -490,9 +490,13 @@ actually differ, or return `DEFER` for instrumentation/batch search.
 
 When the assignment contains both `benchmark_scope` and
 `evaluation_benchmark_scope`, optimize only against correctness-backed rows from
-the evaluated scope. Designs listed in `unsupported_benchmark_scope` are a
-frontend-integration TODO for the harness; do not add benchmark-specific source
-branches, parser changes, or artificial skips to make them disappear.
+the evaluated scope. Verilog entries in that scope are normalized by the
+runner's Yosys frontend and are not a source-code task. Designs listed in
+`unsupported_benchmark_scope` are genuinely unsupported extensions; do not add
+benchmark-specific source branches, parser changes, or artificial skips to make
+them disappear. Treat `qor_delta_by_flow.csv` and `flow_vote_summary.csv` as
+diagnostic context; only the conservative aggregate `qor_delta.csv` can support
+promotion.
 
 ## Required Work Procedure
 

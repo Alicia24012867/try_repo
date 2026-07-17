@@ -9,6 +9,12 @@ from scripts.agents.self_evolved_abc.flow.assignment import flow_cycle_write_roo
 from scripts.agents.self_evolved_abc.flow.promotion import (
     DEFAULT_PROMOTION_THRESHOLDS,
 )
+from scripts.agents.self_evolved_abc.flow.multi_flow import (
+    default_evaluation_flows,
+    default_flow_aggregation,
+    normalized_evaluation_flows,
+    normalize_flow_aggregation,
+)
 from scripts.agents.self_evolved_abc.logic.contracts import (
     LOGIC_ABCI_ROOT,
     LOGIC_AGENT_NAME,
@@ -62,6 +68,12 @@ def normalize_logic_assignment_scope(
     frozen_commands = _frozen_evaluation_commands(payload)
     payload["evaluation_flow_commands"] = list(
         frozen_commands or LOGIC_EVALUATION_FLOW_COMMANDS
+    )
+    payload["evaluation_flows"] = normalized_evaluation_flows(
+        payload.get("evaluation_flows", default_evaluation_flows())
+    )
+    payload["flow_aggregation"] = normalize_flow_aggregation(
+        payload.get("flow_aggregation", default_flow_aggregation())
     )
     payload.setdefault(
         "promotion_thresholds", DEFAULT_PROMOTION_THRESHOLDS.as_dict()

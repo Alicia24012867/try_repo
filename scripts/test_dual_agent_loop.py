@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import subprocess
@@ -37,6 +38,7 @@ from scripts.agents.self_evolved_abc.flow.batch_search import (
 from scripts.agents.self_evolved_abc.flow.contracts import IMPL_CANDIDATE_LABEL
 from scripts.agents.self_evolved_abc.flow.contracts import DEFAULT_EVAL_FLOW_COMMANDS
 from scripts.agents.self_evolved_abc.flow.planner_batch import (
+    bind_planner_batch_lineage_context,
     integrate_batch_winner,
     run_and_integrate_planner_batch,
 )
@@ -142,6 +144,67 @@ def _write_review(
             },
             indent=2,
         )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_reject_cec_review(repo_root: Path, assignment_path: Path) -> None:
+    context = CycleContext.from_assignment_file(repo_root, assignment_path)
+    comparison = impl_compare_root(context) / "comparison"
+    comparison.mkdir(parents=True, exist_ok=True)
+    expected = len(context.evaluation_benchmark_scope)
+    passed = max(0, expected - 1)
+    (comparison / "review_decision.json").write_text(
+        json.dumps(
+            {
+                "cycle_id": context.cycle_id,
+                "candidate_id": context.candidate_id,
+                "decision": "REJECT_CEC",
+                "promotion_allowed": False,
+                "champion_update": False,
+                "build_status": "candidate_binary_build_passed",
+                "cec_pass_count": passed,
+                "cec_total_count": expected,
+                "correctness_backed_rows": passed,
+                "average_and_improve_pct": None,
+                "total_and_delta_candidate_minus_baseline": None,
+                "scalar_and_reward": None,
+                "improved_benchmark_count": 0,
+                "regressed_benchmark_count": 0,
+                "unchanged_benchmark_count": 0,
+                "min_average_and_improve_pct": 3.0,
+                "min_total_and_reduction": 10,
+                "min_improved_benchmarks": 1,
+                "reason": f"CEC passed {passed}/{expected} rows",
+                "next_action": "Repair equivalence before considering QoR.",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    cec_rows = []
+    for index, benchmark in enumerate(context.evaluation_benchmark_scope):
+        status = "cec_pass" if index < passed else "cec_fail"
+        cec_rows.append(
+            ",".join(
+                (
+                    benchmark,
+                    "baseline.aig",
+                    "candidate.aig",
+                    "0",
+                    status,
+                    "0.01",
+                    f"logs/cec_{index}.log",
+                    "" if status == "cec_pass" else "cec_fail",
+                )
+            )
+        )
+    (comparison / "cec_summary.csv").write_text(
+        "benchmark,baseline_aig,candidate_aig,cec_exit_code,cec_status,"
+        "runtime_seconds,log_path,skipped_reason\n"
+        + "\n".join(cec_rows)
         + "\n",
         encoding="utf-8",
     )
@@ -552,7 +615,7 @@ class DualAgentLoopTests(unittest.TestCase):
     def test_model_semantics_do_not_echo_standard_or_large_suite_scope(self) -> None:
         for suite, tracked_count, evaluated_count in (
             ("standard_30", 30, 30),
-            ("large_70", 70, 30),
+            ("large_70", 70, 70),
         ):
             with self.subTest(suite=suite):
                 repo = self.repo / suite
@@ -1281,6 +1344,169 @@ class DualAgentLoopTests(unittest.TestCase):
         self.assertEqual(after["batch_search_evidence"]["lineage_hash"], lineage_hash)
         load_portfolio_plan(self.repo, plan.cycle_id)
 
+    def test_completed_no_eligible_batch_replans_and_runs_both_branches(
+        self,
+    ) -> None:
+        plan = self._plan()
+        flow_branch = plan.branches[0]
+        _install_flow_batch_sources(self.repo)
+        before = json.loads(flow_branch.assignment_path.read_text(encoding="utf-8"))
+        baseline_before = dict(before["baseline_ref"])
+        meta = dict(before.get("_planning_meta", {}))
+        meta.update({"target_command": "fx", "should_skip_llm": True})
+        before["_planning_meta"] = meta
+        before["target_command"] = "fx"
+        before["planner_should_skip_llm"] = True
+        flow_branch.assignment_path.write_text(
+            json.dumps(before, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        lineage_context = {
+            "portfolio_id": plan.portfolio_id,
+            "planner_dispatch_id": plan.planner_dispatch_id,
+            "cycle_id": plan.cycle_id,
+            "previous_cycle_id": plan.previous_cycle_id,
+            "parent_plan_hash": plan.parent_plan_hash,
+            "parent_review_hash": plan.parent_review_hash,
+            "portfolio_plan_sha256": hashlib.sha256(
+                portfolio_plan_path(self.repo, plan.cycle_id).read_bytes()
+            ).hexdigest(),
+            "evaluation_contract_hash": plan.evaluation_contract_hash,
+            "planner_advice_hash": plan.planner_advice_hash,
+        }
+        bound, target_command = bind_planner_batch_lineage_context(
+            assignment_path=flow_branch.assignment_path,
+            assignment=before,
+            target_command="fx",
+            lineage_context=lineage_context,
+        )
+        context = CycleContext(self.repo, bound)
+        variants = build_variants(
+            context,
+            "flow_wide",
+            target_command=target_command,
+        )
+        lineage = build_batch_lineage(
+            bound,
+            variant_set="flow_wide",
+            target_command=target_command,
+            variant_space=describe_variant_space(context, variants),
+        )
+        lineage_hash = hash_batch_lineage(lineage)
+        batch_id = f"cycle_001_planner_flow_wide_{lineage_hash[:12]}"
+        manifest = generate_batch(
+            context=context,
+            base_assignment_path=flow_branch.assignment_path,
+            start_cycle="probe_001",
+            batch_id=batch_id,
+            variant_set="flow_wide",
+            include_variants=set(),
+            target_command=target_command,
+            force=False,
+        )
+        for item in manifest["items"]:
+            _write_reject_cec_review(
+                self.repo,
+                self.repo / item["assignment_path"],
+            )
+        summarize_batch(repo_root=self.repo, manifest=manifest)
+
+        with patch(
+            "scripts.agents.self_evolved_abc.flow.planner_batch.subprocess.run"
+        ) as provider:
+            first = run_and_integrate_planner_batch(
+                repo_root=self.repo,
+                assignment_path=flow_branch.assignment_path,
+                build_candidate_binary=True,
+                build_jobs=2,
+                build_timeout_seconds=10.0,
+                timeout_seconds=10.0,
+                update_baseline=False,
+                lineage_context=lineage_context,
+            )
+            repeated = run_and_integrate_planner_batch(
+                repo_root=self.repo,
+                assignment_path=flow_branch.assignment_path,
+                build_candidate_binary=True,
+                build_jobs=2,
+                build_timeout_seconds=10.0,
+                timeout_seconds=10.0,
+                update_baseline=False,
+                lineage_context=lineage_context,
+            )
+            replanned = _honor_flow_planner_control(
+                repo_root=self.repo,
+                plan=plan,
+                build_candidate_binary=True,
+                build_jobs=2,
+                build_timeout_seconds=10.0,
+                timeout_seconds=10.0,
+                planner_mode="deterministic",
+            )
+            provider.assert_not_called()
+
+        self.assertEqual(first, "")
+        self.assertEqual(repeated, "")
+        self.assertIsNotNone(replanned)
+        assert replanned is not None
+        refreshed = json.loads(
+            replanned.branches[0].assignment_path.read_text(encoding="utf-8")
+        )
+        evidence = refreshed["batch_search_evidence"]
+        self.assertEqual(evidence["status"], "no_eligible_probe")
+        self.assertTrue(evidence["diagnostic_only"])
+        self.assertFalse(evidence["promotion_found"])
+        self.assertFalse(evidence["exact_replay_required"])
+        self.assertTrue(evidence["planning_consumed"])
+        self.assertEqual(refreshed["baseline_ref"], baseline_before)
+        self.assertNotIn(
+            f"experiments/batches/{batch_id}/summary.csv",
+            refreshed["recent_evidence"],
+        )
+        self.assertIn(evidence["outcome_evidence_path"], refreshed["recent_evidence"])
+        outcome = json.loads(
+            (self.repo / evidence["outcome_evidence_path"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertGreater(outcome["cec_status_counts"]["cec_fail"], 0)
+        self.assertTrue(outcome["failed_benchmarks_sample"])
+
+        with patch(
+            "scripts.agents.self_evolved_abc.workflow.dual_agent_loop."
+            "run_and_integrate_planner_batch"
+        ) as repeated_batch:
+            resumed = _honor_flow_planner_control(
+                repo_root=self.repo,
+                plan=replanned,
+                build_candidate_binary=True,
+                build_jobs=2,
+                build_timeout_seconds=10.0,
+                timeout_seconds=10.0,
+                planner_mode="deterministic",
+            )
+        repeated_batch.assert_not_called()
+        self.assertEqual(resumed, replanned)
+
+        called: list[str] = []
+
+        def runner(command, cwd):
+            assignment = _assignment_from_command(cwd, command)
+            branch_role = json.loads(
+                assignment.read_text(encoding="utf-8")
+            )["branch_role"]
+            called.append(branch_role)
+            _write_review(cwd, assignment, decision="REPAIR_QOR")
+            return 1
+
+        outcomes = execute_portfolio_plan(
+            repo_root=self.repo,
+            plan=replanned,
+            command_runner=runner,
+        )
+        self.assertCountEqual(called, ["flow", "logic"])
+        self.assertEqual([item.status for item in outcomes], ["reviewed", "reviewed"])
+
     def test_promoted_probe_uses_candidate_scoped_workspace_and_qor_paths(self) -> None:
         plan = self._plan()
         base = json.loads(
@@ -1356,7 +1582,7 @@ class DualAgentLoopTests(unittest.TestCase):
             / "cycle_001"
             / "agents"
             / "assignments"
-            / "candidate_001.json"
+            / "flow_candidate_001.json"
         )
         payload = json.loads(checked_in.read_text(encoding="utf-8"))
         payload["source_patch_allowed_roots"] = [
@@ -1452,6 +1678,33 @@ class DualAgentLoopTests(unittest.TestCase):
         self.assertEqual(len(lineage_context["portfolio_plan_sha256"]), 64)
         execute.assert_not_called()
         self.assertIn("no coding branch was started", output.getvalue())
+
+    def test_batch_success_signal_without_pending_replan_fails_closed(self) -> None:
+        plan = self._plan()
+        flow_assignment = plan.branches[0].assignment_path
+        payload = json.loads(flow_assignment.read_text(encoding="utf-8"))
+        meta = dict(payload.get("_planning_meta", {}))
+        meta.update({"should_skip_llm": True, "target_command": "rewrite"})
+        payload["_planning_meta"] = meta
+        payload["planner_should_skip_llm"] = True
+        flow_assignment.write_text(json.dumps(payload), encoding="utf-8")
+
+        with patch(
+            "scripts.agents.self_evolved_abc.workflow.dual_agent_loop."
+            "run_and_integrate_planner_batch",
+            return_value="",
+        ):
+            allowed = _honor_flow_planner_control(
+                repo_root=self.repo,
+                plan=plan,
+                build_candidate_binary=True,
+                build_jobs=2,
+                build_timeout_seconds=10.0,
+                timeout_seconds=10.0,
+                planner_mode="deterministic",
+            )
+
+        self.assertIsNone(allowed)
 
     def test_pre_control_flow_manifest_cannot_bypass_planner_batch(self) -> None:
         plan = self._plan()

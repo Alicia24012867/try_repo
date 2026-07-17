@@ -1,0 +1,39 @@
+{
+  "cycle_id": "cycle_001",
+  "cycle_objective": "Evaluate independent Flow and Logic improvements against one frozen baseline, then compare only correctness-backed QoR.",
+  "dispatches": [
+    {
+      "acceptance_criteria": [
+        "Build, exact-scope CEC, and frozen QoR gates pass."
+      ],
+      "branch_role": "flow",
+      "coding_agent_task": "PAPER-ALIGNED CONSERVATIVE PHASE: test one reversible, reached mechanism with full compile/CEC/QoR gates.\n\nNo previous cycle evidence is available. This is the first Flow Agent source-patch cycle.\nCampaign recovery state: phase=conservative, consecutive correctness-backed QoR misses=0.\nStrategy: optimization. Target command: `csweep`. Rationale: csweep is the only eval-flow command family with confirmed nonzero signal in batch_search. Targeting known-productive parameters avoids zero-delta cycles.\nPromotion gate for next champion: zero AND-regressed rows, improved benchmarks >= 5, and either avg AND improvement >= 1.2% or total AND reduction >= 20. (min_improved_benchmarks=5 (10% of 70 designs, capped at 5); min_average_and_improve_pct=1.2% (early-cycle leniency: 2.0% \u00d7 0.6); min_total_and_reduction=20 (for 70 designs))\nIncrease csweep cut/leaf floors unconditionally in Csw_Sweep before Csw_ManStart to expand the cut-sweeping search space.",
+      "hypothesis": "PAPER-ALIGNED CONSERVATIVE PHASE: test one reversible, reached mechanism with full compile/CEC/QoR gates.\n\nNo previous cycle evidence is available. This is the first Flow Agent source-patch cycle.\nCampaign recovery state: phase=conservative, consecutive correctness-backed QoR misses=0.\nStrategy: optimization. Target command: `csweep`. Rationale: csweep is the only eval-flow command family with confirmed nonzero signal in batch_search. Targeting known-productive parameters avoids zero-delta cycles.\nPromotion gate for next champion: zero AND-regressed rows, improved benchmarks >= 5, and either avg AND improvement >= 1.2% or total AND reduction >= 20. (min_improved_benchmarks=5 (10% of 70 designs, capped at 5); min_average_and_improve_pct=1.2% (early-cycle leniency: 2.0% \u00d7 0.6); min_total_and_reduction=20 (for 70 designs))\nIncrease csweep cut/leaf floors unconditionally in Csw_Sweep before Csw_ManStart to expand the cut-sweeping search space.",
+      "rollback_criteria": [
+        "Any build, CEC, coverage, or regression gate fails."
+      ],
+      "task_type": "optimization"
+    },
+    {
+      "acceptance_criteria": [
+        "Build, exact-scope CEC, and frozen QoR gates pass."
+      ],
+      "branch_role": "logic",
+      "coding_agent_task": "PAPER-ALIGNED CONSERVATIVE PHASE: test one reversible, reached mechanism with full compile/CEC/QoR gates.\n\nTrace one technology-independent rewrite/refactor/resubstitution decision and propose a narrow CEC-gated candidate.",
+      "hypothesis": "PAPER-ALIGNED CONSERVATIVE PHASE: test one reversible, reached mechanism with full compile/CEC/QoR gates.\n\nTrace one technology-independent rewrite/refactor/resubstitution decision and propose a narrow CEC-gated candidate.",
+      "rollback_criteria": [
+        "Any build, CEC, coverage, or regression gate fails."
+      ],
+      "task_type": "optimization"
+    }
+  ],
+  "planner_dispatch_id": "flow_logic_campaign:cycle_001",
+  "risk_controls": [
+    "Keep Flow and Logic source ownership disjoint.",
+    "Require both reviews before promotion.",
+    "Never merge patches implicitly."
+  ],
+  "rulebase_notes": [],
+  "schema_version": 2,
+  "source": "deterministic_fallback"
+}
