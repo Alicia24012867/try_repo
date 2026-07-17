@@ -118,7 +118,10 @@ candidate binary and must also pass CEC; it is not a ninth paper Table recipe.
 Verilog sources are lowered by Yosys before ABC; source edits are enabled only
 in isolated role-owned workspaces, and promotion requires every flow's
 automated full-scope CEC result plus the conservative aggregate guard. Do not
-claim the missing Mapper/ASAP7 physical metrics have already been reproduced.
+claim a Table-level WNS result unless the frozen ASAP7 contract includes the
+clock period used to derive it. ASAP7 mapped area and critical-path delay are
+available as physical evidence; Mapper evolution remains outside the current
+two-agent source scope.
 
 ## Repository Context
 

@@ -30,6 +30,12 @@ from scripts.agents.self_evolved_abc.flow.implementation_compare import (
     collect_impl_result,
     render_ftune_mab_command,
 )
+from scripts.agents.self_evolved_abc.flow.asap7_qor import (
+    build_asap7_qor_rows,
+    collect_asap7_qor_result,
+    default_asap7_qor_config,
+    render_asap7_sta_script,
+)
 from scripts.agents.self_evolved_abc.flow.verilog_frontend import (
     FrontendResult,
     benchmark_key,
@@ -249,6 +255,68 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
                 / "bin/abc"
             )
             self.assertIn(str(fake_abc), shim.read_text(encoding="utf-8"))
+
+    def test_asap7_mapping_collects_post_sizing_area_and_sta_delay(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            source_aig = root / "outputs/tiny.aig"
+            source_aig.parent.mkdir(parents=True)
+            source_aig.write_text("aig", encoding="utf-8")
+            library = root / "libraries/asap7.lib"
+            library.parent.mkdir(parents=True)
+            library.write_text("library (ASAP7) {}\n", encoding="utf-8")
+            fake_abc = root / "fake_abc.sh"
+            fake_abc.write_text(
+                "#!/bin/sh\n"
+                "printf 'Area = 123.5  (100%%)  Delay = 45.25 ps\\n'\n",
+                encoding="utf-8",
+            )
+            fake_abc.chmod(0o755)
+            context = CycleContext(
+                repo_root=root,
+                assignment={"cycle_id": "cycle_001", "candidate_id": "flow_candidate_001"},
+            )
+            config = default_asap7_qor_config()
+            config.update({"library_path": "libraries/asap7.lib", "clock_period_ps": 100.0})
+            script = render_asap7_sta_script(
+                aig_path=Path("outputs/tiny.aig"),
+                library_path=Path("libraries/asap7.lib"),
+            )
+            self.assertIn("read_lib libraries/asap7.lib", script)
+            self.assertIn("map; topo; upsize; dnsize; topo; stime", script)
+            baseline = collect_asap7_qor_result(
+                context=context,
+                output_root=root / "impl_compare",
+                benchmark=Path("benchmarks/tiny.blif"),
+                flow_id="resyn",
+                implementation_label="baseline_unmodified",
+                source_aig=source_aig,
+                abc_bin=str(fake_abc),
+                timeout_seconds=5.0,
+                config=config,
+                from_existing_logs=False,
+            )
+            candidate = collect_asap7_qor_result(
+                context=context,
+                output_root=root / "impl_compare",
+                benchmark=Path("benchmarks/tiny.blif"),
+                flow_id="resyn",
+                implementation_label="candidate_modified",
+                source_aig=source_aig,
+                abc_bin=str(fake_abc),
+                timeout_seconds=5.0,
+                config=config,
+                from_existing_logs=False,
+            )
+            self.assertEqual(baseline.status, "asap7_pass")
+            self.assertEqual(baseline.area, 123.5)
+            self.assertEqual(baseline.sta_delay_ps, 45.25)
+            self.assertEqual(baseline.worst_slack_ps, 54.75)
+            rows = build_asap7_qor_rows(
+                [baseline], [candidate], ["cec_pass"], repo_root=root
+            )
+            self.assertTrue(rows[0]["correctness_backed"])
+            self.assertEqual(rows[0]["adp_improve_pct"], "0")
 
 
 if __name__ == "__main__":

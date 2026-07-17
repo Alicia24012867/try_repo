@@ -41,6 +41,23 @@ baseline or candidate binary, then subjects its output to the ordinary CEC and
 aggregation gates. The MAB lane is supplemental and is not presented as a
 ninth paper Table recipe.
 
+## ASAP7 Physical QoR Lane
+
+For every per-flow AIG that has passed CEC, the evaluator loads the bundled
+`third_party/FlowTune/7nm_lvt_ff.lib` (`ASAP7_7nm_LVT_FF`) and replays the
+FlowTune STA-demo sequence:
+
+```text
+read_lib; map; topo; upsize; dnsize; topo; stime
+```
+
+It records post-sizing cell area and STA critical-path delay in
+`comparison/asap7_qor_by_flow.csv`, together with normalized area, delay, and
+area-delay-product ratios in `comparison/asap7_qor_summary.json`. A clock
+period is not guessed: set `asap7_qor.clock_period_ps` in the frozen assignment
+to additionally report worst slack. Without it, the report is physical
+Liberty-based delay evidence but is explicitly not a WNS/Table claim.
+
 ## Decision Artifacts
 
 For each candidate lane, S5/F7 writes:

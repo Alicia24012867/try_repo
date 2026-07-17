@@ -22,6 +22,20 @@
   ],
   "cycle_id": "cycle_001",
   "evaluation_contract": {
+    "asap7_qor": {
+      "clock_period_ps": null,
+      "enabled": true,
+      "flowtune_sta_commands": [
+        "map",
+        "topo",
+        "upsize",
+        "dnsize",
+        "topo",
+        "stime"
+      ],
+      "library_path": "third_party/FlowTune/7nm_lvt_ff.lib",
+      "schema_version": 1
+    },
     "baseline_ref": {
       "abc_bin": "third_party/FlowTune/FlowTune-OpenFPGA/abc",
       "candidate_id": "",
@@ -272,11 +286,11 @@
       "min_improved_benchmarks": 5,
       "min_total_and_reduction": 20
     },
-    "schema_version": 1,
+    "schema_version": 2,
     "target_metric": "and_count",
     "timeout_seconds": 300.0
   },
-  "evaluation_contract_hash": "0c1ceb6408d6aad9a93dc2358d1f31d2d957f2ce58eeabf0d863ac87be67b82f",
+  "evaluation_contract_hash": "8936ba1f10202ee2f0542c78723e67f785b032d06353ca3f620ac10ebe96c7c9",
   "parent_plan_hash": "",
   "parent_review_hash": "",
   "planner_advice_hash": "55cc4aaaf65958742471e607816aae004957c9850e777cd70b87f78cdc5c0980",

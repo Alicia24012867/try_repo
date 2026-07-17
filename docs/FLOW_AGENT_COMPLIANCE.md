@@ -186,10 +186,11 @@ The current Flow lane is a command-kernel surrogate, not yet the paper's full
 Flow subsystem. It edits `third_party/FlowTune/src/src/opt`, while the fork's
 MAB scheduler is implemented in `src/base/abc/abcBayestune.cpp` and exposed by
 the `ftune` command in `src/base/abci/abc.c`. The frozen evaluation recipes do
-call `ftune` through a bounded, isolated MAB scheduler/replay lane. The current
-evaluator still reports node/depth proxies rather than the paper's ASAP7
-timing/area flow. A current winner is therefore a valid foundation champion,
-not a claim that the final paper tables have been reproduced.
+call `ftune` through a bounded, isolated MAB scheduler/replay lane. Every
+CEC-backed flow output is now mapped with the bundled ASAP7 Liberty and reported
+with post-sizing area plus STA critical-path delay. WNS is emitted only when
+the frozen contract supplies a clock period, so an unconstrained run cannot be
+mislabelled as the paper's worst-slack result.
 
 ## Remaining Remote Evidence Needed
 

@@ -58,12 +58,16 @@ binary build is required before implementation comparison.
 
 ## QoR Metrics
 
-- Primary source-patch metric: AIG AND count.
-- Secondary source-patch metrics: AIG depth, runtime, skipped design count,
-  crash/assertion count.
-- Later mapping metrics: LUT count, mapper area, mapper delay estimate.
-- Later timing metrics: STA worst slack and post-buffer/sizing area when a
-  timing flow is available.
+- Table-aligned physical evidence: ASAP7 (`ASAP7_7nm_LVT_FF`) post-sizing cell area
+  and Liberty STA critical-path delay, collected for every CEC-backed flow in
+  `asap7_qor_by_flow.csv` using `read_lib; map; topo; upsize; dnsize; topo;
+  stime`.
+- Worst slack is derived only if the frozen `asap7_qor.clock_period_ps` is
+  supplied. The harness must never fabricate a period; an unconstrained run is
+  labelled critical-path delay and is not asserted to reproduce the Table WNS.
+- AIG AND count/depth, runtime, skipped design count, crash/assertion count,
+  mapper estimates, and LUT results remain dense auxiliary feedback and CEC
+  diagnostics.
 
 ## Acceptance Policy
 

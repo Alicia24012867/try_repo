@@ -15,6 +15,10 @@ from scripts.agents.self_evolved_abc.flow.multi_flow import (
     normalized_evaluation_flows,
     normalize_flow_aggregation,
 )
+from scripts.agents.self_evolved_abc.flow.asap7_qor import (
+    default_asap7_qor_config,
+    normalize_asap7_qor_config,
+)
 from scripts.agents.self_evolved_abc.logic.contracts import (
     LOGIC_ABCI_ROOT,
     LOGIC_AGENT_NAME,
@@ -74,6 +78,10 @@ def normalize_logic_assignment_scope(
     )
     payload["flow_aggregation"] = normalize_flow_aggregation(
         payload.get("flow_aggregation", default_flow_aggregation())
+    )
+    payload["asap7_qor"] = normalize_asap7_qor_config(
+        payload.get("asap7_qor", default_asap7_qor_config()),
+        default_enabled=True,
     )
     payload.setdefault(
         "promotion_thresholds", DEFAULT_PROMOTION_THRESHOLDS.as_dict()

@@ -17,6 +17,13 @@ from typing import Mapping, Sequence
 
 from scripts.agents.self_evolved_abc.cycle_context import CycleContext
 from scripts.agents.self_evolved_abc.flow.command_io import render_command_log
+from scripts.agents.self_evolved_abc.flow.asap7_qor import (
+    build_asap7_qor_rows,
+    collect_asap7_qor_result,
+    normalize_asap7_qor_config,
+    write_asap7_qor_csv,
+    write_asap7_qor_summary,
+)
 from scripts.agents.self_evolved_abc.flow.contracts import (
     ABC_RC_PATH,
     CANDIDATE_BUILD_READY_STATUSES,
@@ -283,6 +290,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     flow_aggregation = normalize_flow_aggregation(
         context.assignment.get("flow_aggregation")
     )
+    asap7_qor_config = normalize_asap7_qor_config(
+        context.assignment.get("asap7_qor"),
+        default_enabled=False,
+    )
     frontend_results: list[FrontendResult] = []
     baseline_results: list[ImplRunResult] = []
     candidate_results: list[ImplRunResult] = []
@@ -379,6 +390,57 @@ def main(argv: Sequence[str] | None = None) -> int:
     write_qor_delta_csv(output_root, delta_rows)
     write_flow_vote_csv(output_root, vote_rows)
     write_multi_flow_summary(output_root, multi_flow_summary)
+    if asap7_qor_config["enabled"]:
+        baseline_asap7_results = []
+        candidate_asap7_results = []
+        for baseline, candidate, cec in zip(
+            baseline_results, candidate_results, cec_results
+        ):
+            baseline_asap7_results.append(
+                collect_asap7_qor_result(
+                    context=context,
+                    output_root=output_root,
+                    benchmark=Path(baseline.benchmark),
+                    flow_id=baseline.flow_id,
+                    implementation_label=baseline.implementation_label,
+                    source_aig=baseline.aig_path,
+                    abc_bin=baseline_abc_bin,
+                    timeout_seconds=args.timeout_seconds,
+                    config=asap7_qor_config,
+                    from_existing_logs=args.from_existing_logs,
+                    cec_backed=cec.cec_status == "cec_pass",
+                )
+            )
+            candidate_asap7_results.append(
+                collect_asap7_qor_result(
+                    context=context,
+                    output_root=output_root,
+                    benchmark=Path(candidate.benchmark),
+                    flow_id=candidate.flow_id,
+                    implementation_label=candidate.implementation_label,
+                    source_aig=candidate.aig_path,
+                    abc_bin=candidate_abc_bin,
+                    timeout_seconds=args.timeout_seconds,
+                    config=asap7_qor_config,
+                    from_existing_logs=args.from_existing_logs,
+                    cec_backed=cec.cec_status == "cec_pass",
+                )
+            )
+        asap7_rows = build_asap7_qor_rows(
+            baseline_asap7_results,
+            candidate_asap7_results,
+            [result.cec_status for result in cec_results],
+            repo_root=context.repo_root,
+        )
+        write_asap7_qor_csv(output_root, asap7_rows)
+        write_asap7_qor_summary(
+            output_root,
+            asap7_rows,
+            config=asap7_qor_config,
+            static_flow_ids=[
+                flow.flow_id for flow in flow_specs if flow.kind != "ftune_mab"
+            ],
+        )
     summary = write_impl_compare_summary(
         context=context,
         output_root=output_root,
@@ -389,6 +451,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         delta_rows=delta_rows,
         flow_specs=flow_specs,
         multi_flow_summary=multi_flow_summary,
+        asap7_qor_enabled=bool(asap7_qor_config["enabled"]),
     )
 
     print(f"comparison_summary: {summary}")
@@ -1508,6 +1571,7 @@ def write_impl_compare_summary(
     delta_rows: Sequence[dict[str, object]],
     flow_specs: Sequence[EvaluationFlow],
     multi_flow_summary: Mapping[str, object],
+    asap7_qor_enabled: bool = False,
 ) -> Path:
     path = output_root / "comparison" / "impl_compare_summary.md"
     cec_pass = sum(1 for result in cec_results if result.cec_status == "cec_pass")
@@ -1536,6 +1600,7 @@ def write_impl_compare_summary(
         f"- Average AND improvement pct: `{format_float(avg_and_improve)}`",
         f"- Candidate flow-vote wins: {multi_flow_summary.get('candidate_vote_wins', 0)}/{len(delta_rows)}",
         f"- Safe multi-flow rows: {multi_flow_summary.get('safe_for_promotion_count', 0)}/{len(delta_rows)}",
+        f"- ASAP7 mapped area/STA evidence enabled: `{str(asap7_qor_enabled).lower()}`",
         f"- Comparison reviewable: `{str(comparison_reviewable).lower()}`",
         "- Champion promotion: decided only by `review_decision.json` thresholds",
         "",
@@ -1549,6 +1614,7 @@ def write_impl_compare_summary(
         "- `qor_delta.csv`",
         "- `qor_delta_by_flow.csv`",
         "- `flow_vote_summary.csv` and `multi_flow_summary.json`",
+        "- `asap7_qor_by_flow.csv` and `asap7_qor_summary.json` when ASAP7 mapping is enabled",
         f"- logs under `../{BASELINE_LABEL}/logs/`, `../{CANDIDATE_LABEL}/logs/`, and `logs/`",
         f"- AIG outputs under `../{BASELINE_LABEL}/outputs/` and `../{CANDIDATE_LABEL}/outputs/`",
         "",
@@ -1558,6 +1624,7 @@ def write_impl_compare_summary(
         "- Any CEC fail, timeout, crash, skip, frontend failure, or unparseable result blocks promotion.",
         "- Verilog benchmarks are normalized once by Yosys to BLIF, then reused by every flow and both implementations.",
         "- Median QoR aggregation is paired with strict-majority voting; promotion additionally requires no per-flow AND regression by default.",
+        "- ASAP7 artifacts are produced only from per-flow CEC-backed AIGs; a WNS result is emitted only when the frozen contract provides a clock period.",
         "- This runner does not update the active rulebase.",
         "",
     ]

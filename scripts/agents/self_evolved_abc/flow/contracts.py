@@ -116,6 +116,7 @@ PYTHON_SMOKE_FILES = (
     "scripts/agents/self_evolved_abc/flow/source_patch.py",
     "scripts/agents/self_evolved_abc/flow/materialization.py",
     "scripts/agents/self_evolved_abc/flow/multi_flow.py",
+    "scripts/agents/self_evolved_abc/flow/asap7_qor.py",
     "scripts/agents/self_evolved_abc/flow/validation.py",
     "scripts/agents/self_evolved_abc/flow/verilog_frontend.py",
     "scripts/agents/self_evolved_abc/flow/artifacts.py",

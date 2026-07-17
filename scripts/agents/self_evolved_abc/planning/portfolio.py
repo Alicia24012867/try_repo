@@ -27,6 +27,10 @@ from scripts.agents.self_evolved_abc.flow.multi_flow import (
     normalized_evaluation_flows,
     normalize_flow_aggregation,
 )
+from scripts.agents.self_evolved_abc.flow.asap7_qor import (
+    default_asap7_qor_config,
+    normalize_asap7_qor_config,
+)
 from scripts.agents.self_evolved_abc.flow.paths import impl_compare_root
 from scripts.agents.self_evolved_abc.logic.contracts import (
     LOGIC_ABCI_ROOT,
@@ -58,9 +62,9 @@ BRANCH_SPECS = {
     LOGIC_BRANCH: (LOGIC_AGENT_NAME, "logic_candidate_001"),
 }
 PLAN_SCHEMA_VERSION = 2
-EVALUATION_CONTRACT_VERSION = 1
+EVALUATION_CONTRACT_VERSION = 2
 PLANNER_ADVICE_SCHEMA_VERSION = 2
-CAMPAIGN_POLICY_VERSION = 6
+CAMPAIGN_POLICY_VERSION = 7
 POST_BATCH_REPLAN_JOURNAL_SCHEMA_VERSION = 1
 POST_BATCH_REPLAN_TRANSACTION = "post_batch_replan"
 _SHA256_HEX = frozenset("0123456789abcdef")
@@ -1081,6 +1085,7 @@ def validate_assignment_contract(
         ("evaluation_flow_commands", "flow_commands"),
         ("evaluation_flows", "evaluation_flows"),
         ("flow_aggregation", "flow_aggregation"),
+        ("asap7_qor", "asap7_qor"),
         ("evaluation_benchmark_scope", "benchmark_scope"),
         ("promotion_thresholds", "promotion_thresholds"),
         ("benchmark_frontend", "benchmark_frontend"),
@@ -1140,6 +1145,10 @@ def _evaluation_contract(
         ),
         "flow_aggregation": normalize_flow_aggregation(
             assignment.get("flow_aggregation")
+        ),
+        "asap7_qor": normalize_asap7_qor_config(
+            assignment.get("asap7_qor", default_asap7_qor_config()),
+            default_enabled=True,
         ),
         "promotion_thresholds": dict(assignment.get("promotion_thresholds", {})),
         "target_metric": assignment.get("target_metric", "and_count"),

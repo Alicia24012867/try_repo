@@ -24,6 +24,9 @@ from scripts.agents.self_evolved_abc.flow.multi_flow import (
     default_evaluation_flows,
     default_flow_aggregation,
 )
+from scripts.agents.self_evolved_abc.flow.asap7_qor import (
+    default_asap7_qor_config,
+)
 from scripts.agents.self_evolved_abc.flow.promotion import (
     DEFAULT_PROMOTION_THRESHOLDS,
 )
@@ -130,6 +133,7 @@ def build_initial_assignment(
         # branch-local diagnostic/reachability recipe and is not one of them.
         "evaluation_flows": default_evaluation_flows(),
         "flow_aggregation": default_flow_aggregation(),
+        "asap7_qor": default_asap7_qor_config(),
         "repository_context_manifest": "configs/agents/context/repositories.json",
         "repository_context_max_chars": 72000 if is_logic else 60000,
         "repository_context_max_repositories": 9 if is_logic else 6,

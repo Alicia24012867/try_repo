@@ -74,17 +74,18 @@ Local macOS development is used for editing, prompt/schema validation, and
 Python smoke tests. Full ABC binary execution, candidate compilation, CEC, and
 QoR comparison are expected to run after rsyncing the repo to a Linux/ABC host.
 
-This is a correctness-backed foundation for reproducing the paper, not yet its
-full Table-level physical-design experiment. The current campaign has two of
-the paper's three coding roles, evaluates the eight frozen
+This is a correctness-backed foundation for reproducing the paper. The current
+campaign has two of the paper's three coding roles, evaluates the eight frozen
 technology-independent ABC recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`,
 `compress`, `compress2`, `resyn2rs`, and `compress2rs`) plus a bounded
-`ftune_mab_aig_nodes` scheduler lane, and reports AIG node/depth proxies rather
-than the final ASAP7 timing/area reward. Its Flow lane edits command kernels under
-`src/opt`; the legacy fork's MAB `ftune` scheduler lives in
-`src/base/abc/abcBayestune.cpp` and is not invoked by the frozen recipe. These
-gaps are recorded explicitly so an AIG winner is not misreported as the full
-paper result.
+`ftune_mab_aig_nodes` scheduler lane. After every per-flow CEC pass it also
+maps the resulting AIG with the bundled `ASAP7_7nm_LVT_FF` Liberty, runs the
+FlowTune sizing/STA sequence, and records post-sizing area plus STA critical
+path delay in `asap7_qor_by_flow.csv`. AIG node/depth remain auxiliary signals,
+not the final PPA claim. WNS is emitted only when the frozen `asap7_qor`
+contract provides a clock period; without that external constraint the report
+is deliberately labelled critical-path delay rather than Table-comparable
+worst slack.
 
 ## Repository Knowledge Bootstrap
 
@@ -528,8 +529,11 @@ is limited to existing `.c`/`.h` files in
 `third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG recipe
 portfolio and CEC-backed QoR review. This reaches the edited rewrite/resub/refactor
 command kernels and also exercises the separate `ftune` MAB scheduler with a
-bounded AIG-node budget. It does not yet reproduce the paper's physical-design
-campaign.
+bounded AIG-node budget. Each CEC-backed flow output is then passed through the
+bundled ASAP7 Liberty mapping/gate-sizing/STA chain; see
+`comparison/asap7_qor_by_flow.csv` and `comparison/asap7_qor_summary.json`.
+The remaining Table-comparability prerequisite is an explicitly frozen clock
+period (for WNS), not an invented default constraint.
 
 ## Planning Agent
 
