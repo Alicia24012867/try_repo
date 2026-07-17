@@ -30,6 +30,17 @@ flow, so the commands always run on the same AIG representation. A custom
 assignment may still opt into `candidate_recipe`, but it is not part of the
 default eight-flow portfolio.
 
+## FlowTune MAB Scheduler Lane
+
+In addition to the eight static Table recipes, the frozen contract contains
+`ftune_mab_aig_nodes`. It invokes the `ftune` command registered by
+`abcBayestune.cpp` with the bounded AIG-node budget
+`-r 1 -t 0 -p 1 -i 1 -s 1`. `ftune` selects a recipe in an isolated sandbox;
+the evaluator allowlists and replays that selected recipe using the same
+baseline or candidate binary, then subjects its output to the ordinary CEC and
+aggregation gates. The MAB lane is supplemental and is not presented as a
+ninth paper Table recipe.
+
 ## Decision Artifacts
 
 For each candidate lane, S5/F7 writes:

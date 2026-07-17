@@ -114,7 +114,7 @@
     "flow_target_command": "csweep",
     "frontier_policy": "Partial candidates are evidence only; a combined candidate must repeat build, full CEC, and QoR before promotion.",
     "logic_target_command": "rewrite",
-    "policy_version": 5
+    "policy_version": 6
   },
   "candidate_id": "logic_candidate_001",
   "cycle_id": "cycle_001",
@@ -416,6 +416,17 @@
         ],
         "flow_id": "compress2rs",
         "kind": "commands"
+      },
+      {
+        "flow_id": "ftune_mab_aig_nodes",
+        "ftune_options": {
+          "iterations": 1,
+          "prefix": 1,
+          "repeats": 1,
+          "samples": 1,
+          "target": 0
+        },
+        "kind": "ftune_mab"
       }
     ],
     "flow_aggregation": {
@@ -445,7 +456,7 @@
     "target_metric": "and_count",
     "timeout_seconds": 300.0
   },
-  "evaluation_contract_hash": "bbea1408a07e331658dbbb0b98a61a63d0b225452932dd50eb14e0ac25d175ad",
+  "evaluation_contract_hash": "0c1ceb6408d6aad9a93dc2358d1f31d2d957f2ce58eeabf0d863ac87be67b82f",
   "evaluation_flow_commands": [
     "fx",
     "strash",
@@ -590,6 +601,17 @@
       ],
       "flow_id": "compress2rs",
       "kind": "commands"
+    },
+    {
+      "flow_id": "ftune_mab_aig_nodes",
+      "ftune_options": {
+        "iterations": 1,
+        "prefix": 1,
+        "repeats": 1,
+        "samples": 1,
+        "target": 0
+      },
+      "kind": "ftune_mab"
     }
   ],
   "exploration_lane": "logic_orthogonal_search",

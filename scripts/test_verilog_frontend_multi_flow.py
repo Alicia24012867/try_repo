@@ -26,7 +26,12 @@ from scripts.agents.self_evolved_abc.flow.multi_flow import (
     default_flow_aggregation,
     normalize_evaluation_flows,
 )
+from scripts.agents.self_evolved_abc.flow.implementation_compare import (
+    collect_impl_result,
+    render_ftune_mab_command,
+)
 from scripts.agents.self_evolved_abc.flow.verilog_frontend import (
+    FrontendResult,
     benchmark_key,
     prepare_benchmark_frontend,
     render_yosys_verilog_to_blif_script,
@@ -138,9 +143,12 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
                 "compress2",
                 "resyn2rs",
                 "compress2rs",
+                "ftune_mab_aig_nodes",
             ],
         )
-        normalize_evaluation_flows(flows)
+        normalized = normalize_evaluation_flows(flows)
+        self.assertEqual(normalized[-1].kind, "ftune_mab")
+        self.assertEqual(normalized[-1].ftune_option("iterations"), 1)
         benchmark = "benchmarks/itc99/b11.v"
         rows = [
             _comparison_row(benchmark=benchmark, flow_id=flow_ids[0], and_delta=-8),
@@ -151,8 +159,9 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
             _comparison_row(benchmark=benchmark, flow_id=flow_ids[5], and_delta=0),
             _comparison_row(benchmark=benchmark, flow_id=flow_ids[6], and_delta=0),
             _comparison_row(benchmark=benchmark, flow_id=flow_ids[7], and_delta=3),
+            _comparison_row(benchmark=benchmark, flow_id=flow_ids[8], and_delta=0),
         ]
-        for row in rows[5:7]:
+        for row in rows[5:7] + rows[8:]:
             row["candidate_aig_depth"] = "10"
             row["depth_delta_candidate_minus_baseline"] = "0"
         aggregate, votes, summary = aggregate_flow_comparison_rows(
@@ -161,12 +170,85 @@ class VerilogFrontendAndMultiFlowTests(unittest.TestCase):
             aggregation=default_flow_aggregation(),
         )
         self.assertEqual(aggregate[0]["flow_vote_outcome"], "candidate_wins")
-        self.assertEqual(aggregate[0]["and_delta_candidate_minus_baseline"], -2)
+        self.assertEqual(aggregate[0]["and_delta_candidate_minus_baseline"], -1)
         self.assertFalse(aggregate[0]["all_flows_nonregressing"])
         self.assertFalse(aggregate[0]["safe_for_promotion"])
         self.assertEqual(votes[0]["candidate_vote_count"], 5)
         self.assertEqual(votes[0]["vote_quorum"], 5)
         self.assertEqual(summary["candidate_vote_wins"], 1)
+
+    def test_ftune_mab_replays_the_selected_flow_in_an_isolated_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            input_path = root / "benchmarks" / "tiny.blif"
+            input_path.parent.mkdir(parents=True)
+            input_path.write_text(
+                ".model tiny\n.inputs a\n.outputs y\n.names a y\n1 1\n.end\n",
+                encoding="utf-8",
+            )
+            fake_abc = root / "fake_abc.sh"
+            fake_abc.write_text(
+                "#!/bin/sh\n"
+                "script=\"$2\"\n"
+                "case \"$script\" in\n"
+                "  *\"ftune -d \"*)\n"
+                "    design=$(printf '%s' \"$script\" | sed -n 's/.*ftune -d \\([^ ]*\\).*/\\1/p')\n"
+                "    printf 'read %s;strash;rewrite;ifraig;dch -f;strash;print_stats\\n' \"$design\" > \"$design.script\"\n"
+                "    printf 'ftune completed\\n'\n"
+                "    ;;\n"
+                "  *\"write_aiger \"*)\n"
+                "    output=$(printf '%s' \"$script\" | sed -n 's/.*write_aiger \\([^;]*\\).*/\\1/p')\n"
+                "    mkdir -p \"$(dirname \"$output\")\"\n"
+                "    printf 'aig' > \"$output\"\n"
+                "    printf 'tiny : i/o = 1/1 lat = 0 and = 42 lev = 7\\n'\n"
+                "    ;;\n"
+                "esac\n",
+                encoding="utf-8",
+            )
+            fake_abc.chmod(0o755)
+            context = CycleContext(
+                repo_root=root,
+                assignment={"cycle_id": "cycle_001", "candidate_id": "flow_candidate_001"},
+            )
+            frontend = FrontendResult(
+                benchmark=Path("benchmarks/tiny.blif"),
+                input_path=input_path,
+                frontend_kind="abc_native",
+                frontend_status="abc_native",
+                command="",
+                log_path=None,
+                frontend_exit_code=0,
+                runtime_seconds=0.0,
+                skipped_reason="",
+            )
+            flow = normalize_evaluation_flows(default_evaluation_flows())[-1]
+            self.assertEqual(
+                render_ftune_mab_command(flow, "ftune_input.blif"),
+                "ftune -d ftune_input.blif -r 1 -t 0 -p 1 -i 1 -s 1",
+            )
+            result = collect_impl_result(
+                context=context,
+                output_root=root / "experiments/cycle_001/candidates/flow_candidate_001/impl_compare",
+                benchmark=Path("benchmarks/tiny.blif"),
+                frontend=frontend,
+                flow=flow,
+                candidate_flow=root / "unused.abc",
+                implementation_label="baseline_unmodified",
+                abc_bin=str(fake_abc),
+                timeout_seconds=5.0,
+                from_existing_logs=False,
+            )
+            self.assertEqual(result.aig_nodes, 42)
+            self.assertEqual(result.aig_depth, 7)
+            self.assertTrue(result.aig_path.is_file())
+            shim = (
+                root
+                / "experiments/cycle_001/candidates/flow_candidate_001/impl_compare"
+                / "baseline_unmodified/ftune/ftune_mab_aig_nodes"
+                / benchmark_key(Path("benchmarks/tiny.blif"))
+                / "bin/abc"
+            )
+            self.assertIn(str(fake_abc), shim.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

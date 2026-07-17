@@ -112,7 +112,9 @@ Plan each cycle using the paper's sequence:
 For this small reproduction, the same workflow is scaled down to two coding
 roles, 70 frontend-enabled promotion designs, and eight frozen standard ABC AIG
 recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`, `compress`, `compress2`,
-`resyn2rs`, and `compress2rs`).
+`resyn2rs`, and `compress2rs`) plus a bounded, separately labeled `ftune` MAB
+scheduler lane. The scheduler's selected recipe is replayed with the same
+candidate binary and must also pass CEC; it is not a ninth paper Table recipe.
 Verilog sources are lowered by Yosys before ABC; source edits are enabled only
 in isolated role-owned workspaces, and promotion requires every flow's
 automated full-scope CEC result plus the conservative aggregate guard. Do not

@@ -7,6 +7,7 @@ import csv
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -120,6 +121,21 @@ FLOW_VOTE_FIELDS = (
     "all_flows_cec_pass",
     "all_flows_nonregressing",
     "safe_for_promotion",
+)
+FTUNE_REPLAY_COMMANDS = frozenset(
+    (
+        "strash",
+        "balance",
+        "rewrite",
+        "rewrite -z",
+        "refactor",
+        "refactor -z",
+        "resub -K 8",
+        "dc2",
+        "ifraig",
+        "dch -f",
+        "print_stats",
+    )
 )
 
 
@@ -402,6 +418,20 @@ def collect_impl_result(
     side_root = output_root / implementation_label
     log_path = side_root / "logs" / flow.flow_id / f"{design}.qor.log"
     aig_path = side_root / "outputs" / flow.flow_id / f"{design}.aig"
+    if flow.kind == "ftune_mab":
+        return collect_ftune_mab_result(
+            context=context,
+            output_root=output_root,
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            abc_bin=abc_bin,
+            log_path=log_path,
+            aig_path=aig_path,
+            timeout_seconds=timeout_seconds,
+            from_existing_logs=from_existing_logs,
+        )
     abc_script = render_qor_script(
         input_path=(
             frontend.input_path.relative_to(context.repo_root)
@@ -435,6 +465,368 @@ def collect_impl_result(
         log_path=log_path,
         aig_path=aig_path,
         timeout_seconds=timeout_seconds,
+    )
+
+
+def collect_ftune_mab_result(
+    *,
+    context: CycleContext,
+    output_root: Path,
+    benchmark: Path,
+    frontend: FrontendResult,
+    flow: EvaluationFlow,
+    implementation_label: str,
+    abc_bin: str,
+    log_path: Path,
+    aig_path: Path,
+    timeout_seconds: float,
+    from_existing_logs: bool,
+) -> ImplRunResult:
+    """Run FlowTune MAB in an isolated sandbox and replay its selected flow.
+
+    ``ftune`` launches child processes named ``abc`` and writes its selected
+    recipe beside the input as ``<design>.script``.  The sandbox-local shim
+    binds those child processes to the same baseline or candidate binary as the
+    outer evaluation, so a candidate patch cannot be bypassed through PATH.
+    The selected command sequence is allowlisted before replay and CEC.
+    """
+
+    design = benchmark_key(benchmark)
+    ftune_root = (
+        output_root
+        / implementation_label
+        / "ftune"
+        / flow.flow_id
+        / design
+    )
+    input_suffix = frontend.input_path.suffix if frontend.input_path is not None else ".blif"
+    ftune_input = ftune_root / f"ftune_input{input_suffix}"
+    ftune_script_path = Path(f"{ftune_input}.script")
+    ftune_command = render_ftune_mab_command(flow, ftune_input.name)
+    command = f"{render_shell_command(abc_bin, ftune_command)}; replay selected MAB script"
+    if from_existing_logs:
+        return load_impl_result_from_log(
+            context=context,
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+        )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    aig_path.parent.mkdir(parents=True, exist_ok=True)
+    if not frontend.ready or frontend.input_path is None:
+        reason = f"frontend:{frontend.frontend_status}"
+        log_path.write_text(
+            render_command_log(
+                command=command,
+                return_code=None,
+                runtime_seconds=0.0,
+                output=f"FRONTEND_SKIPPED: {reason}\n",
+            ),
+            encoding="utf-8",
+        )
+        return ImplRunResult(
+            benchmark=str(benchmark),
+            flow_id=flow.flow_id,
+            implementation_label=implementation_label,
+            frontend=frontend,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            abc_exit_code=None,
+            aig_nodes=None,
+            aig_depth=None,
+            runtime_seconds=None,
+            skipped_reason=reason,
+        )
+
+    ftune_root.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(frontend.input_path, ftune_input)
+    ftune_script_path.unlink(missing_ok=True)
+    binary = _absolute_abc_binary(context, abc_bin)
+    shim_path = _write_ftune_abc_shim(ftune_root, binary)
+    environment = dict(os.environ)
+    environment["PATH"] = str(shim_path.parent) + os.pathsep + environment.get(
+        "PATH", ""
+    )
+    rc_path = (context.repo_root / ABC_RC_PATH).resolve()
+    tune_script = "; ".join((f"source {rc_path}", ftune_command))
+    start = time.monotonic()
+    try:
+        tuned = subprocess.run(
+            (binary, "-c", tune_script),
+            cwd=ftune_root,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except OSError as exc:
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"exec_error:{exc.__class__.__name__}",
+            output=f"FTUNE_EXEC_ERROR: {exc}\n",
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"timeout_after_{timeout_seconds:g}s",
+            output=f"{output}\nFTUNE_TIMEOUT after {timeout_seconds:g} seconds\n",
+        )
+    tune_output = tuned.stdout or ""
+    if tuned.returncode != 0:
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"ftune_exit_code={tuned.returncode}",
+            output=tune_output,
+            return_code=tuned.returncode,
+        )
+    try:
+        selected_flow = load_ftune_selected_flow(
+            ftune_script_path,
+            expected_input=ftune_input.name,
+        )
+    except (OSError, ValueError) as exc:
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"ftune_selected_flow_invalid:{exc.__class__.__name__}",
+            output=f"{tune_output}\nFTUNE_SELECTED_FLOW_ERROR: {exc}\n",
+            return_code=tuned.returncode,
+        )
+
+    aig_path.unlink(missing_ok=True)
+    replay_script = "; ".join(
+        (
+            f"source {rc_path}",
+            selected_flow,
+            "strash",
+            f"write_aiger {aig_path}",
+            "ps",
+        )
+    )
+    try:
+        replayed = subprocess.run(
+            (binary, "-c", replay_script),
+            cwd=ftune_root,
+            env=environment,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout_seconds,
+            check=False,
+        )
+    except OSError as exc:
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"replay_exec_error:{exc.__class__.__name__}",
+            output=f"{tune_output}\nREPLAY_EXEC_ERROR: {exc}\n",
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        return _write_ftune_failure_result(
+            benchmark=benchmark,
+            frontend=frontend,
+            flow=flow,
+            implementation_label=implementation_label,
+            command=command,
+            log_path=log_path,
+            aig_path=aig_path,
+            runtime_seconds=time.monotonic() - start,
+            skipped_reason=f"replay_timeout_after_{timeout_seconds:g}s",
+            output=f"{tune_output}\n{output}\nREPLAY_TIMEOUT after {timeout_seconds:g} seconds\n",
+        )
+    runtime_seconds = time.monotonic() - start
+    replay_output = replayed.stdout or ""
+    output = "\n".join(
+        (
+            "----- ftune scheduler output -----",
+            tune_output.rstrip(),
+            "----- selected replay -----",
+            replay_output.rstrip(),
+        )
+    ) + "\n"
+    log_path.write_text(
+        render_command_log(
+            command=command,
+            return_code=replayed.returncode,
+            runtime_seconds=runtime_seconds,
+            output=output,
+        ),
+        encoding="utf-8",
+    )
+    metrics = parse_last_ps_metrics_text(replay_output)
+    skipped_reason = ""
+    if replayed.returncode != 0:
+        skipped_reason = f"replay_exit_code={replayed.returncode}"
+    elif metrics is None:
+        skipped_reason = "missing_parseable_ps_metrics"
+    elif not aig_path.exists():
+        skipped_reason = "missing_expected_aig_output"
+    return ImplRunResult(
+        benchmark=str(benchmark),
+        flow_id=flow.flow_id,
+        implementation_label=implementation_label,
+        frontend=frontend,
+        command=command,
+        log_path=log_path,
+        aig_path=aig_path,
+        abc_exit_code=replayed.returncode,
+        aig_nodes=metrics.ands if metrics else None,
+        aig_depth=metrics.lev if metrics else None,
+        runtime_seconds=runtime_seconds,
+        skipped_reason=skipped_reason,
+    )
+
+
+def render_ftune_mab_command(flow: EvaluationFlow, design_name: str) -> str:
+    """Render the bounded AIG-node FlowTune scheduler invocation."""
+
+    if flow.kind != "ftune_mab":
+        raise ValueError("render_ftune_mab_command requires an ftune_mab flow")
+    return " ".join(
+        (
+            "ftune",
+            "-d",
+            design_name,
+            "-r",
+            str(flow.ftune_option("repeats")),
+            "-t",
+            str(flow.ftune_option("target")),
+            "-p",
+            str(flow.ftune_option("prefix")),
+            "-i",
+            str(flow.ftune_option("iterations")),
+            "-s",
+            str(flow.ftune_option("samples")),
+        )
+    )
+
+
+def load_ftune_selected_flow(path: Path, *, expected_input: str) -> str:
+    """Read and constrain the recipe emitted by FlowTune's MAB scheduler."""
+
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("MAB scheduler did not emit a selected .script")
+    commands = [item.strip() for item in lines[0].split(";") if item.strip()]
+    if not commands or not commands[0].startswith("read "):
+        raise ValueError("selected .script must begin with read <design>")
+    read_target = commands[0].split(maxsplit=1)[1].strip()
+    if Path(read_target).name != expected_input:
+        raise ValueError("selected .script reads an unexpected design")
+    for command in commands[1:]:
+        if command not in FTUNE_REPLAY_COMMANDS:
+            raise ValueError(f"selected .script contains unsupported command: {command}")
+    return "; ".join(commands)
+
+
+def _absolute_abc_binary(context: CycleContext, abc_bin: str) -> str:
+    """Resolve an ABC executable for both direct and FlowTune child launches."""
+
+    path = Path(abc_bin).expanduser()
+    if path.is_absolute():
+        return str(path.resolve())
+    # A bare executable name has the same PATH semantics as normal evaluation.
+    # Resolve it before installing the sandbox shim so FlowTune's child process
+    # cannot recursively invoke the shim instead of the chosen implementation.
+    if path.parent == Path("."):
+        located = shutil.which(abc_bin)
+        if located:
+            return str(Path(located).resolve())
+    return str((context.repo_root / path).resolve())
+
+
+def _write_ftune_abc_shim(ftune_root: Path, abc_binary: str) -> Path:
+    """Bind FlowTune's child `abc` launches to the evaluated implementation."""
+
+    shim = ftune_root / "bin" / "abc"
+    shim.parent.mkdir(parents=True, exist_ok=True)
+    shim.write_text(
+        "#!/bin/sh\nexec " + shlex.quote(abc_binary) + ' "$@"\n',
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return shim
+
+
+def _write_ftune_failure_result(
+    *,
+    benchmark: Path,
+    frontend: FrontendResult,
+    flow: EvaluationFlow,
+    implementation_label: str,
+    command: str,
+    log_path: Path,
+    aig_path: Path,
+    runtime_seconds: float,
+    skipped_reason: str,
+    output: str,
+    return_code: int | None = None,
+) -> ImplRunResult:
+    log_path.write_text(
+        render_command_log(
+            command=command,
+            return_code=return_code,
+            runtime_seconds=runtime_seconds,
+            output=output,
+        ),
+        encoding="utf-8",
+    )
+    return ImplRunResult(
+        benchmark=str(benchmark),
+        flow_id=flow.flow_id,
+        implementation_label=implementation_label,
+        frontend=frontend,
+        command=command,
+        log_path=log_path,
+        aig_path=aig_path,
+        abc_exit_code=return_code,
+        aig_nodes=None,
+        aig_depth=None,
+        runtime_seconds=runtime_seconds,
+        skipped_reason=skipped_reason,
     )
 
 

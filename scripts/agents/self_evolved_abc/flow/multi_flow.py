@@ -11,6 +11,13 @@ from typing import Mapping, Sequence
 
 FLOW_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MULTI_FLOW_SCHEMA_VERSION = 1
+FTUNE_OPTION_DEFAULTS = {
+    "target": 0,
+    "repeats": 1,
+    "prefix": 1,
+    "iterations": 1,
+    "samples": 1,
+}
 # These are the eight standard technology-independent ABC aliases from
 # ``abc.rc``.  They are expanded here so the frozen evaluation contract does
 # not silently change if a candidate binary ships a different alias file.
@@ -150,6 +157,14 @@ DEFAULT_EVALUATION_FLOWS = (
             "balance -l",
         ),
     },
+    {
+        # This is deliberately separate from the paper's eight static ABC
+        # recipes: it exercises FlowTune's `ftune` MAB scheduler, which emits
+        # a selected recipe that the evaluator then replays and CEC-checks.
+        "flow_id": "ftune_mab_aig_nodes",
+        "kind": "ftune_mab",
+        "ftune_options": FTUNE_OPTION_DEFAULTS,
+    },
 )
 DEFAULT_FLOW_AGGREGATION = {
     "schema_version": MULTI_FLOW_SCHEMA_VERSION,
@@ -165,23 +180,29 @@ class EvaluationFlow:
     flow_id: str
     kind: str
     commands: tuple[str, ...]
+    ftune_options: tuple[tuple[str, int], ...] = ()
+
+    def ftune_option(self, name: str) -> int:
+        """Return one validated FlowTune MAB option."""
+
+        return dict(self.ftune_options)[name]
 
 
 def default_evaluation_flows() -> list[dict[str, object]]:
-    """Return a JSON-safe copy of the frozen eight-flow ABC portfolio."""
+    """Return the eight static recipes plus the FlowTune MAB scheduler probe."""
 
-    return [
-        {
+    flows: list[dict[str, object]] = []
+    for item in DEFAULT_EVALUATION_FLOWS:
+        flow = {
             "flow_id": str(item["flow_id"]),
             "kind": str(item["kind"]),
-            **(
-                {"commands": list(item["commands"])}
-                if "commands" in item
-                else {}
-            ),
         }
-        for item in DEFAULT_EVALUATION_FLOWS
-    ]
+        if "commands" in item:
+            flow["commands"] = list(item["commands"])
+        if "ftune_options" in item:
+            flow["ftune_options"] = dict(item["ftune_options"])
+        flows.append(flow)
+    return flows
 
 
 def default_flow_aggregation() -> dict[str, object]:
@@ -204,6 +225,7 @@ def normalize_evaluation_flows(value: object) -> tuple[EvaluationFlow, ...]:
             raise ValueError(f"invalid or duplicate multi-flow id: {flow_id!r}")
         kind = str(item.get("kind", "commands")).strip()
         commands_raw = item.get("commands", ())
+        ftune_options: tuple[tuple[str, int], ...] = ()
         if kind == "candidate_recipe":
             commands: tuple[str, ...] = ()
         elif kind == "commands":
@@ -218,10 +240,20 @@ def normalize_evaluation_flows(value: object) -> tuple[EvaluationFlow, ...]:
             )
             if not commands:
                 raise ValueError(f"multi-flow {flow_id!r} has no commands")
+        elif kind == "ftune_mab":
+            commands = ()
+            ftune_options = _normalize_ftune_options(item.get("ftune_options"))
         else:
             raise ValueError(f"unsupported multi-flow kind: {kind!r}")
         seen.add(flow_id)
-        flows.append(EvaluationFlow(flow_id=flow_id, kind=kind, commands=commands))
+        flows.append(
+            EvaluationFlow(
+                flow_id=flow_id,
+                kind=kind,
+                commands=commands,
+                ftune_options=ftune_options,
+            )
+        )
     if not flows:
         raise ValueError("evaluation_flows must contain at least one flow")
     return tuple(flows)
@@ -235,6 +267,11 @@ def normalized_evaluation_flows(value: object) -> list[dict[str, object]]:
             "flow_id": flow.flow_id,
             "kind": flow.kind,
             **({"commands": list(flow.commands)} if flow.commands else {}),
+            **(
+                {"ftune_options": dict(flow.ftune_options)}
+                if flow.ftune_options
+                else {}
+            ),
         }
         for flow in normalize_evaluation_flows(value)
     ]
@@ -268,7 +305,37 @@ def flow_commands(
 
     if flow.kind == "candidate_recipe":
         return (f"source {candidate_flow_path}",)
+    if flow.kind == "ftune_mab":
+        raise ValueError("ftune_mab flows require the dedicated scheduler runner")
     return flow.commands
+
+
+def _normalize_ftune_options(value: object) -> tuple[tuple[str, int], ...]:
+    """Validate the bounded MAB budget used by the auxiliary scheduler flow."""
+
+    payload = dict(FTUNE_OPTION_DEFAULTS)
+    if value not in (None, ""):
+        if not isinstance(value, Mapping):
+            raise ValueError("ftune_options must be an object")
+        unexpected = sorted(set(value) - set(FTUNE_OPTION_DEFAULTS))
+        if unexpected:
+            raise ValueError(
+                "unsupported ftune_options keys: " + ", ".join(unexpected)
+            )
+        payload.update(dict(value))
+    for name, option in payload.items():
+        if isinstance(option, bool):
+            raise ValueError(f"ftune option {name!r} must be an integer")
+        try:
+            numeric = int(option)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"ftune option {name!r} must be an integer") from exc
+        if numeric < 1 and name != "target":
+            raise ValueError(f"ftune option {name!r} must be >= 1")
+        payload[name] = numeric
+    if payload["target"] != 0:
+        raise ValueError("only ftune target=0 (AIG nodes) is supported")
+    return tuple((name, payload[name]) for name in sorted(payload))
 
 
 def aggregate_flow_comparison_rows(

@@ -54,9 +54,11 @@ on the Linux server.
   read directly; 40 Verilog inputs are normalized once by Yosys to BLIF inside
   the isolated candidate lane. `unsupported_benchmark_scope` is empty unless a
   future unsupported extension is explicitly added.
-- S5/F7 now executes eight frozen ABC flow views per benchmark (`resyn`,
+- S5/F7 now executes eight frozen static ABC flow views per benchmark (`resyn`,
   `resyn2`, `resyn2a`, `resyn3`, `compress`, `compress2`, `resyn2rs`, and
-  `compress2rs`). It retains detailed
+  `compress2rs`) plus a bounded `ftune_mab_aig_nodes` scheduler lane. The MAB
+  lane invokes `abcBayestune.cpp`, validates and replays its selected recipe
+  with the same implementation binary, then retains detailed
   per-flow CEC/QoR rows and derives the promotion vector using median metrics,
   strict-majority votes, and an all-flow non-regression guard.
 - Bootstrap and later replacement candidates use the same two reward channels;
@@ -184,10 +186,10 @@ The current Flow lane is a command-kernel surrogate, not yet the paper's full
 Flow subsystem. It edits `third_party/FlowTune/src/src/opt`, while the fork's
 MAB scheduler is implemented in `src/base/abc/abcBayestune.cpp` and exposed by
 the `ftune` command in `src/base/abci/abc.c`. The frozen evaluation recipes do
-not call `ftune`. The current evaluator uses the eight standard ABC AIG recipes
-but still reports node/depth proxies rather than the paper's ASAP7 timing/area
-flow. A current winner is therefore a valid foundation champion, not a claim
-that the final paper tables have been reproduced.
+call `ftune` through a bounded, isolated MAB scheduler/replay lane. The current
+evaluator still reports node/depth proxies rather than the paper's ASAP7
+timing/area flow. A current winner is therefore a valid foundation champion,
+not a claim that the final paper tables have been reproduced.
 
 ## Remaining Remote Evidence Needed
 

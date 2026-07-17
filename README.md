@@ -78,8 +78,9 @@ This is a correctness-backed foundation for reproducing the paper, not yet its
 full Table-level physical-design experiment. The current campaign has two of
 the paper's three coding roles, evaluates the eight frozen
 technology-independent ABC recipes (`resyn`, `resyn2`, `resyn2a`, `resyn3`,
-`compress`, `compress2`, `resyn2rs`, and `compress2rs`), and reports AIG
-node/depth proxies rather than the final ASAP7 timing/area reward. Its Flow lane edits command kernels under
+`compress`, `compress2`, `resyn2rs`, and `compress2rs`) plus a bounded
+`ftune_mab_aig_nodes` scheduler lane, and reports AIG node/depth proxies rather
+than the final ASAP7 timing/area reward. Its Flow lane edits command kernels under
 `src/opt`; the legacy fork's MAB `ftune` scheduler lives in
 `src/base/abc/abcBayestune.cpp` and is not invoked by the frozen recipe. These
 gaps are recorded explicitly so an AIG winner is not misreported as the full
@@ -518,14 +519,17 @@ persisted.
 
 `cycle_001` starts in `source_patch_diff` mode with a frozen Flow/Logic pair,
 two candidate-scoped implementation roots, and a shared hash-bound
-`evaluation_contract`. Each benchmark is judged across eight frozen flows;
+`evaluation_contract`. Each benchmark is judged across the eight frozen static
+flows plus an isolated FlowTune MAB scheduler replay;
 candidate metrics are median-aggregated only after every flow's CEC result is
 available, and a vote cannot hide a per-flow AND regression.
 The Flow lane is limited to `third_party/FlowTune/src/src/opt`; the Logic lane
 is limited to existing `.c`/`.h` files in
 `third_party/FlowTune/src/src/base/abci`. Both use the same frozen AIG recipe
 portfolio and CEC-backed QoR review. This reaches the edited rewrite/resub/refactor
-command kernels, but it does not exercise the separate `ftune` MAB scheduler.
+command kernels and also exercises the separate `ftune` MAB scheduler with a
+bounded AIG-node budget. It does not yet reproduce the paper's physical-design
+campaign.
 
 ## Planning Agent
 
